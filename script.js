@@ -163,3 +163,39 @@ function redirectToGroup() {
         window.location.href = selectedUrl;
     }
 }
+
+// ─────────────────────────────────────────────
+// Social Native App Deep Linking
+// ─────────────────────────────────────────────
+function openApp(app) {
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    const isAndroid = /Android/.test(navigator.userAgent);
+    
+    let appUrl = '';
+    let webUrl = '';
+    let intentUrl = '';
+
+    if (app === 'ig') {
+        webUrl = "https://www.instagram.com/jarurat.care";
+        appUrl = "instagram://user?username=jarurat.care";
+        intentUrl = "intent://instagram.com/jarurat.care#Intent;package=com.instagram.android;scheme=https;end";
+    } else if (app === 'yt') {
+        webUrl = "https://youtube.com/@jaruratcare?sub_confirmation=1";
+        appUrl = "youtube://www.youtube.com/@jaruratcare"; // iOS YouTube deep link
+        intentUrl = "intent://youtube.com/@jaruratcare?sub_confirmation=1#Intent;package=com.google.android.youtube;scheme=https;end";
+    }
+
+    if (isAndroid && intentUrl) {
+        // Android handles Intents natively and falls back automatically
+        window.location.href = intentUrl;
+    } else if (isIOS && appUrl) {
+        // iOS requires a timeout fallback to web if app isn't installed
+        setTimeout(() => {
+            window.location.href = webUrl;
+        }, 1500);
+        window.location.href = appUrl;
+    } else {
+        // Desktop or other platforms
+        window.open(webUrl, '_blank');
+    }
+}
