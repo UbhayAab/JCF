@@ -33,26 +33,19 @@ async def process_email(app, zoho, email):
     3. If relevant: generate reply → get approval → send
     Loops until approved or cancelled.
     """
+    # Extract sender immediately
     msg_id = email.get("messageId")
     from_email = email.get("fromAddress", "Unknown")
     subject = email.get("subject", "No Subject")
     
+    # ── Database Tracking ──
+    # If this is the first time we see them, add to DB. 
+    # Because they interacted, we don't start them as Pending (cold outbound), we just track them.
+    import database
+    database.add_target(from_email, name="Inbound User", status="Active")
+    
     logger.info(f"📧 New email: {subject} (from {from_email})")
     
-    # User requested mandatory filter during demo phase
-    content_preview = email.get("summary", "").lower()
-    name_variations = ["ubhay", "ubhai", "obai"]
-    
-    is_targeted = any(name in from_email.lower() for name in name_variations) or \
-                  any(name in subject.lower() for name in name_variations) or \
-                  any(name in content_preview for name in name_variations)
-                  
-    if not is_targeted:
-        logger.info(f"⏭️ Skipping {from_email} (Does not contain target name)")
-        # Still mark as read so we don't loop indefinitely
-        zoho.mark_as_read(msg_id)
-        return
-        
     # Step 1: ALWAYS fetch full thread from the very first message
     try:
         thread_text = zoho.get_email_thread(msg_id)
@@ -68,6 +61,7 @@ async def process_email(app, zoho, email):
     if not is_relevant:
         logger.info(f"🚫 SPAM/IRRELEVANT — skipping: {subject}")
         zoho.mark_as_read(msg_id)
+        database.update_status(from_email, "Spam")
         await telegram_bot.send_notification(
             app,
             f"🚫 <b>Skipped (not event-related)</b>\n"
@@ -91,7 +85,8 @@ async def process_email(app, zoho, email):
             await telegram_bot.send_notification(
                 app, f"❌ <b>AI Error</b> for email from {from_email}:\n{draft}"
             )
-            break
+            # Throw exception so the polling loop catches it and adds it to the safe error cache
+            raise Exception(f"AI Generation Failed: {draft}")
         
         # Send to Telegram for review
         logger.info(f"📱 Sending draft to Telegram for review...")
@@ -113,6 +108,7 @@ async def process_email(app, zoho, email):
                 draft_html = draft.replace("\n", "<br>")
                 zoho.send_new_email(from_email, reply_subj, draft_html)
                 zoho.mark_as_read(msg_id)
+                database.update_status(from_email, "Replied")
                 await telegram_bot.send_notification(
                     app, f"✅ Reply sent to <b>{from_email}</b>"
                 )
@@ -131,26 +127,48 @@ async def process_email(app, zoho, email):
         elif decision == "cancel":
             logger.info(f"❌ Cancelled — skipping {from_email}")
             zoho.mark_as_read(msg_id)
+            database.update_status(from_email, "Ignored")
             break
 
 
 async def poll_inbox(app, zoho):
     """Continuously poll Zoho inbox for new unread emails."""
     logger.info(f"📬 Starting inbox polling (every {config.POLL_INTERVAL_SECONDS}s)...")
+    errored_msg_ids = set()
     
     while True:
         try:
             emails = zoho.fetch_unread_emails()
             if emails:
-                logger.info(f"📬 Found {len(emails)} new unread email(s)")
-                for email in emails:
-                    await process_email(app, zoho, email)
+                new_emails = [e for e in emails if e.get("messageId") not in errored_msg_ids]
+                if new_emails:
+                    logger.info(f"📬 Found {len(new_emails)} new unread email(s)")
+                    for email in new_emails:
+                        msg_id = email.get("messageId")
+                        try:
+                            await process_email(app, zoho, email)
+                        except Exception as e:
+                            # If AI quota fails, it raises an overarching error and breaks.
+                            logger.error(f"Failed to process {msg_id}, adding to error cache to prevent spam loop.")
+                            errored_msg_ids.add(msg_id)
             else:
                 logger.debug("No new emails")
         except Exception as e:
             logger.error(f"Polling error: {e}")
         
         await asyncio.sleep(config.POLL_INTERVAL_SECONDS)
+
+
+async def run_drip_scheduler(app, zoho):
+    """Continuously trigger the Drip Campaign engine every hour."""
+    import drip_campaign
+    logger.info("💧 Starting Drip Campaign Scheduler (Checking every 1 hour)...")
+    while True:
+        try:
+            await drip_campaign.run_drip_campaign(app, zoho)
+        except Exception as e:
+            logger.error(f"Drip Campaign crash: {e}")
+        await asyncio.sleep(3600)  # Check every hour
 
 
 # ── Bulk Send (runs in Telegram callback) ──────────────────
@@ -194,6 +212,7 @@ async def main():
         chat_id = config.TELEGRAM_GROUP_CHAT_ID
         if chat_id and chat_id != "WILL_AUTO_DETECT":
             logger.info("📬 Group already configured — starting inbox polling...")
+            asyncio.create_task(run_drip_scheduler(app, zoho))
             await poll_inbox(app, zoho)
         else:
             # Wait for /start command to set the group chat ID
@@ -203,6 +222,7 @@ async def main():
                 if gid:
                     logger.info(f"✅ Group detected: {gid}")
                     logger.info("📬 Starting inbox polling...")
+                    asyncio.create_task(run_drip_scheduler(app, zoho))
                     await poll_inbox(app, zoho)
                     break
                 await asyncio.sleep(2)

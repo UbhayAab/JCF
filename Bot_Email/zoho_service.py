@@ -229,8 +229,12 @@ class ZohoMailService:
                 f"Date: {received}\n"
                 f"\n{content}\n"
             )
+            
+        # The last message in the `messages` list is the latest chronologically
+        last_msg = messages[-1] if messages else {}
+        last_sender = last_msg.get("fromAddress", "Unknown")
         
-        return "\n".join(thread_parts)
+        return "\n".join(thread_parts), last_sender
 
     # ── Send ───────────────────────────────────────────────
 
