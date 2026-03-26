@@ -43,6 +43,7 @@ def generate_followup_email(target_name, attempt_number):
     prompt = (
         f"You are reaching out to {target_name} on behalf of Jarurat Care (Cancer Awareness NGO).\n"
         f"Context: {contexts.get(attempt_number, 'Send a follow-up reminder.')}\n"
+        f"Additional Instruction: Always politely ask them to consider forwarding this email/invitation to their university, organization, or colleagues so more people can join, mentioning that a lot of important researchers and doctors will be attending.\n"
         f"Keep the tone professional and warm. Output ONLY the email body. Use <br> for line breaks."
     )
     
@@ -54,9 +55,9 @@ def generate_followup_email(target_name, attempt_number):
         logger.error(f"Followup Generation Error: {e}")
         # Fallback templates to save API or if API fails
         fallbacks = {
-            1: f"Hi {target_name},<br><br>I wanted to quickly follow up on my previous email. Let me know if you received it!<br><br>Best,<br>Jarurat Care Team",
-            2: f"Dear {target_name},<br><br>I'm bumping this to the top of your inbox. We would love to have you involved with the summit.<br><br>Best,<br>Jarurat Care Team",
-            3: f"Hi {target_name},<br><br>I haven't heard back so I assume you're busy! This will be my last email, but please reach out if things change.<br><br>Best,<br>Jarurat Care Team"
+            1: f"Hi {target_name},<br><br>I wanted to quickly follow up on my previous email. If you are unable to attend, we would be incredibly grateful if you could forward this invitation to your university or colleagues. We have many important researchers joining and want to spread the word.<br><br>Best,<br>Jarurat Care Team",
+            2: f"Dear {target_name},<br><br>I'm bumping this to the top of your inbox. Even if you cannot join us, please consider sharing this within your organization so others might benefit.<br><br>Best,<br>Jarurat Care Team",
+            3: f"Hi {target_name},<br><br>This will be my final email. If you have a moment, please forward our summit details to your university network. Wishing you the best!<br><br>Best,<br>Jarurat Care Team"
         }
         return fallbacks.get(attempt_number, fallbacks[1])
 

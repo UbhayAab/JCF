@@ -11,7 +11,7 @@ import logging
 logger = logging.getLogger("database")
 
 DB_FILE = "data/database.csv"
-FIELDNAMES = ["Email", "Status", "LastUpdated", "Name", "Context"]
+FIELDNAMES = ["Email", "Status", "LastUpdated", "Name", "Context", "FirstInteraction", "ThreadCount"]
 
 # Time Thresholds (in seconds)
 # e.g., Sent_1 -> Sent_2 requires 24h (86400s)
@@ -45,7 +45,7 @@ def save_db(rows):
         writer.writerows(rows)
 
 
-def add_target(email, name="", context="", status="Pending"):
+def add_target(email, name="", context="", status="Pending", first_interaction="Unknown", thread_count=1):
     """Add a new target if it doesn't already exist."""
     rows = load_db()
     email_clean = email.strip().lower()
@@ -59,7 +59,9 @@ def add_target(email, name="", context="", status="Pending"):
         "Status": status,
         "LastUpdated": str(int(time.time())),
         "Name": name,
-        "Context": context
+        "Context": context,
+        "FirstInteraction": first_interaction,
+        "ThreadCount": str(thread_count)
     })
     save_db(rows)
     return True

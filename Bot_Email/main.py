@@ -48,11 +48,20 @@ async def process_email(app, zoho, email):
     
     # Step 1: ALWAYS fetch full thread from the very first message
     try:
-        thread_text = zoho.get_email_thread(msg_id)
-        logger.info(f"📜 Fetched full thread ({len(thread_text)} chars)")
+        thread_text, last_sender = zoho.get_email_thread(msg_id)
+        logger.info(f"📜 Fetched full thread ({len(thread_text)} chars). Last Sender: {last_sender}")
     except Exception as e:
         logger.error(f"Could not fetch thread for {msg_id}: {e}")
         thread_text = f"From: {from_email}\nSubject: {subject}\n\n[Could not fetch full thread]"
+        last_sender = from_email
+        
+    # Safety Check: If the absolutely most recent email in the thread is from US, do not reply.
+    # This means we either already handled it, or a human manually replied via Zoho.
+    if last_sender.lower() == zoho.from_email.lower():
+        logger.info(f"🛑 Skipping {from_email}: The last email in this thread was sent by us.")
+        zoho.mark_as_read(msg_id)
+        database.update_status(from_email, "Replied")
+        return
     
     # Step 2: Classify — is this email relevant to our campaign?
     logger.info(f"🔍 Classifying email...")
