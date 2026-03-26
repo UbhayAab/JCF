@@ -11,8 +11,8 @@ import google.generativeai as genai
 import config
 
 
-# Configure Gemini
-genai.configure(api_key=config.GEMINI_API_KEY)
+# Configure Gemini dynamically per function to support multiple API keys
+# genai.configure() is called inside each function.
 
 # Use Flash-Lite for best free tier limits (1000 RPD)
 MODEL_NAME = "gemini-2.5-flash-lite"
@@ -52,6 +52,7 @@ def classify_email(thread_text):
     )
 
     try:
+        genai.configure(api_key=config.GEMINI_API_KEY_SPAM)
         model = genai.GenerativeModel(
             MODEL_NAME,
             system_instruction=classifier_prompt
@@ -103,6 +104,7 @@ def generate_reply(thread_text, custom_context=None):
     )
 
     try:
+        genai.configure(api_key=config.GEMINI_API_KEY_REPLY)
         model = genai.GenerativeModel(
             MODEL_NAME,
             system_instruction=system_prompt
@@ -128,6 +130,7 @@ def polish_template(template_text):
     )
 
     try:
+        genai.configure(api_key=config.GEMINI_API_KEY_COLD)
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(prompt)
         return response.text.strip()
@@ -152,6 +155,7 @@ def generate_initial_email(doctor_name, template_text, extra_context=None):
             f"keeping it professional and concise. Return ONLY the email body."
         )
         try:
+            genai.configure(api_key=config.GEMINI_API_KEY_COLD)
             model = genai.GenerativeModel(MODEL_NAME)
             response = model.generate_content(prompt)
             return response.text.strip()

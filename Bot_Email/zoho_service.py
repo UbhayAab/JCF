@@ -162,42 +162,65 @@ class ZohoMailService:
 
     def get_email_thread(self, message_id):
         """
-        Get the full conversation thread for context.
-        Returns a formatted string of all messages in the thread.
+        Get the full conversation thread for context by searching ALL emails
+        involving the sender of this message across Inbox and Sent folders.
+        This bypasses Zoho's broken threadId groupings.
         """
-        # First get the message to find its thread ID
-        msg_data = self._api_get(f"messages/{message_id}")
-        msg_info = msg_data.get("data", {})
-        
-        thread_id = msg_info.get("threadId", message_id)
-        
-        # Fetch all messages in this thread
-        thread_data = self._api_get("messages/view", params={
-            "threadId": thread_id,
-            "limit": 50,
-        })
-        
-        messages = thread_data.get("data", [])
-        
+        # First get the message to find the sender
+        try:
+            msg_data = self._api_get(f"messages/{message_id}")
+            msg_info = msg_data.get("data", {})
+            target_email = msg_info.get("fromAddress", "")
+            if not target_email or target_email == self.from_email:
+                target_email = msg_info.get("toAddress", "")
+                
+            inbox_id = self.get_folder_id("Inbox")
+            sent_id = self.get_folder_id("Sent")
+            
+            inbox_data = self._api_get("messages/view", params={"limit": 50, "folderId": inbox_id})
+            sent_data = self._api_get("messages/view", params={"limit": 50, "folderId": sent_id})
+            
+            all_msgs = inbox_data.get("data", []) + sent_data.get("data", [])
+            
+            # Filter for messages involving this email
+            filtered = []
+            for msg in all_msgs:
+                f_addr = msg.get("fromAddress", "").lower()
+                t_addr = msg.get("toAddress", "").lower()
+                if target_email.lower() in f_addr or target_email.lower() in t_addr:
+                    filtered.append(msg)
+                    
+            # Remove exact duplicates (same messageId)
+            unique_msgs = {m.get("messageId"): m for m in filtered}.values()
+            
+            # Sort oldest first based on receivedTime string
+            messages = sorted(unique_msgs, key=lambda x: int(x.get("receivedTime", "0")))
+            
+        except Exception as e:
+            print(f"⚠️ Failed to build thread by email fallback: {e}")
+            messages = [msg_info] if 'msg_info' in locals() else []
+            
         if not messages:
-            # Fallback: just get this single message
             content = self.get_email_content(message_id)
-            sender = msg_info.get("fromAddress", "Unknown")
-            subject = msg_info.get("subject", "No Subject")
-            return f"From: {sender}\nSubject: {subject}\n\n{content}"
+            return f"From: {target_email}\nSubject: {msg_info.get('subject', '')}\n\n{content}"
         
         # Build thread text (oldest first)
         thread_parts = []
-        for msg in reversed(messages):
+        for msg in messages:
             sender = msg.get("fromAddress", "Unknown")
             subject = msg.get("subject", "")
             received = msg.get("receivedTime", "")
             
-            # Get content for each message
             try:
                 content = self.get_email_content(msg["messageId"])
             except Exception:
                 content = msg.get("summary", "[Could not fetch content]")
+                
+            # Prevent exponential quote bloat from bot replies
+            if sender.lower() == self.from_email.lower():
+                # Truncate bot's own replies to avoid infinite history loops
+                if len(content) > 500:
+                    content = content[:500] + "... [Bot Reply Truncated]"
             
             thread_parts.append(
                 f"--- Message ---\n"

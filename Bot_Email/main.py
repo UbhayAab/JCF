@@ -39,6 +39,20 @@ async def process_email(app, zoho, email):
     
     logger.info(f"📧 New email: {subject} (from {from_email})")
     
+    # User requested mandatory filter during demo phase
+    content_preview = email.get("summary", "").lower()
+    name_variations = ["ubhay", "ubhai", "obai"]
+    
+    is_targeted = any(name in from_email.lower() for name in name_variations) or \
+                  any(name in subject.lower() for name in name_variations) or \
+                  any(name in content_preview for name in name_variations)
+                  
+    if not is_targeted:
+        logger.info(f"⏭️ Skipping {from_email} (Does not contain target name)")
+        # Still mark as read so we don't loop indefinitely
+        zoho.mark_as_read(msg_id)
+        return
+        
     # Step 1: ALWAYS fetch full thread from the very first message
     try:
         thread_text = zoho.get_email_thread(msg_id)
@@ -94,7 +108,10 @@ async def process_email(app, zoho, email):
         if decision == "approve":
             logger.info(f"✅ Approved — sending reply to {from_email}")
             try:
-                zoho.send_reply(msg_id, draft)
+                reply_subj = subject if subject.lower().startswith("re:") else f"Re: {subject}"
+                # Convert newlines to HTML breaks so it formats perfectly in the email client
+                draft_html = draft.replace("\n", "<br>")
+                zoho.send_new_email(from_email, reply_subj, draft_html)
                 zoho.mark_as_read(msg_id)
                 await telegram_bot.send_notification(
                     app, f"✅ Reply sent to <b>{from_email}</b>"

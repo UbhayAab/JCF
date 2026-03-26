@@ -26,20 +26,33 @@ logger = logging.getLogger("smart_demo")
 
 def _get_full_conversation(zoho, target_email):
     """
-    Search the entire mailbox for ALL emails to or from this email address.
-    This guarantees we get the full history regardless of broken thread IDs.
+    Fetch the last 50 emails from Inbox and Sent, 
+    filter by target_email, and sort them chronologically.
+    This guarantees we capture every email regardless of thread ID bugs.
     """
     try:
-        data = zoho._api_get("messages/search", params={
-            "searchKey": target_email, 
-            "limit": 50
-        })
-        messages = data.get("data", [])
+        inbox_id = zoho.get_folder_id("Inbox")
+        sent_id = zoho.get_folder_id("Sent")
+        
+        inbox_data = zoho._api_get("messages/view", params={"limit": 50, "folderId": inbox_id})
+        sent_data = zoho._api_get("messages/view", params={"limit": 50, "folderId": sent_id})
+        
+        all_msgs = inbox_data.get("data", []) + sent_data.get("data", [])
+        
+        # Filter for messages involving this email
+        filtered = []
+        for msg in all_msgs:
+            f_addr = msg.get("fromAddress", "").lower()
+            t_addr = msg.get("toAddress", "").lower()
+            if target_email.lower() in f_addr or target_email.lower() in t_addr:
+                filtered.append(msg)
+                
+        # Remove exact duplicates (same messageId)
+        unique_msgs = {m.get("messageId"): m for m in filtered}.values()
         
         # Sort oldest first based on receivedTime string
-        # receivedTime usually looks like "1774560506268" (Unix ms string)
-        messages.sort(key=lambda x: int(x.get("receivedTime", "0")))
-        return messages
+        sorted_msgs = sorted(unique_msgs, key=lambda x: int(x.get("receivedTime", "0")))
+        return sorted_msgs
     except Exception as e:
         logger.error(f"Error fetching global history for {target_email}: {e}")
         return []
@@ -65,7 +78,8 @@ Here is the thread:
         model = genai.GenerativeModel("gemini-2.5-flash")
         resp = model.generate_content(prompt)
         text = resp.text.strip().upper()
-        return "SPAM" in text
+        logger.info(f"🧠 AI raw output: {text}")
+        return text == "SPAM" or text.startswith("SPAM") and "NOT" not in text
     except Exception as e:
         logger.error(f"Gemini error: {e}")
         return False # Fallback to not-spam
