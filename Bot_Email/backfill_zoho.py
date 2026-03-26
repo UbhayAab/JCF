@@ -102,7 +102,7 @@ def run_backfill():
     
     for msg in unique_msgs:
         contacts = extract_emails_from_msg(msg, my_email)
-        received_time = int(msg.get("receivedTime", "0"))
+        received_time = int(msg.get("receivedTime") or "0")
         from_addr = msg.get("fromAddress", "").lower()
         
         for contact in contacts:
