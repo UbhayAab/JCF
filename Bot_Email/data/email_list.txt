@@ -1,0 +1,4 @@
+# Paste one email per line below (lines starting with # are ignored)
+# Example:
+# doctor1@example.com
+# doctor2@hospital.org

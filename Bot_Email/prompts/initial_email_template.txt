@@ -1,0 +1,12 @@
+Subject: Invitation to [Event Name] — 23rd May 2025
+
+Dear Dr. {doctor_name},
+
+[PASTE YOUR INITIAL EMAIL TEMPLATE HERE]
+
+[This template will be run through Gemini once for formatting/grammar polish before sending]
+
+Warm regards,
+Partnership Team
+Jarurat Care
+partnership@jarurat.care
