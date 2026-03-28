@@ -88,6 +88,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 <b>Email Bot Commands</b>\n\n"
         "• /start — Activate bot & detect group\n"
         "• /status — Check if bot is running\n"
+        "• /add [emails] — Parse emails from your message and add to Mega Brain\n"
+        "• /sync — Read `email_list.txt` and sync to Mega Brain\n"
         "• /bulksend — Send initial outreach emails\n"
         "• /help — Show this message\n\n"
         "<b>When a reply comes in:</b>\n"
@@ -95,6 +97,63 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ Send — Approve and send the reply\n"
         "✏️ Edit — Provide custom context, I'll regenerate\n"
         "❌ Cancel — Skip this email",
+        parse_mode="HTML"
+    )
+
+async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Parses raw text for emails and drops them into the Mega Brain."""
+    text = update.message.text.replace("/add", "")
+    emails = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+    if not emails:
+        await update.message.reply_text("⚠️ No valid emails found in your message.")
+        return
+        
+    import database
+    added = 0
+    duplicate = 0
+    for e in set(emails):
+        if database.add_target(e.lower(), status="Pending", first_interaction="Outbound"):
+            added += 1
+        else:
+            duplicate += 1
+            
+    await update.message.reply_text(
+        f"🧠 <b>Mega Brain Update (/add)</b>\n\n"
+        f"✅ <b>Added:</b> {added} new targets (Pending cold email)\n"
+        f"♻️ <b>Ignored:</b> {duplicate} duplicates",
+        parse_mode="HTML"
+    )
+
+async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reads email_list.txt and drops them into the Mega Brain."""
+    import database
+    import config
+    import os
+    
+    if not os.path.exists(config.EMAIL_LIST_PATH):
+        await update.message.reply_text("⚠️ No `email_list.txt` found.")
+        return
+        
+    with open(config.EMAIL_LIST_PATH, "r", encoding="utf-8") as f:
+        text = f.read()
+        
+    emails = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+    if not emails:
+        await update.message.reply_text("⚠️ No valid emails found in `email_list.txt`.")
+        return
+        
+    added = 0
+    duplicate = 0
+    for e in set(emails):
+        if database.add_target(e.lower(), status="Pending", first_interaction="Outbound"):
+            added += 1
+        else:
+            duplicate += 1
+            
+    await update.message.reply_text(
+        f"🧠 <b>Mega Brain Sync (email_list.txt)</b>\n\n"
+        f"✅ <b>Added:</b> {added} new targets (Pending cold email)\n"
+        f"♻️ <b>Ignored:</b> {duplicate} duplicates",
         parse_mode="HTML"
     )
 
@@ -292,6 +351,8 @@ def build_telegram_app():
     # Register handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("add", add_command))
+    app.add_handler(CommandHandler("sync", sync_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("bulksend", bulksend_command))
     app.add_handler(CallbackQueryHandler(button_callback))

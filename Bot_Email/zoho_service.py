@@ -230,10 +230,48 @@ class ZohoMailService:
                 f"\n{content}\n"
             )
             
-        # The last message in the `messages` list is the latest chronologically
-        last_msg = messages[-1] if messages else {}
-        last_sender = last_msg.get("fromAddress", "Unknown")
+        # Zoho returns messages newest-first, so index 0 is the ACTUAL latest message in the thread
+        last_msg = messages[0] if messages else {}
         
+        # Clean HTML encoding so it accurately matches our email string
+        import html
+        raw_sender = html.unescape(last_msg.get("fromAddress", "Unknown"))
+        if "<" in raw_sender and ">" in raw_sender:
+            last_sender = raw_sender.split("<")[1].split(">")[0].strip()
+        else:
+            last_sender = raw_sender
+            
+        # [CRITICAL SAFETY PATCH] Zoho's native Thread API is completely blind to Sent folders!
+        # If the last sender looks like the external user, we MUST verify we didn't send a manual reply
+        # that Zoho hid from the thread structure.
+        if last_sender.lower() != self.from_email.lower():
+            try:
+                # Global search across all folders (Inbox, Sent, etc)
+                # We search exclusively for messages sent to the external user with matching subjects
+                clean_subj = subject.replace("Re:", "").replace("Fwd:", "").strip()
+                global_search = self._api_get("messages/search", params={"searchKey": clean_subj})
+                search_msgs = global_search.get("data", [])
+                
+                # Check if we have an outbound message globally newer than the inbound message
+                inbound_time = int(last_msg.get("receivedTime", "0"))
+                for s_msg in search_msgs:
+                    s_sender_raw = html.unescape(s_msg.get("fromAddress", ""))
+                    
+                    if "<" in s_sender_raw and ">" in s_sender_raw:
+                        s_sender_clean = s_sender_raw.split("<")[1].split(">")[0].strip()
+                    else:
+                        s_sender_clean = s_sender_raw
+                        
+                    s_time = int(s_msg.get("receivedTime", "0"))
+                    
+                    # If we find a message sent BY US, that is NEWER than the inbound message,
+                    # we officially override the last_sender flag!
+                    if s_sender_clean.lower() == self.from_email.lower() and s_time > inbound_time:
+                        last_sender = self.from_email.lower()
+                        break
+            except Exception as e:
+                print(f"⚠️ Global safety search failed: {e}")
+                
         return "\n".join(thread_parts), last_sender
 
     # ── Send ───────────────────────────────────────────────

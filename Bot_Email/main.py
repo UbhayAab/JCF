@@ -91,10 +91,7 @@ async def process_email(app, zoho, email):
         draft = generate_reply(thread_text, custom_context)
         
         if draft.startswith("[ERROR"):
-            await telegram_bot.send_notification(
-                app, f"❌ <b>AI Error</b> for email from {from_email}:\n{draft}"
-            )
-            # Throw exception so the polling loop catches it and adds it to the safe error cache
+            # Throw exception so the polling loop catches it and adds it to the safe error cache quietly
             raise Exception(f"AI Generation Failed: {draft}")
         
         # Send to Telegram for review

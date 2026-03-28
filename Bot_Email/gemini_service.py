@@ -17,6 +17,16 @@ import config
 # Use Flash-Lite for best free tier limits (1000 RPD)
 MODEL_NAME = "gemini-2.5-flash-lite"
 
+_api_call_count = 0
+
+def get_active_key():
+    """Rotates through the 4 API keys every 4 calls."""
+    global _api_call_count
+    keys = config.GEMINI_KEYS
+    idx = (_api_call_count // 4) % len(keys)
+    _api_call_count += 1
+    return keys[idx]
+
 
 def _load_prompt_file(path, fallback="You are a professional email assistant."):
     """Load a prompt from file."""
@@ -52,7 +62,7 @@ def classify_email(thread_text):
     )
 
     try:
-        genai.configure(api_key=config.GEMINI_API_KEY_SPAM)
+        genai.configure(api_key=get_active_key())
         model = genai.GenerativeModel(
             MODEL_NAME,
             system_instruction=classifier_prompt
@@ -104,7 +114,7 @@ def generate_reply(thread_text, custom_context=None):
     )
 
     try:
-        genai.configure(api_key=config.GEMINI_API_KEY_REPLY)
+        genai.configure(api_key=get_active_key())
         model = genai.GenerativeModel(
             MODEL_NAME,
             system_instruction=system_prompt
@@ -130,7 +140,7 @@ def polish_template(template_text):
     )
 
     try:
-        genai.configure(api_key=config.GEMINI_API_KEY_COLD)
+        genai.configure(api_key=get_active_key())
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(prompt)
         return response.text.strip()
@@ -155,7 +165,7 @@ def generate_initial_email(doctor_name, template_text, extra_context=None):
             f"keeping it professional and concise. Return ONLY the email body."
         )
         try:
-            genai.configure(api_key=config.GEMINI_API_KEY_COLD)
+            genai.configure(api_key=get_active_key())
             model = genai.GenerativeModel(MODEL_NAME)
             response = model.generate_content(prompt)
             return response.text.strip()

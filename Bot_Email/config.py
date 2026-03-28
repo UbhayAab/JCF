@@ -15,12 +15,16 @@ ZOHO_FROM_EMAIL = os.getenv("ZOHO_FROM_EMAIL", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID", "")
 
-# ── Gemini (Role-Based API Keys) ───────────────────────────
+# ── Gemini (Round-Robin API Keys) ───────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_API_KEY_SPAM = os.getenv("GEMINI_API_KEY_SPAM", "") or GEMINI_API_KEY
-GEMINI_API_KEY_REPLY = os.getenv("GEMINI_API_KEY_REPLY", "") or GEMINI_API_KEY
-GEMINI_API_KEY_FOLLOWUP = os.getenv("GEMINI_API_KEY_FOLLOWUP", "") or GEMINI_API_KEY
-GEMINI_API_KEY_COLD = os.getenv("GEMINI_API_KEY_COLD", "") or GEMINI_API_KEY
+
+GEMINI_KEYS = []
+for i in range(1, 10):
+    k = os.getenv(f"GEMINI_KEY_{i}", "").strip()
+    if k: GEMINI_KEYS.append(k)
+
+if not GEMINI_KEYS and GEMINI_API_KEY:
+    GEMINI_KEYS = [GEMINI_API_KEY]
 
 # ── Constants ──────────────────────────────────────────────
 POLL_INTERVAL_SECONDS = 60       # How often to check for new emails
