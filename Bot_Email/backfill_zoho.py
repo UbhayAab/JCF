@@ -21,6 +21,12 @@ logger = logging.getLogger("backfill")
 DB_FILE = "data/database.csv"
 FIELDNAMES = ["Email", "Status", "LastUpdated", "Name", "FirstInteraction", "ThreadCount", "Context"]
 
+def safe_int(val):
+    try:
+        return int(str(val).strip() or 0)
+    except Exception:
+        return 0
+
 
 def fetch_all_from_folder(zoho, folder_id, folder_name):
     """Fetch all messages from a folder with pagination."""
@@ -47,6 +53,9 @@ def fetch_all_from_folder(zoho, folder_id, folder_name):
     return all_msgs
 
 
+import html
+import re
+
 def extract_emails_from_msg(msg, my_email):
     """Extract all relevant email addresses from a single message (To, CC, From)."""
     addresses = set()
@@ -55,15 +64,23 @@ def extract_emails_from_msg(msg, my_email):
         val = msg.get(field, "")
         if not val:
             continue
-        # Multiple emails could be comma-separated
+            
+        val = html.unescape(val) # Clean Zoho HTML entities immediately
+        
         for raw in val.split(","):
             raw = raw.strip().lower()
+            if not raw: continue
+            
+            # If it comes with a display name like "John <john@x.com>", extract just the email
+            if "<" in raw and ">" in raw:
+                raw = raw.split("<")[1].split(">")[0].strip()
+            else:
+                match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', raw)
+                if match:
+                    raw = match.group(0).lower()
+                    
             if raw and raw != my_email and "@" in raw:
-                # If it comes with a display name like "John <john@x.com>", extract just the email
-                if "<" in raw and ">" in raw:
-                    raw = raw.split("<")[1].rstrip(">").strip()
-                if "@" in raw and "." in raw.split("@")[1]:
-                    addresses.add(raw)
+                addresses.add(raw)
                     
     return addresses
 
@@ -102,7 +119,7 @@ def run_backfill():
     
     for msg in unique_msgs:
         contacts = extract_emails_from_msg(msg, my_email)
-        received_time = int(msg.get("receivedTime") or "0")
+        received_time = safe_int(msg.get("receivedTime"))
         from_addr = msg.get("fromAddress", "").lower()
         
         for contact in contacts:
@@ -130,71 +147,62 @@ def run_backfill():
     
     all_rows = []
     
-    # Re-read existing rows first to preserve them
-    try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                all_rows.append(row)
-    except FileNotFoundError:
-        pass
-    
-    added = 0
-    
-    for contact_email, info in person_data.items():
-        if contact_email in existing_emails:
-            # Update thread count if higher than stored
-            for row in all_rows:
-                if row["Email"].strip().lower() == contact_email:
-                    existing_count = int(row.get("ThreadCount", 1))
-                    current_count = len(info["msgs"])
-                    if current_count > existing_count:
-                        row["ThreadCount"] = str(current_count)
-            continue
-        
-        msgs_sorted = sorted(info["msgs"], key=lambda x: int(x.get("receivedTime", "0")))
-        thread_count = len(msgs_sorted)
-        first_sender = info["first_sender"] or ""
-        first_interaction = "Outbound" if first_sender == my_email else "Inbound"
-        
-        # Build raw context (NO API calls - just raw text)
-        context_parts = []
-        for i, m in enumerate(msgs_sorted[:5]):  # Limit to 5 most recent to avoid huge cells
-            try:
-                c = zoho.get_email_content(m["messageId"])
-                c = c.replace("\n", " ").replace("\r", " ")[:300] + "..."
-            except Exception:
-                c = m.get("summary", "")[:300]
-            context_parts.append(f"[{i+1}] {m.get('fromAddress', '')} -> {c}")
-            
-        raw_context = " | ".join(context_parts)
-        
-        all_rows.append({
-            "Email": contact_email,
-            "Status": "Active",
-            "LastUpdated": str(int(time.time())),
-            "Name": msgs_sorted[0].get("fromAddress", contact_email) if first_interaction == "Inbound" else contact_email,
-            "FirstInteraction": first_interaction,
-            "ThreadCount": str(thread_count),
-            "Context": raw_context
-        })
-        existing_emails.add(contact_email)
-        added += 1
-        
-    # Save final output
+    # Prepare the CSV writer with immediate flush
     with open(DB_FILE, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(all_rows)
         
-    logger.info(f"✅ Done! Added {added} new contacts. Total rows: {len(all_rows)}")
-    
-    # Preview for the user
-    print("\n--- DATABASE PREVIEW (first 15 rows) ---")
-    print(f"{'Email':<40} {'Status':<10} {'First':<10} {'Threads'}")
-    for row in all_rows[:15]:
-        print(f"{row['Email']:<40} {row.get('Status',''):<10} {row.get('FirstInteraction',''):<10} {row.get('ThreadCount','')}")
-    print(f"\nTotal unique contacts: {len(all_rows)}")
+        # Rewrite existing rows
+        for row in all_rows:
+            writer.writerow(row)
+        
+        # Process and write new contacts iteratively
+        added = 0
+        total_contacts = len(person_data)
+        logger.info(f"Starting to process and write {total_contacts} contacts...")
+        
+        for i, (contact_email, info) in enumerate(person_data.items()):
+            if contact_email in existing_emails:
+                continue # We already updated their thread count in memory earlier
+            
+            msgs_sorted = sorted(info["msgs"], key=lambda x: safe_int(x.get("receivedTime")))
+            thread_count = len(msgs_sorted)
+            first_sender = info["first_sender"] or ""
+            first_interaction = "Outbound" if first_sender == my_email else "Inbound"
+            
+            # Build raw context via API
+            context_parts = []
+            for j, m in enumerate(msgs_sorted[:5]):
+                try:
+                    c = zoho.get_email_content(m["messageId"])
+                    c = c.replace("\n", " ").replace("\r", " ")[:300] + "..."
+                except Exception:
+                    c = m.get("summary", "")[:300]
+                context_parts.append(f"[{j+1}] {m.get('fromAddress', '')} -> {c}")
+                time.sleep(0.05) # Prevent Zoho completely banning our IP address
+                
+            raw_context = " | ".join(context_parts)
+            
+            new_row = {
+                "Email": contact_email,
+                "Status": "Active",
+                "LastUpdated": str(int(time.time())),
+                "Name": msgs_sorted[0].get("fromAddress", contact_email) if first_interaction == "Inbound" else contact_email,
+                "FirstInteraction": first_interaction,
+                "ThreadCount": str(thread_count),
+                "Context": raw_context
+            }
+            writer.writerow(new_row)
+            f.flush() # Force write to disk instantly!
+            
+            existing_emails.add(contact_email)
+            all_rows.append(new_row) # Keep in dict for preview
+            added += 1
+            
+            if (i + 1) % 10 == 0 or (i + 1) == total_contacts:
+                logger.info(f"Progress: [{i+1}/{total_contacts}] contacts processed. Added {added} new CSV rows so far...")
+            
+    logger.info(f"✅ Scraping fully complete! Added {added} new contacts. Look at data/database.csv!")
 
 
 if __name__ == "__main__":
