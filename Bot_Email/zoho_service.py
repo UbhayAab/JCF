@@ -78,7 +78,9 @@ class ZohoMailService:
         return {"Authorization": f"Zoho-oauthtoken {self.access_token}"}
 
     def _api_url(self, path):
-        return f"{config.ZOHO_API_BASE}/accounts/{self.account_id}/{path}"
+        # HARDCODED TO BYPASS GHOST TYPOS IN ENVIRONMENT
+        base = "https://mail.zoho.in/api"
+        return f"{base}/accounts/{self.account_id}/{path}"
 
     def _api_get(self, path, params=None):
         """GET request with 1 auto-retry on 401."""

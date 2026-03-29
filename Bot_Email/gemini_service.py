@@ -62,17 +62,13 @@ def classify_email(thread_text):
     )
 
     try:
-        # LLM TEMPORARILY PAUSED TO SAVE QUOTA
-        # genai.configure(api_key=get_active_key())
-        # model = genai.GenerativeModel(
-        #     MODEL_NAME,
-        #     system_instruction=classifier_prompt
-        # )
-        # response = model.generate_content(user_message)
-        # answer = response.text.strip().upper()
-        # 
-        # Парѕе rеѕроnѕе...
-        answer = "YES"
+        genai.configure(api_key=get_active_key())
+        model = genai.GenerativeModel(
+            MODEL_NAME,
+            system_instruction=classifier_prompt
+        )
+        response = model.generate_content(user_message)
+        answer = response.text.strip().upper()
         
         # Parse response — look for YES or NO
         if "YES" in answer:
@@ -80,9 +76,9 @@ def classify_email(thread_text):
         elif "NO" in answer:
             return False
         else:
-            # If unclear, default to relevant (safer to show to human than miss)
-            print(f"⚠️ Unclear classification: '{answer}' — defaulting to relevant")
-            return True
+            # Safer to skip if unsure per user request
+            print(f"⚠️ Unclear classification: '{answer}' — defaulting to skipping (Spam)")
+            return False
     except Exception as e:
         print(f"❌ Classification error: {e} — defaulting to relevant")
         return True  # On error, don't skip

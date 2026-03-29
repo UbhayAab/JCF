@@ -1,0 +1,4 @@
+config.ZOHO_API_BASE = 'https://mail.zoho.in/api'
+Source:
+    def _api_url(self, path):
+        return f"{config.ZOHO_API_BASE}/accounts/{self.account_id}/{path}"
