@@ -114,15 +114,13 @@ def generate_reply(thread_text, custom_context=None):
     )
 
     try:
-        # LLM IS PAUSED FOR DEBUGGING TO SAVE QUOTA
-        # genai.configure(api_key=get_active_key())
-        # model = genai.GenerativeModel(
-        #     MODEL_NAME,
-        #     system_instruction=system_prompt
-        # )
-        # response = model.generate_content(user_message)
-        # return response.text.strip()
-        return "[LLM TEMPORARILY PAUSED] I see your context and thread, but I am disabled right now to save credits while testing the inbox loops!"
+        genai.configure(api_key=get_active_key())
+        model = genai.GenerativeModel(
+            MODEL_NAME,
+            system_instruction=system_prompt
+        )
+        response = model.generate_content(user_message)
+        return response.text.strip()
     except Exception as e:
         print(f"❌ Gemini API error: {e}")
         return f"[ERROR: Could not generate reply — {e}]"

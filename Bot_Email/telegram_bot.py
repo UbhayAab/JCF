@@ -1,376 +1,155 @@
 """
-Telegram Bot — Human-in-the-Loop for Email Approval
-Runs in a Telegram GROUP so any team member can approve/edit/cancel email drafts.
-Also supports /bulksend command and auto-detects group chat ID.
+Telegram Bot Interface for Carcinome Outreach.
+Handles human-in-the-loop approvals and remote campaign management.
 """
 
-import asyncio
-import html
-import os
-import re
 import logging
+import re
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 import config
+import html
 
-logger = logging.getLogger(__name__)
+# Configure logging
+logger = logging.getLogger("telegram_bot")
 
-# ── Shared state ───────────────────────────────────────────
-# Pending decisions: message_id -> asyncio.Future
-_pending_decisions = {}
-# Store the group chat ID once detected
 _group_chat_id = None
-# Callback for bulk send (set by main.py)
+_pending_decisions = {}
 _bulk_send_callback = None
-# Store custom context requests: chat_id -> message_id being edited
-_awaiting_context = {}
 
-
-def set_bulk_send_callback(callback):
-    """Set the callback function for /bulksend command."""
+def set_bulk_send_callback(cb):
     global _bulk_send_callback
-    _bulk_send_callback = callback
-
-
-def get_group_chat_id():
-    """Return the detected group chat ID."""
-    return _group_chat_id
-
-
-# ── Helpers ────────────────────────────────────────────────
-
-def _truncate(text, max_len=3000):
-    """Truncate text for Telegram's message limit."""
-    if len(text) <= max_len:
-        return text
-    return text[:max_len] + "\n\n... [truncated]"
-
+    _bulk_send_callback = cb
 
 def _escape_html(text):
-    """Escape HTML for Telegram's HTML parse mode."""
-    return html.escape(text)
+    return html.escape(text or "")
 
-
-# ── Handlers ───────────────────────────────────────────────
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command — also auto-detects group chat ID."""
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global _group_chat_id
-    chat_id = update.effective_chat.id
-    
-    # Auto-detect group chat ID
-    if update.effective_chat.type in ("group", "supergroup"):
-        _group_chat_id = str(chat_id)
-        # Persist to .env if needed
-        _save_group_chat_id(str(chat_id))
-        await update.message.reply_text(
-            f"✅ Bot activated in this group!\n"
-            f"📋 Group Chat ID: <code>{chat_id}</code>\n\n"
-            f"Commands:\n"
-            f"• /status — Check bot status\n"
-            f"• /bulksend — Send initial emails to all addresses in email_list.txt\n"
-            f"• /help — Show this message",
-            parse_mode="HTML"
-        )
+    _group_chat_id = update.effective_chat.id
+    await update.message.reply_text(
+        f"🤖 <b>Email Bot Active!</b>\n\n"
+        f"📍 <b>Group ID:</b> <code>{_group_chat_id}</code>\n"
+        f"🚀 Monitoring your Zoho inbox for inquiries.\n\n"
+        f"<b>Commands:</b>\n"
+        f"/bulk_sync - Import leads from output.csv\n"
+        f"/bulk_start - Trigger Drip Campaign sweep\n"
+        f"/reset_spam &lt;email&gt; - Unblock an email\n"
+        f"/status - General system health",
+        parse_mode="HTML"
+    )
+
+async def bulk_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import database
+    added_count, msg = database.sync_external_csv()
+    await update.message.reply_text(f"📊 <b>Sync Result:</b>\n{msg}", parse_mode='HTML')
+
+async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if _bulk_send_callback:
+        await update.message.reply_text("🚀 Starting Smart Drip Campaign Sweep...")
+        try:
+            await _bulk_send_callback(context.application, None)
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error during drip: {e}")
     else:
-        await update.message.reply_text(
-            "⚠️ Please add me to a GROUP and use /start there.\n"
-            "I work best in group chats so your whole team can participate."
-        )
+        await update.message.reply_text("⚠️ System Error: Drip Trigger not registered.")
 
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help command."""
-    await update.message.reply_text(
-        "🤖 <b>Email Bot Commands</b>\n\n"
-        "• /start — Activate bot & detect group\n"
-        "• /status — Check if bot is running\n"
-        "• /add [emails] — Parse emails from your message and add to Mega Brain\n"
-        "• /sync — Read `email_list.txt` and sync to Mega Brain\n"
-        "• /bulksend — Send initial outreach emails\n"
-        "• /help — Show this message\n\n"
-        "<b>When a reply comes in:</b>\n"
-        "I'll show you the AI-drafted reply with buttons:\n"
-        "✅ Send — Approve and send the reply\n"
-        "✏️ Edit — Provide custom context, I'll regenerate\n"
-        "❌ Cancel — Skip this email",
-        parse_mode="HTML"
-    )
-
-async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Parses raw text for emails and drops them into the Mega Brain."""
-    text = update.message.text.replace("/add", "")
-    emails = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', text)
-    if not emails:
-        await update.message.reply_text("⚠️ No valid emails found in your message.")
+async def reset_spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Usage: /reset_spam <email>")
         return
-        
+    email = context.args[0]
     import database
-    added = 0
-    duplicate = 0
-    for e in set(emails):
-        if database.add_target(e.lower(), status="Pending", first_interaction="Outbound"):
-            added += 1
-        else:
-            duplicate += 1
-            
-    await update.message.reply_text(
-        f"🧠 <b>Mega Brain Update (/add)</b>\n\n"
-        f"✅ <b>Added:</b> {added} new targets (Pending cold email)\n"
-        f"♻️ <b>Ignored:</b> {duplicate} duplicates",
-        parse_mode="HTML"
-    )
+    if database.reset_spam_status(email):
+        await update.message.reply_text(f"✅ {email} reset to Pending.")
+    else:
+        await update.message.reply_text(f"❌ {email} not found.")
 
-async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Reads email_list.txt and drops them into the Mega Brain."""
-    import database
-    import config
-    import os
-    
-    if not os.path.exists(config.EMAIL_LIST_PATH):
-        await update.message.reply_text("⚠️ No `email_list.txt` found.")
-        return
-        
-    with open(config.EMAIL_LIST_PATH, "r", encoding="utf-8") as f:
-        text = f.read()
-        
-    emails = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', text)
-    if not emails:
-        await update.message.reply_text("⚠️ No valid emails found in `email_list.txt`.")
-        return
-        
-    added = 0
-    duplicate = 0
-    for e in set(emails):
-        if database.add_target(e.lower(), status="Pending", first_interaction="Outbound"):
-            added += 1
-        else:
-            duplicate += 1
-            
-    await update.message.reply_text(
-        f"🧠 <b>Mega Brain Sync (email_list.txt)</b>\n\n"
-        f"✅ <b>Added:</b> {added} new targets (Pending cold email)\n"
-        f"♻️ <b>Ignored:</b> {duplicate} duplicates",
-        parse_mode="HTML"
-    )
-
-
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /status command."""
-    pending = len(_pending_decisions)
-    await update.message.reply_text(
-        f"🟢 Bot is running\n"
-        f"📬 Pending decisions: {pending}\n"
-        f"📋 Group Chat ID: <code>{_group_chat_id or 'Not set'}</code>",
-        parse_mode="HTML"
-    )
-
-
-async def bulksend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /bulksend command — triggers bulk email sending."""
-    if _bulk_send_callback is None:
-        await update.message.reply_text("⚠️ Bulk send not configured yet. Wait for the bot to fully start.")
-        return
-    
-    await update.message.reply_text(
-        "📧 Starting bulk email send...\n"
-        "I'll send updates here as emails go out."
-    )
-    
-    # Run bulk send in background
-    asyncio.create_task(_run_bulk_send(update))
-
-
-async def _run_bulk_send(update: Update):
-    """Run bulk send and report results."""
-    try:
-        result = await asyncio.get_event_loop().run_in_executor(None, _bulk_send_callback)
-        await update.message.reply_text(f"✅ Bulk send complete!\n\n{result}")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Bulk send failed: {e}")
-
-
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle inline button presses (Approve/Edit/Cancel)."""
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    data = query.data  # Format: "action:message_id"
-    parts = data.split(":", 1)
-    if len(parts) != 2:
-        return
+    data = query.data.split(":")
+    action = data[0]
+    msg_id = data[1]
     
-    action, msg_id = parts
-    
-    if msg_id not in _pending_decisions:
-        await query.edit_message_text("⚠️ This decision has already been made or expired.")
-        return
-    
-    if action == "approve":
-        _pending_decisions[msg_id].set_result(("approve", None))
-        await query.edit_message_text(
-            query.message.text + "\n\n✅ <b>APPROVED — Sending reply...</b>",
-            parse_mode="HTML"
-        )
-    
-    elif action == "cancel":
-        _pending_decisions[msg_id].set_result(("cancel", None))
-        await query.edit_message_text(
-            query.message.text + "\n\n❌ <b>CANCELLED — Skipping this email.</b>",
-            parse_mode="HTML"
-        )
-    
-    elif action == "edit":
-        _awaiting_context[update.effective_chat.id] = msg_id
-        await query.edit_message_text(
-            query.message.text + "\n\n✏️ <b>EDIT MODE — Type your custom context/instructions below:</b>",
-            parse_mode="HTML"
-        )
+    if msg_id in _pending_decisions:
+        _pending_decisions[msg_id].set_result((action, None))
+        await query.edit_message_reply_markup(reply_markup=None)
 
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle custom reply context (regenerate)."""
+    if update.message.reply_to_message and update.message.reply_to_message.reply_markup:
+        # Extract msg_id from previous message or metadata
+        text = update.message.reply_to_message.text
+        match = re.search(r'ID: (\d+)', text)
+        if match:
+            msg_id = match.group(1)
+            if msg_id in _pending_decisions:
+                _pending_decisions[msg_id].set_result(("REGENERATE", update.message.text))
 
-async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle text messages — used for receiving custom context during edit flow."""
-    chat_id = update.effective_chat.id
-    
-    if chat_id in _awaiting_context:
-        msg_id = _awaiting_context.pop(chat_id)
-        custom_context = update.message.text
-        
-        if msg_id in _pending_decisions:
-            _pending_decisions[msg_id].set_result(("edit", custom_context))
-            await update.message.reply_text(
-                f"📝 Got it! Regenerating reply with your context:\n"
-                f"<i>{_escape_html(_truncate(custom_context, 500))}</i>",
-                parse_mode="HTML"
-            )
-
-
-# ── API for main.py ────────────────────────────────────────
-
-async def send_draft_for_review(app, from_email, subject, draft_reply, message_id):
-    """
-    Send a draft reply to the Telegram group for approval.
-    Returns: ("approve", None) | ("edit", custom_context) | ("cancel", None)
-    """
-    chat_id = _group_chat_id or config.TELEGRAM_GROUP_CHAT_ID
-    if not chat_id or chat_id == "WILL_AUTO_DETECT":
-        raise Exception(
-            "Group Chat ID not set! Add the bot to a group and send /start"
-        )
-    chat_id = int(chat_id)
-    
-    text = (
-        f"📧 <b>New Email Reply Needed</b>\n\n"
-        f"<b>From:</b> {_escape_html(from_email)}\n"
-        f"<b>Subject:</b> {_escape_html(subject)}\n\n"
-        f"<b>──── AI Draft Reply ────</b>\n\n"
-        f"{_escape_html(_truncate(draft_reply))}\n\n"
-        f"<b>────────────────────────</b>"
-    )
-    
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Send", callback_data=f"approve:{message_id}"),
-            InlineKeyboardButton("✏️ Edit", callback_data=f"edit:{message_id}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"cancel:{message_id}"),
-        ]
-    ])
-    
-    # Create a future to wait for the decision
-    loop = asyncio.get_event_loop()
-    future = loop.create_future()
-    _pending_decisions[message_id] = future
-    
+async def send_admin_alert(app, text, msg_id):
+    """Sends a high-priority alert to the group."""
+    keyboard = [
+        [InlineKeyboardButton("📖 View Full Thread", callback_data=f"VTH_{msg_id}")],
+        [InlineKeyboardButton("❌ Ignore", callback_data=f"REJ_{msg_id}")]
+    ]
     await app.bot.send_message(
-        chat_id=chat_id,
+        chat_id=config.TELEGRAM_GROUP_CHAT_ID,
         text=text,
         parse_mode="HTML",
-        reply_markup=keyboard,
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    
-    # Wait for human decision (blocks until button is pressed)
-    result = await future
-    del _pending_decisions[message_id]
-    
-    return result
 
+async def _handle_view_thread(update, context):
+    """Callback to show the last 5 messages in the thread."""
+    query = update.callback_query
+    msg_id = query.data.split("_")[-1]
+    await query.answer("Fetching thread history...")
+    
+    # We'll use a placeholder or call zoho here
+    # For now, let's just confirm it's implemented
+    await query.edit_message_text(
+        text=f"{query.message.text}\n\n<i>[Thread history would appear here - Requires Zoho integration fetch]</i>",
+        parse_mode="HTML"
+    )
 
 async def send_notification(app, text):
-    """Send a plain notification to the group."""
     chat_id = _group_chat_id or config.TELEGRAM_GROUP_CHAT_ID
-    if not chat_id or chat_id == "WILL_AUTO_DETECT":
-        return
+    if chat_id and chat_id != "WILL_AUTO_DETECT":
+        await app.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+
+async def send_draft_for_review(app, from_email, subject, draft, msg_id):
+    chat_id = _group_chat_id or config.TELEGRAM_GROUP_CHAT_ID
+    if not chat_id: return "SKIP", None
     
-    await app.bot.send_message(
-        chat_id=int(chat_id),
-        text=text,
-        parse_mode="HTML",
+    _pending_decisions[msg_id] = asyncio.Future()
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ SEND", callback_data=f"SEND:{msg_id}"),
+         InlineKeyboardButton("🚫 SPAM", callback_data=f"SPAM:{msg_id}")],
+        [InlineKeyboardButton("🔄 REGENERATE (Reply to this)", callback_data=f"REGENERATE:{msg_id}")]
+    ]
+    
+    text = (
+        f"🤖 <b>AI Draft Review</b>\n\n"
+        f"📧 <b>From:</b> {from_email}\n"
+        f"📝 <b>Subject:</b> {subject}\n"
+        f"🆔 <b>ID:</b> {msg_id}\n\n"
+        f"--- Draft ---\n"
+        f"{draft}\n"
     )
-
-
-# ── Persistence ────────────────────────────────────────────
-
-def _save_group_chat_id(chat_id_str):
-    """Update .env file with the detected group chat ID."""
-    global _group_chat_id
-    _group_chat_id = chat_id_str
     
-    env_path = os.path.join(config.BASE_DIR, ".env")
+    await app.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    
     try:
-        with open(env_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        
-        if "TELEGRAM_GROUP_CHAT_ID" in content:
-            import re
-            content = re.sub(
-                r"TELEGRAM_GROUP_CHAT_ID=.*",
-                f"TELEGRAM_GROUP_CHAT_ID={chat_id_str}",
-                content
-            )
-        else:
-            content += f"\nTELEGRAM_GROUP_CHAT_ID={chat_id_str}\n"
-        
-        with open(env_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        
-        print(f"✅ Saved Group Chat ID to .env: {chat_id_str}")
-    except Exception as e:
-        print(f"⚠️ Could not save chat ID to .env: {e}")
-
-
-
-# ── Build Application ─────────────────────────────────────
+        decision, context = await asyncio.wait_for(_pending_decisions[msg_id], timeout=3600)
+        return decision, context
+    except:
+        return "SKIP", None
+    finally:
+        _pending_decisions.pop(msg_id, None)
 
 def build_telegram_app():
-    """Build and return the Telegram Application (not started yet)."""
-    app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
-    
-    # Register handlers
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("add", add_command))
-    app.add_handler(CommandHandler("sync", sync_command))
-    app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CommandHandler("bulksend", bulksend_command))
-    app.add_handler(CallbackQueryHandler(button_callback))
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        text_message_handler
-    ))
-    
-    return app
-
-
-# ── Standalone test ────────────────────────────────────────
-if __name__ == "__main__":
-    config.validate()
-    
-    print("🤖 Testing Telegram bot...")
-    print("   Starting bot — send /start in your group to activate.")
-    print("   Press Ctrl+C to stop.\n")
-    
-    app = build_telegram_app()
-    app.run_polling(drop_pending_updates=True)
+    return ApplicationBuilder().token(config.TELEGRAM_BOT_TOKEN).build()

@@ -1,134 +1,106 @@
 """
-Drip Campaign Engine
-Runs periodically (e.g., cron job or background loop) to check the Central Brain.
-- Sends initial cold emails.
-- Sends follow-up nudges based on 24h/48h/96h delays.
+Drip Campaign Engine (v3.1 - Hyper-Precision & Local AI)
+Deterministic outreach with Local AI name-cleaning and forwarding incentives.
 """
 
 import asyncio
 import logging
-import google.generativeai as genai
-
 import config
-from zoho_service import ZohoMailService
+from zoho_logic import ZohoMailService
 import database
 import telegram_bot
+import ai_orchestrator
 
 logger = logging.getLogger("drip_campaign")
 
-
-def _load_template(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    except FileNotFoundError:
-        return "Greetings {name}, this is an automated outreach from Jarurat Care."
-
-
-def generate_followup_email(target_name, attempt_number):
-    """
-    Generates a smart contextual nudge using the FOLLOWUP API Key.
-    Attempt 1 -> 24h nudge
-    Attempt 2 -> 48h nudge
-    Attempt 3 -> 96h final nudge
-    """
-    genai.configure(api_key=config.GEMINI_API_KEY_FOLLOWUP)
-    
-    contexts = {
-        1: "It has been 24 hours since we reached out. Send a polite, brief reminder.",
-        2: "It has been a few days. Emphasize the urgency or value of the event.",
-        3: "This is our final attempt reaching out after a week. Keep it very short and open the door for future communication."
-    }
-    
-    prompt = (
-        f"You are reaching out to {target_name} on behalf of Jarurat Care (Cancer Awareness NGO).\n"
-        f"Context: {contexts.get(attempt_number, 'Send a follow-up reminder.')}\n"
-        f"Additional Instruction: Always politely ask them to consider forwarding this email/invitation to their university, organization, or colleagues so more people can join, mentioning that a lot of important researchers and doctors will be attending.\n"
-        f"Keep the tone professional and warm. Output ONLY the email body. Use <br> for line breaks."
-    )
-    
-    try:
-        model = genai.GenerativeModel("gemini-2.5-flash-lite")
-        response = model.generate_content(prompt)
-        return response.text.strip().replace("\n", "<br>")
-    except Exception as e:
-        logger.error(f"Followup Generation Error: {e}")
-        # Fallback templates to save API or if API fails
-        fallbacks = {
-            1: f"Hi {target_name},<br><br>I wanted to quickly follow up on my previous email. If you are unable to attend, we would be incredibly grateful if you could forward this invitation to your university or colleagues. We have many important researchers joining and want to spread the word.<br><br>Best,<br>Jarurat Care Team",
-            2: f"Dear {target_name},<br><br>I'm bumping this to the top of your inbox. Even if you cannot join us, please consider sharing this within your organization so others might benefit.<br><br>Best,<br>Jarurat Care Team",
-            3: f"Hi {target_name},<br><br>This will be my final email. If you have a moment, please forward our summit details to your university network. Wishing you the best!<br><br>Best,<br>Jarurat Care Team"
-        }
-        return fallbacks.get(attempt_number, fallbacks[1])
-
+def get_smart_template(attempt_number, name):
+    """Professional templates with organizational forwarding incentives."""
+    if attempt_number == 0: # Initial
+        return (
+            f"Dear {name},<br><br>"
+            f"On behalf of the Jarurat Care Foundation (JCF), I am honored to invite you to the <b>Horizon Series: International GI Oncology Webinar</b>.<br><br>"
+            f"This monthly series brings together world-class oncologists and researchers to discuss the latest advancements in Gastrointestinal Oncology.<br><br>"
+            f"If you are part of a medical organization, students club, or hospital network, we would be incredibly grateful if you could forward this invitation to your colleagues. Our goal is to make these life-saving insights accessible to as many professionals as possible.<br><br>"
+            f"Please let us know if you would like the registration link.<br><br>"
+            f"Best Regards,<br>Ubhay Anand<br>Jarurat Care Foundation"
+        )
+    elif attempt_number == 1: # 24h Nudge
+        return (
+            f"Hi {name},<br><br>"
+            f"I'm quickly following up on the Horizon Series invitation. If you know any students or junior doctors who would benefit from this, feel free to forward this email to them or your organization's mailing list.<br><br>"
+            f"Best,<br>Ubhay Anand"
+        )
+    elif attempt_number == 2: # 48h Nudge
+        return (
+            f"Dear {name},<br><br>"
+            f"Bumping this to the top of your inbox. Even if you cannot make it personally, we would appreciate it if you could share the summit details with your professional network or university department.<br><br>"
+            f"Regards,<br>Ubhay Anand"
+        )
+    else: # Final Nudge
+        return (
+            f"Hi {name},<br><br>"
+            f"This is my final follow-up. If you could take 10 seconds to forward this to one person or group who might be interested, it would mean a lot to our foundation.<br><br>"
+            f"Best,<br>Ubhay Anand"
+        )
 
 async def run_drip_campaign(app=None, zoho=None):
-    """Execute one sweep of the drip campaign."""
+    """Execute one sweep of the AI-free smart drip campaign."""
     if not zoho:
-        config.validate()
         zoho = ZohoMailService()
     
-    logger.info("🔍 Scanning Central Brain for actionable targets...")
+    logger.info("🔍 Scanning for actionable targets...")
     actionable = database.get_actionable_targets()
     
     if not actionable:
         logger.info("📭 No targets currently need emails.")
         return
         
-    logger.info(f"📤 Found {len(actionable)} targets needing outreach.")
     results = {"initial": 0, "followup": 0, "errors": 0}
-    
-    initial_template = _load_template(config.INITIAL_TEMPLATE_PATH)
     
     for item in actionable:
         email = item["email"]
         action = item["action"]
-        name = item["row"].get("Name", "Doctor")
+        raw_name = item["row"].get("Name", "")
         
-        # ── FLOW 1: Cold Initial Outreach
+        # Use our new AI-Orchestrator for high-precision name cleaning (Local AI)
+        clean_name = ai_orchestrator.smart_name_clean(raw_name, email)
+        
+        # ── FLOW 1: Initial
         if action == "send_initial":
-            logger.info(f"❄️ Sending Cold Initial to {email}")
-            body = initial_template.replace("{doctor_name}", name).replace("\n", "<br>")
-            
+            logger.info(f"❄️ Sending Smart Initial to {email} ({clean_name})")
+            body = get_smart_template(0, clean_name)
             try:
-                zoho.send_new_email(email, "Invitation: Cancer Awareness Summit", body)
+                zoho.send_new_email(email, "Invitation: International GI Oncology Webinar (Horizon Series)", body)
                 database.update_status(email, "Sent_1")
                 results["initial"] += 1
             except Exception as e:
-                logger.error(f"❌ Failed to email {email}: {e}")
+                logger.error(f"❌ Failed initial {email}: {e}")
                 results["errors"] += 1
                 
-        # ── FLOW 2: Warm Followups
+        # ── FLOW 2: Followups
         elif action.startswith("followup_from_Sent_"):
-            current_sent = int(action.split("_")[-1]) # e.g., Sent_1 -> 1
-            logger.info(f"🔥 Sending Followup #{current_sent} to {email}")
-            
-            body = generate_followup_email(name, current_sent)
-            
+            n = int(action.split("_")[-1])
+            logger.info(f"🔥 Sending Smart Followup #{n} to {email} ({clean_name})")
+            body = get_smart_template(n, clean_name)
             try:
-                # "Re: Invitation" to thread it naturally (this ignores Zoho's internal ThreadId but looks right to Gmail)
-                zoho.send_new_email(email, "Re: Invitation: Cancer Awareness Summit", body)
-                database.update_status(email, f"Sent_{current_sent + 1}")
+                zoho.send_new_email(email, f"Re: Invitation: International GI Oncology Webinar (Horizon Series)", body)
+                database.update_status(email, f"Sent_{n + 1}")
                 results["followup"] += 1
             except Exception as e:
-                logger.error(f"❌ Failed followup to {email}: {e}")
+                logger.error(f"❌ Failed followup {email}: {e}")
                 results["errors"] += 1
                 
-        # To avoid Zoho API rate limits when bulk sending
         await asyncio.sleep(2)
         
-    # Send Summary to Telegram if app is provided
     if app:
         msg = (
-            f"💧 <b>Drip Campaign Sweep Complete</b>\n\n"
-            f"🔹 <b>Cold Emails Sent:</b> {results['initial']}\n"
-            f"🔥 <b>Follow-ups Sent:</b> {results['followup']}\n"
+            f"💧 <b>Smart Drip Sweep Complete (Local-AI Ready)</b>\n\n"
+            f"🔹 <b>Cold Emails:</b> {results['initial']}\n"
+            f"🔥 <b>Follow-ups:</b> {results['followup']}\n"
             f"❌ <b>Errors:</b> {results['errors']}"
         )
         await telegram_bot.send_notification(app, msg)
 
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    print("Running test drip campaign sweep...")
     asyncio.run(run_drip_campaign())

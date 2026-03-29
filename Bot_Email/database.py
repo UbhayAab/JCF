@@ -19,7 +19,13 @@ THRESHOLDS = {
     "Sent_1": 24 * 3600,   # 1 Day
     "Sent_2": 48 * 3600,   # 2 Days
     "Sent_3": 96 * 3600,   # 4 Days
+    "Sent_DEFAULT": 96 * 3600, # 4 Days thereafter
 }
+
+EVENT_DATE = "2026-05-23"
+
+# The user's external data source
+EXTERNAL_CSV = "output.csv"
 
 def ensure_db():
     """Ensure the database file and directory exist."""
@@ -98,29 +104,42 @@ def update_status(email, new_status):
 def get_actionable_targets():
     """
     Returns targets that need immediate action based on the drip campaign rules.
-    - Pending (needs initial cold outreach)
-    - Sent_X where LastUpdated threshold has passed (needs followup)
+    1. Pending (needs initial cold outreach)
+    2. Sent_N where threshold has passed (needs followup)
+    3. Stops if EVENT_DATE is reached.
     """
+    from datetime import datetime
+    
+    # 1. Check Event Deadline
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if today_str > EVENT_DATE:
+        logger.info(f"⌛ Event date {EVENT_DATE} has passed. Drip halted.")
+        return []
+
     rows = load_db()
     actionable = []
     current_time = int(time.time())
     
     for row in rows:
         status = row.get("Status", "Unknown")
+        email = row.get("Email", "")
+        if not email: continue
         
         # Fresh targets
         if status == "Pending":
-            actionable.append({"email": row["Email"], "action": "send_initial", "row": row})
+            actionable.append({"email": email, "action": "send_initial", "row": row})
             continue
             
-        # Follow-up targets
-        if status in THRESHOLDS:
+        # Follow-up targets (Sent_1, Sent_2, ...)
+        if status.startswith("Sent_"):
             last_updated = int(row.get("LastUpdated", "0"))
-            threshold_seconds = THRESHOLDS[status]
+            
+            # Determine threshold
+            threshold_seconds = THRESHOLDS.get(status, THRESHOLDS["Sent_DEFAULT"])
             
             if current_time - last_updated >= threshold_seconds:
                 actionable.append({
-                    "email": row["Email"], 
+                    "email": email, 
                     "action": f"followup_from_{status}", 
                     "row": row
                 })
@@ -134,3 +153,39 @@ if __name__ == "__main__":
     update_status("test@jarurat.care", "Sent_1")
     print(get_target("test@jarurat.care"))
     print("Actionable:", get_actionable_targets())
+def sync_external_csv():
+    """Reads the user's output.csv and adds new high-confidence leads to the bot database."""
+    if not os.path.exists(EXTERNAL_CSV):
+        return 0, "External CSV not found."
+        
+    added_count = 0
+    skipped_count = 0
+    
+    try:
+        with open(EXTERNAL_CSV, mode='r', newline='', encoding='utf-8-sig') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Map user's columns to our database
+                email = row.get("Email ID", "").strip()
+                name = row.get("Name of the doctor", "").strip()
+                score_str = row.get("Confidence score", "0")
+                website = row.get("Website link", "")
+                
+                try:
+                    score = float(score_str)
+                except:
+                    score = 0
+                
+                if email and score >= 80:
+                    if add_target(email, name=name, context=f"Source: {website}", status="Pending"):
+                        added_count += 1
+                    else:
+                        skipped_count += 1
+        
+        return added_count, f"Synced! Added {added_count} new leads. Skipped {skipped_count} duplicates."
+    except Exception as e:
+        return 0, f"Sync Error: {str(e)}"
+
+def reset_spam_status(email):
+    """Resets a falsely flagged spam email to Pending."""
+    return update_status(email, "Pending")

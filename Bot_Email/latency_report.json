@@ -1,0 +1,66 @@
+{
+    "total_time": 793.7108433000394,
+    "avg_latency": 15.874216866000788,
+    "results": [
+        {
+            "query": "How do I join the webinar?",
+            "latency": 102.14215929998318,
+            "response_len": 452,
+            "is_flagged": false
+        },
+        {
+            "query": "Is there a registration fee?",
+            "latency": 74.34218030003831,
+            "response_len": 936,
+            "is_flagged": false
+        },
+        {
+            "query": "When is the next session?",
+            "latency": 65.57547300000442,
+            "response_len": 611,
+            "is_flagged": false
+        },
+        {
+            "query": "Can I get a certificate of participation?",
+            "latency": 112.01522970001679,
+            "response_len": 514,
+            "is_flagged": false
+        },
+        {
+            "query": "Will the sessions be recorded?",
+            "latency": 122.36683120002272,
+            "response_len": 936,
+            "is_flagged": false
+        },
+        {
+            "query": "I am an oncologist from Mumbai. How can I contribute?",
+            "latency": 44.85837129998254,
+            "response_len": 125,
+            "is_flagged": true
+        },
+        {
+            "query": "Do you have any sessions on Pancreatic cancer specifically?",
+            "latency": 95.20077270001639,
+            "response_len": 936,
+            "is_flagged": false
+        },
+        {
+            "query": "Is this open to medical students?",
+            "latency": 81.8554513999843,
+            "response_len": 936,
+            "is_flagged": false
+        },
+        {
+            "query": "What time is it in IST?",
+            "latency": 77.90426209999714,
+            "response_len": 293,
+            "is_flagged": false
+        },
+        {
+            "query": "Can I invite my colleagues?",
+            "latency": 17.417277199972887,
+            "response_len": 125,
+            "is_flagged": true
+        }
+    ]
+}
