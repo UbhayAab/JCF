@@ -18,9 +18,30 @@ class ZohoMailService:
         self.from_email = config.ZOHO_FROM_EMAIL
         self.access_token = None
         self.token_expiry = 0
-        self.seen_message_ids = set()  # Deduplicate within a session
         self.token_cache_file = os.path.join(config.BASE_DIR, "zoho_token.json")
+        self.seen_ids_file = os.path.join(config.DATA_DIR, "seen_ids.txt")
+        self.seen_message_ids = set()
         self._load_cached_token()
+        self._load_seen_ids()
+
+    def _load_seen_ids(self):
+        """Load previously processed message IDs from disk."""
+        if os.path.exists(self.seen_ids_file):
+            try:
+                with open(self.seen_ids_file, "r") as f:
+                    self.seen_message_ids = set(line.strip() for line in f if line.strip())
+                print(f"✅ Loaded {len(self.seen_message_ids)} processed message IDs from cache.")
+            except Exception as e:
+                print(f"⚠️ Failed to load seen_ids: {e}")
+
+    def _save_seen_id(self, message_id):
+        """Append a newly processed message ID to the persistent cache."""
+        try:
+            os.makedirs(os.path.dirname(self.seen_ids_file), exist_ok=True)
+            with open(self.seen_ids_file, "a") as f:
+                f.write(f"{message_id}\n")
+        except Exception as e:
+            print(f"⚠️ Failed to save seen_id {message_id}: {e}")
 
     def _load_cached_token(self):
         """Load the access token from a local cache file if valid."""
@@ -151,24 +172,22 @@ class ZohoMailService:
             msg_id = email.get("messageId")
             if msg_id and msg_id not in self.seen_message_ids:
                 self.seen_message_ids.add(msg_id)
+                self._save_seen_id(msg_id)  # Persist to disk
                 new_emails.append(email)
         
         return new_emails
 
     # ── Read Thread ────────────────────────────────────────
     
-    def get_email_content(self, message_id, folder_id=None):
-        """Get full content of a single email."""
-        if not folder_id:
-            folder_id = self.get_folder_id("Inbox")
-        # In Zoho, endpoints often require the folder ID context to prevent 404s
+    def get_email_content(self, message_id):
+        """Get full content of a single email using the most direct global endpoint."""
         try:
-            data = self._api_get(f"folders/{folder_id}/messages/{message_id}/details")
+            # Zoho API v1: GET /accounts/{accId}/messages/{msgId}/content
+            data = self._api_get(f"messages/{str(message_id).strip()}/content")
             return data.get("data", {}).get("content", "")
-        except Exception:
-            # Fallback to direct routing if the API version supports global querying
-            data = self._api_get(f"messages/{message_id}/content")
-            return data.get("data", {}).get("content", "")
+        except Exception as e:
+            print(f"⚠️ Failed to get email content for {message_id}: {e}")
+            return "[Content Unavailable]"
 
     def get_email_thread(self, message_id):
         """
@@ -180,14 +199,20 @@ class ZohoMailService:
         target_email = ""
         msg_info = {}
         
-        # First get the message to find the sender
+        # First get the message metadata using the global message endpoint
         try:
-            # Try with folder_id to avoid 404
-            msg_data = self._api_get(f"folders/{inbox_id}/messages/{message_id}")
+            msg_id_str = str(message_id).strip()
+            # Zoho API v1: GET /accounts/{accId}/messages/{msgId}
+            msg_data = self._api_get(f"messages/{msg_id_str}")
             msg_info = msg_data.get("data", {})
             target_email = msg_info.get("fromAddress", "")
-            if not target_email or target_email == self.from_email:
+            
+            # If the last sender was US, we need to find the person WE were talking to
+            if not target_email or target_email.lower() == self.from_email.lower():
                 target_email = msg_info.get("toAddress", "")
+            
+            if not target_email:
+                target_email = "Unknown"
                 
             inbox_id = self.get_folder_id("Inbox")
             sent_id = self.get_folder_id("Sent")
@@ -213,11 +238,16 @@ class ZohoMailService:
             
         except Exception as e:
             print(f"⚠️ Failed to build thread by email fallback: {e}")
-            messages = [msg_info] if 'msg_info' in locals() else []
+            # If direct API fails, we still have the basic info from the fetch call
+            messages = []
             
         if not messages:
-            content = self.get_email_content(message_id)
-            return f"From: {target_email}\nSubject: {msg_info.get('subject', '')}\n\n{content}"
+            # Absolute fallback: Get at least the current message content
+            try:
+                content = self.get_email_content(message_id)
+            except:
+                content = "[Content Unavailable]"
+            return f"From: {target_email}\nSubject: {msg_info.get('subject', 'No Subject')}\n\n{content}"
         
         # Build thread text (oldest first)
         thread_parts = []
@@ -263,9 +293,12 @@ class ZohoMailService:
             try:
                 # Global search across all folders (Inbox, Sent, etc)
                 # We search exclusively for messages sent to the external user with matching subjects
-                clean_subj = subject.replace("Re:", "").replace("Fwd:", "").strip()
-                global_search = self._api_get("messages/search", params={"searchKey": clean_subj})
-                search_msgs = global_search.get("data", [])
+                clean_subj = subject.replace("Re:", "").replace("Fwd:", "").replace("RE:", "").strip()
+                if clean_subj:  # SAFETY: Only search if we have a non-empty key
+                    global_search = self._api_get("messages/search", params={"searchKey": clean_subj})
+                    search_msgs = global_search.get("data", [])
+                else:
+                    search_msgs = []
                 
                 # Check if we have an outbound message globally newer than the inbound message
                 inbound_time = int(last_msg.get("receivedTime", "0"))
@@ -340,7 +373,7 @@ class ZohoMailService:
             # Zoho Mail Official API: PUT /updatemessage
             payload = {
                 "mode": "markAsRead",
-                "messageId": [int(message_id)]
+                "messageId": [str(message_id).strip()]
             }
             self._api_put("updatemessage", json_data=payload)
         except Exception as e:

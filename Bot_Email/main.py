@@ -206,7 +206,7 @@ async def main():
     await app.updater.start_polling(drop_pending_updates=True)
     
     logger.info("=" * 50)
-    logger.info("🚀 Email Bot is running!")
+    logger.info("🚀 Email Bot vSTABILIZED_73 is running!")
     logger.info("=" * 50)
     logger.info("1️⃣  Add the bot to a Telegram group")
     logger.info("2️⃣  Send /start in the group")
