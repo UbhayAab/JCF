@@ -1,0 +1,12 @@
+﻿
+PUT https://mail.zoho.in/api/accounts/5292649000000002002/folders/5292649000000002014/messages
+Status: 404 | {"data":{"errorCode":"INVALID_METHOD"},"status":{"code":404,"description":"Invalid Input"}}
+
+PUT https://mail.zoho.in/api/accounts/5292649000000002002/messages
+Status: 404 | {"data":{"errorCode":"INVALID_METHOD"},"status":{"code":404,"description":"Invalid Input"}}
+
+POST https://mail.zoho.in/api/accounts/5292649000000002002/messages/1774686521584110100
+Status: 404 | {"data":{"errorCode":"EXTRA_KEY_FOUND_IN_JSON"},"status":{"code":404,"description":"Invalid Input"}}
+
+POST https://mail.zoho.in/api/accounts/5292649000000002002/folders/5292649000000002014/messages/1774686521584110100
+Status: 404 | {"data":{"errorCode":"INVALID_METHOD"},"status":{"code":404,"description":"Invalid Input"}}

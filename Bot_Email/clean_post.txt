@@ -1,0 +1,21 @@
+﻿
+Payload: {'status': 'read'}
+Code: 404 | Text: {"data":{"errorCode":"EXTRA_KEY_FOUND_IN_JSON"},"status":{"code":404,"description":"Invalid Input"}}
+
+Payload: {'status': 'read', 'action': 'update'}
+Code: 400 | Text: {"data":{"errorCode":"PATTERN_NOT_MATCHED","moreInfo":"zoho\\x2Dinputstream\\x20Input\\x20does\\x20not\\x20match\\x20the\\x20given\\x20pattern"},"status":{"code":400,"description":"Invalid Input"}}
+
+Payload: {'action': 'read'}
+Code: 400 | Text: {"data":{"errorCode":"PATTERN_NOT_MATCHED","moreInfo":"zoho\\x2Dinputstream\\x20Input\\x20does\\x20not\\x20match\\x20the\\x20given\\x20pattern"},"status":{"code":400,"description":"Invalid Input"}}
+
+Payload: {'read': 'true'}
+Code: 404 | Text: {"data":{"errorCode":"EXTRA_KEY_FOUND_IN_JSON"},"status":{"code":404,"description":"Invalid Input"}}
+
+Payload: {'Read': 'true'}
+Code: 404 | Text: {"data":{"errorCode":"EXTRA_KEY_FOUND_IN_JSON"},"status":{"code":404,"description":"Invalid Input"}}
+
+Payload: {'is_read': 'true'}
+Code: 404 | Text: {"data":{"errorCode":"EXTRA_KEY_FOUND_IN_JSON"},"status":{"code":404,"description":"Invalid Input"}}
+
+Payload: {'state': 'read'}
+Code: 404 | Text: {"data":{"errorCode":"EXTRA_KEY_FOUND_IN_JSON"},"status":{"code":404,"description":"Invalid Input"}}

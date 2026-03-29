@@ -154,11 +154,19 @@ class ZohoMailService:
         return new_emails
 
     # ── Read Thread ────────────────────────────────────────
-
-    def get_email_content(self, message_id):
+    
+    def get_email_content(self, message_id, folder_id=None):
         """Get full content of a single email."""
-        data = self._api_get(f"messages/{message_id}/content")
-        return data.get("data", {}).get("content", "")
+        if not folder_id:
+            folder_id = self.get_folder_id("Inbox")
+        # In Zoho, endpoints often require the folder ID context to prevent 404s
+        try:
+            data = self._api_get(f"folders/{folder_id}/messages/{message_id}/details")
+            return data.get("data", {}).get("content", "")
+        except Exception:
+            # Fallback to direct routing if the API version supports global querying
+            data = self._api_get(f"messages/{message_id}/content")
+            return data.get("data", {}).get("content", "")
 
     def get_email_thread(self, message_id):
         """
@@ -166,9 +174,14 @@ class ZohoMailService:
         involving the sender of this message across Inbox and Sent folders.
         This bypasses Zoho's broken threadId groupings.
         """
+        inbox_id = self.get_folder_id("Inbox")
+        target_email = ""
+        msg_info = {}
+        
         # First get the message to find the sender
         try:
-            msg_data = self._api_get(f"messages/{message_id}")
+            # Try with folder_id to avoid 404
+            msg_data = self._api_get(f"folders/{inbox_id}/messages/{message_id}")
             msg_info = msg_data.get("data", {})
             target_email = msg_info.get("fromAddress", "")
             if not target_email or target_email == self.from_email:
@@ -254,6 +267,9 @@ class ZohoMailService:
                 
                 # Check if we have an outbound message globally newer than the inbound message
                 inbound_time = int(last_msg.get("receivedTime", "0"))
+                print(f"[DEBUG-SAFETY] Last Inbound Msg Time: {inbound_time}")
+                print(f"[DEBUG-SAFETY] Global Search returned {len(search_msgs)} messages for subject.")
+                
                 for s_msg in search_msgs:
                     s_sender_raw = html.unescape(s_msg.get("fromAddress", ""))
                     
@@ -262,11 +278,15 @@ class ZohoMailService:
                     else:
                         s_sender_clean = s_sender_raw
                         
-                    s_time = int(s_msg.get("receivedTime", "0"))
+                    # Zoho's API might use 'sentTime' for outbound messages instead of receivedTime
+                    s_time = int(s_msg.get("receivedTime") or s_msg.get("sentTime") or s_msg.get("createdTime") or "0")
+                    
+                    print(f"[DEBUG-SAFETY] Found msg -> From: {s_sender_clean} | Time: {s_time} | > Inbound? {s_time > inbound_time}")
                     
                     # If we find a message sent BY US, that is NEWER than the inbound message,
                     # we officially override the last_sender flag!
                     if s_sender_clean.lower() == self.from_email.lower() and s_time > inbound_time:
+                        print("[DEBUG-SAFETY] ✅ Outbound reply found! Overriding last_sender flag.")
                         last_sender = self.from_email.lower()
                         break
             except Exception as e:
@@ -312,10 +332,15 @@ class ZohoMailService:
         print(f"✅ Email sent to {to_email}")
         return result
 
-    def mark_as_read(self, message_id):
-        """Mark a message as read."""
+    def mark_as_read(self, message_id, folder_id=None):
+        """Mark a message as read to prevent reprocessing."""
         try:
-            self._api_put(f"messages/{message_id}", json_data={"isRead": "true"})
+            # Zoho Mail Official API: PUT /updatemessage
+            payload = {
+                "mode": "markAsRead",
+                "messageId": [int(message_id)]
+            }
+            self._api_put("updatemessage", json_data=payload)
         except Exception as e:
             print(f"⚠️ Could not mark message {message_id} as read: {e}")
 

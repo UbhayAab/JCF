@@ -1,0 +1,21 @@
+﻿Testing on msg_id: 1774686521584110100
+
+PUT https://mail.zoho.in/api/accounts/5292649000000002002/messages/1774686521584110100
+Payload: {'isRead': 'true'}
+Status: 404 | Response: {"data":{"errorCode":"INVALID_METHOD"},"status":{"code":404,"description":"Invalid Input"}}
+
+PUT https://mail.zoho.in/api/accounts/5292649000000002002/messages/1774686521584110100
+Payload: {'status': 'read'}
+Status: 404 | Response: {"data":{"errorCode":"INVALID_METHOD"},"status":{"code":404,"description":"Invalid Input"}}
+
+PUT https://mail.zoho.in/api/accounts/5292649000000002002/messages/1774686521584110100
+Payload: {'action': 'update', 'isRead': 'true'}
+Status: 404 | Response: {"data":{"errorCode":"INVALID_METHOD"},"status":{"code":404,"description":"Invalid Input"}}
+
+PUT https://mail.zoho.in/api/accounts/5292649000000002002/folders/5292649000000002014/messages/1774686521584110100
+Payload: {'isRead': 'true'}
+Status: 404 | Response: {"data":{"errorCode":"INVALID_METHOD"},"status":{"code":404,"description":"Invalid Input"}}
+
+PUT https://mail.zoho.in/api/accounts/5292649000000002002/messages/1774686521584110100/status
+Payload: {'isRead': 'true'}
+Status: 404 | Response: {"data":{"errorCode":"URL_RULE_NOT_CONFIGURED"},"status":{"code":404,"description":"Invalid Input"}}

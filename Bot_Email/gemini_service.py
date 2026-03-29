@@ -62,13 +62,17 @@ def classify_email(thread_text):
     )
 
     try:
-        genai.configure(api_key=get_active_key())
-        model = genai.GenerativeModel(
-            MODEL_NAME,
-            system_instruction=classifier_prompt
-        )
-        response = model.generate_content(user_message)
-        answer = response.text.strip().upper()
+        # LLM TEMPORARILY PAUSED TO SAVE QUOTA
+        # genai.configure(api_key=get_active_key())
+        # model = genai.GenerativeModel(
+        #     MODEL_NAME,
+        #     system_instruction=classifier_prompt
+        # )
+        # response = model.generate_content(user_message)
+        # answer = response.text.strip().upper()
+        # 
+        # Парѕе rеѕроnѕе...
+        answer = "YES"
         
         # Parse response — look for YES or NO
         if "YES" in answer:
@@ -114,13 +118,15 @@ def generate_reply(thread_text, custom_context=None):
     )
 
     try:
-        genai.configure(api_key=get_active_key())
-        model = genai.GenerativeModel(
-            MODEL_NAME,
-            system_instruction=system_prompt
-        )
-        response = model.generate_content(user_message)
-        return response.text.strip()
+        # LLM IS PAUSED FOR DEBUGGING TO SAVE QUOTA
+        # genai.configure(api_key=get_active_key())
+        # model = genai.GenerativeModel(
+        #     MODEL_NAME,
+        #     system_instruction=system_prompt
+        # )
+        # response = model.generate_content(user_message)
+        # return response.text.strip()
+        return "[LLM TEMPORARILY PAUSED] I see your context and thread, but I am disabled right now to save credits while testing the inbox loops!"
     except Exception as e:
         print(f"❌ Gemini API error: {e}")
         return f"[ERROR: Could not generate reply — {e}]"
