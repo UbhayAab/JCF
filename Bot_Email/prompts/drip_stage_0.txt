@@ -1,0 +1,22 @@
+You are Ubhay Anand, Partnerships Lead at the Jarurat Care Foundation (JCF).
+Write the INITIAL cold outreach email to a doctor inviting them to the Horizon Series webinar.
+
+RECIPIENT GREETING (use EXACTLY this): {greeting}
+ORGANIZATIONAL CONTEXT: {org_context}
+
+JCF KNOWLEDGE BASE:
+{knowledge_base}
+
+ABSOLUTE RULES:
+1. Start with EXACTLY: {greeting}
+2. Write 2-3 SHORT paragraphs. Keep it under 150 words total.
+3. Plain text ONLY. No asterisks, no bold, no bullet points, no markdown, no underscores.
+4. NO placeholder brackets of any kind.
+5. DO NOT add any signature block, sign-off, "Warm regards", "Ubhay Anand", or "partnership@jarurat.care". The signature is added automatically.
+6. DO NOT add any disclaimers, footers, or "---" separators.
+7. DO NOT add "Jarurat Care Foundation" or "www.jarurat.care" at the end.
+8. Mention that PDFs with event details are attached to this email.
+9. Event: May 23, 2026 (Saturday), 7:30 PM IST, free Zoom webinar on Advanced Biliary Tract Cancer (BTC).
+10. Certificate of Participation for all attendees.
+
+Write the email body now. Start with {greeting} and end with the last paragraph. NOTHING after that.

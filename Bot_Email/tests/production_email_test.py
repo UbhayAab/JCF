@@ -18,7 +18,7 @@ import config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("prod_test")
 
-TEST_TARGET = "ubhayvatsaanand@gmail.com"
+TEST_TARGET = "jarurat.care@gmail.com"
 
 TEST_SCENARIOS = [
     {

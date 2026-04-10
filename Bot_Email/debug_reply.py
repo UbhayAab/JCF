@@ -8,7 +8,7 @@ def test_send():
     print("\nAttempting to send a test email...")
     try:
         data = zoho.send_new_email(
-            "ubhayvatsaanand@gmail.com",
+            "jarurat.care@gmail.com",
             "Test from Bot",
             "This is a test message to verify sending permissions."
         )

@@ -1,197 +1,357 @@
 """
-Main entry point for the Carcinome Outreach Bot.
-Coordinates Zoho fetching, Gemini classification, and Telegram human-in-the-loop.
+JCF Outreach Bot — Main Entry Point (v5.0)
+
+Architecture:
+- boot_thread_audit: on startup, checks all active threads for self-reply prevention
+- poll_inbox: every 2 min, spawns asyncio.create_task per email (non-blocking)
+- process_email: 5-stage AI pipeline with Telegram progress + human approval
+- Meeting requests: posted to Telegram, NEVER block the poll loop
+- drip_scheduler: runs every 4 hours
+- All config via state.json (go_live, pause_drip)
 """
 
 import asyncio
 import logging
 import config
+import state
 import zoho_logic
 import database
 import telegram_bot
 import ai_orchestrator
+import local_ai
 from drip_campaign import run_drip_campaign
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    datefmt='%H:%M:%S'
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S"
 )
 logger = logging.getLogger("main")
 
-# Cache to prevent spamming the log with the same errors repeatedly
-_sent_error_summaries = set()
+_email_locks: dict = {}
+_reported_errors: set = set()
 
-async def poll_inbox(app, zoho):
-    """Main loop to check Zoho for new unread emails."""
-    logger.info("🚀 Monitoring inbox for new inquiries...")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BOOT-TIME THREAD AUDIT
+# Runs once on startup. Checks sent folder for any threads where our reply
+# is the latest — marks those as "Replied" so we don't double-send.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def boot_thread_audit(zoho: zoho_logic.ZohoMailService):
+    """
+    On every restart, scan recent inbox for threads we already replied to.
+    If our email is the last message in a thread, mark it as Replied.
+    """
+    logger.info("🔍 Boot thread audit: checking for self-replied threads...")
     
+    try:
+        fid = zoho._folder_id("Inbox")
+        if not fid:
+            logger.warning("Could not find Inbox for thread audit")
+            return
+
+        # Get recent messages (not just unread — all recent ones)
+        data = zoho._get("messages/view", params={"folderId": fid, "limit": 50})
+        messages = data.get("data", [])
+        
+        checked = 0
+        marked_replied = 0
+        
+        for msg in messages:
+            msg_id = str(msg.get("messageId", "")).strip()
+            from_addr = msg.get("fromAddress", "").lower()
+            
+            # Skip system emails
+            if any(skip in from_addr for skip in ("noreply", "no-reply", "zohocalendar", "mailer-daemon")):
+                continue
+            
+            # Skip our own sent emails
+            if zoho.from_email in from_addr:
+                continue
+            
+            try:
+                _, last_sender, from_us = zoho.get_email_thread(msg_id)
+                checked += 1
+                
+                if from_us:
+                    # Our reply is the latest — mark as Replied in DB
+                    if "<" in from_addr:
+                        clean_email = from_addr.split("<")[1].split(">")[0].strip()
+                    else:
+                        clean_email = from_addr.strip()
+                    
+                    existing = database.get_target(clean_email)
+                    if existing and existing.get("Status", "").startswith("Sent_"):
+                        database.update_status(clean_email, "Replied")
+                        marked_replied += 1
+                        logger.info(f"  ✅ Marked {clean_email} as Replied (our reply was latest)")
+                    
+                    zoho.mark_as_read(msg_id)
+            except Exception:
+                pass
+        
+        logger.info(f"🔍 Thread audit done: checked {checked} threads, marked {marked_replied} as Replied")
+    
+    except Exception as e:
+        logger.error(f"Thread audit failed: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CORE EMAIL PROCESSOR
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def process_email(app, zoho: zoho_logic.ZohoMailService, msg: dict):
+    """Process a single inbound email. Non-blocking (runs as asyncio task)."""
+    msg_id     = str(msg.get("messageId", "")).strip()
+    from_email = msg.get("fromAddress", "Unknown").lower().strip()
+    subject    = msg.get("subject", "No Subject")
+
+    if "<" in from_email:
+        from_email = from_email.split("<")[1].split(">")[0].strip()
+
+    if from_email in _email_locks:
+        return
+    _email_locks[from_email] = True
+    telegram_bot.register_active_processing()
+
+    try:
+        logger.info(f"📧 Processing: '{subject}' from {from_email}")
+
+        # ─── Build thread ────────────────────────────────────────────────────
+        try:
+            thread_text, last_sender, last_was_us = zoho.get_email_thread(msg_id)
+        except Exception as e:
+            logger.error(f"Thread build failed for {msg_id}: {e}")
+            thread_text = f"From: {from_email}\nSubject: {subject}\n\n[Thread unavailable]"
+            last_sender = from_email
+            last_was_us = False
+
+        # ─── Self-reply check ────────────────────────────────────────────────
+        if last_was_us:
+            logger.info(f"🛑 Last message from US — skipping {from_email}")
+            zoho.mark_as_read(msg_id)
+            database.update_status(from_email, "Replied")
+            return
+
+        if zoho.from_email in from_email:
+            zoho.mark_as_read(msg_id)
+            return
+
+        # ─── Pipeline progress card ──────────────────────────────────────────
+        await telegram_bot.notify_pipeline_start(app, from_email, subject)
+
+        # ─── Deterministic unsubscribe ────────────────────────────────────────
+        unsub_keywords = ["unsubscribe", "stop emailing", "remove me", "not interested", "opt out", "please stop", "do not contact"]
+        if any(kw in thread_text.lower() for kw in unsub_keywords):
+            database.update_status(from_email, "Unsubscribed")
+            await telegram_bot.send_notification(app, f"🛑 <b>UNSUBSCRIBE:</b> <code>{from_email}</code>")
+            zoho.mark_as_read(msg_id)
+            return
+
+        # ─── 5-stage AI pipeline ─────────────────────────────────────────────
+        async def progress_cb(stage: int, name: str, summary: str):
+            await telegram_bot.notify_pipeline_stage(app, from_email, stage, name, summary)
+
+        max_retries = 2
+        custom_context = None
+
+        for attempt in range(max_retries):
+            thread_with_ctx = thread_text
+            if custom_context:
+                thread_with_ctx = f"[HUMAN FEEDBACK]: {custom_context}\n\n{thread_text}"
+
+            result = await ai_orchestrator.run_full_pipeline(thread_with_ctx, from_email, progress_cb)
+
+            intent   = result.get("intent", "OTHER")
+            name     = result.get("name", "")
+            draft    = result.get("draft", "")
+            greeting = local_ai.build_greeting(name)
+
+            # ── SPAM ──────────────────────────────────────────────────────────
+            if not result.get("is_relevant"):
+                zoho.mark_as_read(msg_id)
+                database.update_status(from_email, "Spam")
+                await telegram_bot.send_notification(
+                    app, f"🚫 <b>Skipped (irrelevant)</b>\n<code>{from_email}</code>\n{subject}"
+                )
+                return
+
+            # ── UNSUBSCRIBE ───────────────────────────────────────────────────
+            if intent == "UNSUBSCRIBE" or "[UNSUBSCRIBE]" in draft:
+                database.update_status(from_email, "Unsubscribed")
+                await telegram_bot.send_notification(app, f"🛑 <b>UNSUBSCRIBE:</b> <code>{from_email}</code>")
+                zoho.mark_as_read(msg_id)
+                return
+
+            # ── MEETING REQUEST (non-blocking) ────────────────────────────────
+            if intent == "MEETING_REQUEST" or (result.get("escalate_to_human") and "meeting" in result.get("human_escalation_reason", "").lower()):
+                asyncio.create_task(
+                    telegram_bot.handle_meeting_request(app, from_email, name, thread_text, msg_id, subject)
+                )
+                database.update_status(from_email, "Meeting_Pending")
+                zoho.mark_as_read(msg_id)
+                return
+
+            # ── HUMAN ESCALATION ──────────────────────────────────────────────
+            if result.get("escalate_to_human"):
+                await telegram_bot.send_notification(
+                    app,
+                    f"🚨 <b>HUMAN ASSIST</b>\n{greeting} (<code>{from_email}</code>)\n"
+                    f"Reason: {result.get('human_escalation_reason', 'Complex inquiry')}"
+                )
+                zoho.mark_as_read(msg_id)
+                return
+
+            # ── NORMAL: Human approval via Telegram ───────────────────────────
+            if not draft:
+                if attempt < max_retries - 1:
+                    custom_context = "Draft was empty. Try again."
+                    continue
+                await telegram_bot.send_notification(app, f"❌ Draft failed for <code>{from_email}</code>. Reply manually.")
+                return
+
+            pipeline_summary = f"[Classify ✅] [Triage: {intent} ✅] [Strategy ✅] [Draft ✅] [Review ✅]"
+
+            decision, context_text = await telegram_bot.send_draft_for_review(
+                app, from_email, f"Re: {subject}", draft, msg_id, pipeline_summary
+            )
+
+            if decision == "SEND":
+                zoho.send_reply(msg_id, draft, attach=True)
+                zoho.mark_as_read(msg_id)
+                database.update_status(from_email, "Replied")
+                await telegram_bot.notify_send_confirmation(app, from_email, f"Re: {subject}", draft)
+                logger.info(f"✅ Reply sent to {from_email}")
+                return
+
+            elif decision == "REGENERATE":
+                custom_context = context_text
+                continue
+
+            elif decision == "SPAM":
+                zoho.mark_as_read(msg_id)
+                database.update_status(from_email, "Spam")
+                return
+
+            else:  # SKIP or timeout
+                return
+
+    except Exception as e:
+        err_key = f"{from_email}:{type(e).__name__}"
+        if err_key not in _reported_errors:
+            logger.error(f"process_email error [{from_email}]: {e}")
+            _reported_errors.add(err_key)
+    finally:
+        _email_locks.pop(from_email, None)
+        telegram_bot.unregister_active_processing(from_email)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# POLL LOOP + SCHEDULER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def poll_inbox(app, zoho: zoho_logic.ZohoMailService):
+    logger.info("📡 Inbox polling started")
     while True:
         try:
             unread = zoho.fetch_unread_emails()
-            
             if unread:
-                logger.info(f"📬 Found {len(unread)} new unread email(s)")
+                logger.info(f"📬 {len(unread)} new email(s)")
                 for msg in unread:
-                    try:
-                        await process_email(app, zoho, msg)
-                    except Exception as e:
-                        logger.error(f"Error processing email {msg.get('messageId')}: {e}")
-            
-            # Poll every 2 minutes for new emails
-            await asyncio.sleep(120)
-            
+                    asyncio.create_task(process_email(app, zoho, msg))
         except Exception as e:
-            err_msg = str(e)
-            if err_msg not in _sent_error_summaries:
-                logger.error(f"Polling Loop Error: {e}")
-                _sent_error_summaries.add(err_msg)
-            await asyncio.sleep(60)
+            err = str(e)
+            if err not in _reported_errors:
+                logger.error(f"poll_inbox error: {e}")
+                _reported_errors.add(err)
+        await asyncio.sleep(config.POLL_INTERVAL_SECONDS)
 
-async def process_email(app, zoho, msg):
-    """Handles an individual email's lifecycle: Thread -> Classify -> Reply -> Telegram."""
-    msg_id = msg.get("messageId")
-    from_email = msg.get("fromAddress", "Unknown")
-    subject = msg.get("subject", "No Subject")
-    
-    logger.info(f"📧 New email: {subject} (from {from_email})")
-    
-    # Step 1: Use the new logic layer to get full thread context
+
+async def drip_scheduler(app, zoho: zoho_logic.ZohoMailService):
+    logger.info("💧 Drip scheduler started (4h interval)")
+    # Run first sweep immediately on boot
     try:
-        thread_text, last_sender = zoho.get_email_thread(msg_id)
-        logger.info(f"📜 Thread fetched. Last Sender: {last_sender}")
+        await run_drip_campaign(app, zoho, limit=25)
     except Exception as e:
-        logger.error(f"Could not fetch thread for {msg_id}: {e}")
-        # Fallback to minimal context if thread fails
-        thread_text = f"From: {from_email}\nSubject: {subject}\n\n[Could not fetch full thread]"
-        last_sender = from_email
-        
-    # Safety Check: If the absolutely most recent email in the thread is from US, do not reply.
-    if last_sender.lower() == zoho.from_email.lower():
-        logger.info(f"🛑 Skipping {from_email}: The last email in this thread was sent by us.")
-        zoho.mark_as_read(msg_id)
-        database.update_status(from_email, "Replied")
-        return
+        logger.error(f"Initial drip sweep error: {e}")
     
-    # Step 1: Detect Unsubscribe (Deterministic Flow)
-    unsub_keywords = ["unsubscribe", "stop emailing", "remove me", "not interested", "opt out"]
-    if any(kw in thread_text.lower() for kw in unsub_keywords):
-        logger.info(f"🛑 Unsubscribe detected from {from_email}. Updating status.")
-        database.update_status(from_email, "Unsubscribed")
-        await telegram_bot.send_notification(app, f"🛑 <b>UNSUBSCRIBE:</b> {from_email} has been removed from all outreach.")
-        zoho.mark_as_read(msg_id)
-        return
-
-    # Step 2: Classify Relevance
-    logger.info(f"🔍 Classifying email (Local-First AI)...")
-    is_relevant = ai_orchestrator.smart_classify(thread_text)
-    
-    if not is_relevant:
-        logger.info(f"🚫 SPAM/IRRELEVANT — skipping: {subject}")
-        zoho.mark_as_read(msg_id)
-        database.update_status(from_email, "Spam")
-        await telegram_bot.send_notification(
-            app,
-            f"🚫 <b>Skipped (not event-related)</b>\n"
-            f"From: {from_email}\n"
-            f"Subject: {subject}\n"
-            f"<i>Classified as spam/irrelevant by AI</i>"
-        )
-        return
-    
-    logger.info(f"✅ Email classified as RELEVANT — generating reply...")
-    
-    # Step 3: Reply Loop (Human-in-the-loop)
     while True:
-        # 2. Generate Reply (Scaffolded Logic)
-        logger.info("🤖 Routing inquiry through AI Orchestrator...")
-        reply_body, attachments = ai_orchestrator.smart_reply(thread_text)
-        
-        # 3. Handle Deterministic Actions (Unsubscribe/Stop)
-        if "[DETERMINISTIC_ACTION]" in reply_body:
-            logger.info(f"🛑 Deterministic action triggered: {reply_body}")
-            if "UNSUBSCRIBE" in reply_body:
-                database.update_status(from_email, "Unsubscribed")
-                await telegram_bot.send_notification(app, f"🛑 <b>AUTO-UNSUBSCRIBE:</b> {from_email} removed.")
-                zoho.mark_as_read(msg_id)
-                return
-        
-        # 4. Handle Edge Cases / Human Assist
-        if "[HUMAN_ASSIST_REQUIRED]" in reply_body:
-            logger.info("🚨 Complexity detected — triggering HUMAN ASSIST alert.")
-            await telegram_bot.send_admin_alert(
-                app,
-                f"🚨 <b>HUMAN ASSIST NEEDED</b>\n\n"
-                f"<b>From:</b> {telegram_bot._escape_html(from_email)}\n"
-                f"<b>Reason:</b> Complex/Asset Inquiry\n\n"
-                f"<b>AI Nudge:</b>\n<i>{reply_body.replace('[HUMAN_ASSIST_REQUIRED]', '').strip()[:500]}...</i>\n\n"
-                f"<b>Auto-Attachments:</b> {len(attachments)} files identified.",
-                msg_id
-            )
-            continue
+        await asyncio.sleep(4 * 3600)
+        try:
+            await run_drip_campaign(app, zoho, limit=50)
+        except Exception as e:
+            logger.error(f"Drip scheduler error: {e}")
 
-        # 5. Send Draft for Review (Normal Flow)
-        logger.info(f"📱 Sending draft (with {len(attachments)} attachments) for user review...")
-        decision, context_text = await telegram_bot.send_draft_for_review(
-            app, from_email, subject, reply_body, msg_id
-        )
-        
-        if decision == "SEND":
-            logger.info(f"📨 Telegram approved: Sending reply...")
-            zoho.send_reply(msg_id, reply_body)
-            zoho.mark_as_read(msg_id)
-            database.update_status(from_email, "Replied")
-            await telegram_bot.send_notification(app, f"✅ Email sent to {from_email}")
-            break
-        elif decision == "REGENERATE":
-            logger.info("🔄 Telegram requested regeneration with context.")
-            custom_context = context_text
-        elif decision == "SPAM":
-            logger.info("🚫 Telegram rejected: Marking as Spam.")
-            zoho.mark_as_read(msg_id)
-            database.update_status(from_email, "Spam")
-            break
-        elif decision == "SKIP":
-            logger.info("⏳ Telegram requested SKIP.")
-            break
 
-async def _bulk_send_sync(app, zoho):
-    """Triggered by /bulk_send command in Telegram."""
+async def _bulk_send_trigger(app, _zoho):
+    zoho = zoho_logic.ZohoMailService()
     await run_drip_campaign(app, zoho)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BOOT
+# ═══════════════════════════════════════════════════════════════════════════════
 
 async def main():
     config.validate()
+    database.ensure_db()
+
     zoho = zoho_logic.ZohoMailService()
-    app = telegram_bot.build_telegram_app()
-    telegram_bot.set_bulk_send_callback(_bulk_send_sync)
-    
+    app  = telegram_bot.build_telegram_app()
+
+    telegram_bot.set_bulk_send_callback(_bulk_send_trigger)
+    telegram_bot.set_zoho_ref(zoho)
+
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
-    
-    logger.info("=" * 50)
-    logger.info("🚀 Email Bot vSTABILIZED_80 is running!")
-    logger.info("📡 DeepSeek-API & Eternal Follow-ups: ACTIVE")
-    logger.info("=" * 50)
-    
-    try:
-        chat_id = config.TELEGRAM_GROUP_CHAT_ID
-        if chat_id and chat_id != "WILL_AUTO_DETECT":
-            logger.info("📬 Group detected — Starting Inbox Polling (Drip Disabled)...")
-            # Drip is only manual now to protect costs and ensure name sanitization review
-            await poll_inbox(app, zoho)
-        else:
-            logger.info("⏳ Waiting for /start command...")
-            while True:
-                gid = telegram_bot.get_group_chat_id()
-                if gid:
-                    logger.info("📬 Starting inbox polling...")
-                    await poll_inbox(app, zoho)
-                await asyncio.sleep(10)
-    except KeyboardInterrupt:
-        await app.stop()
-        await app.shutdown()
+
+    # ── Register Telegram command menu ────────────────────────────────────────
+    await telegram_bot.register_commands(app)
+
+    # ── Boot-time thread audit ────────────────────────────────────────────────
+    await boot_thread_audit(zoho)
+
+    # ── Pre-upload PDFs (caches for 1 hour) ───────────────────────────────────
+    zoho.upload_attachments()
+
+    # ── Boot notification ─────────────────────────────────────────────────────
+    mode  = "🟡 SAFE-TEST" if state.is_safe_test_mode() else "🔴 LIVE"
+    drip  = "⏸️ PAUSED" if state.is_drip_paused() else "✅ ACTIVE"
+    stats = database.get_stats()
+    pending = stats.get("Pending", 0)
+    total   = sum(stats.values())
+
+    await telegram_bot.send_notification(
+        app,
+        f"🚀 <b>JCF Outreach Bot v5.0 Online</b>\n\n"
+        f"📡 <b>Mode:</b> {mode}\n"
+        f"💧 <b>Drip:</b> {drip}\n"
+        f"🧠 <b>AI:</b> {config.OLLAMA_TRIAGE_MODEL} + {config.OLLAMA_DRAFT_MODEL}\n"
+        f"📎 <b>PDFs:</b> {len(zoho._attachment_cache or [])} attached\n"
+        f"📧 <b>CC:</b> {config.CC_EMAILS}\n"
+        f"📋 <b>DB:</b> {pending} pending / {total} total\n\n"
+        f"Type /status for full health check."
+    )
+
+    logger.info("=" * 55)
+    logger.info("🚀 JCF Outreach Bot v5.0")
+    logger.info(f"   Mode  : {mode}")
+    logger.info(f"   Drip  : {drip}")
+    logger.info(f"   CC    : {config.CC_EMAILS}")
+    logger.info(f"   DB    : {pending} pending / {total} total")
+    logger.info(f"   PDFs  : {len(zoho._attachment_cache or [])} ready")
+    logger.info("=" * 55)
+
+    await asyncio.gather(
+        poll_inbox(app, zoho),
+        drip_scheduler(app, zoho),
+    )
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("🛑 Shutting down")
