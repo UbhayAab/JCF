@@ -1,0 +1,21 @@
+# Large binaries handled by LFS
+*.dll
+*.exe
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Misc
+*.log
+zoho_token.json
+telegram_token.txt
