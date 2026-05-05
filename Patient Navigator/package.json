@@ -1,0 +1,16 @@
+{
+  "name": "patient-navigator",
+  "version": "1.0.0",
+  "description": "A DPDPA-compliant patient data management system for cancer care navigation.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "pg": "^8.20.0"
+  }
+}
