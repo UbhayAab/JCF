@@ -11,6 +11,8 @@ import { renderPatients } from './pages/patients.js';
 import { renderCalls } from './pages/calls.js';
 import { renderAdmin } from './pages/admin.js';
 import { renderAnalytics } from './pages/analytics.js';
+import { renderCalling } from './pages/calling.js';
+import { renderTeam } from './pages/team.js';
 import { renderProfile } from './pages/profile.js';
 import { validateEmail, validatePassword } from './utils/validators.js';
 import { CONFIG } from './config.js';
@@ -194,6 +196,8 @@ async function init() {
   registerRoute('calls', (c) => renderCalls(c), { requiresAuth: true });
   registerRoute('admin', (c, p) => renderAdmin(c, p), { requiresAuth: true, roles: ['admin'] });
   registerRoute('analytics', (c) => renderAnalytics(c), { requiresAuth: true, roles: ['admin', 'manager', 'content'] });
+  registerRoute('calling', (c) => renderCalling(c), { requiresAuth: true });
+  registerRoute('team', (c) => renderTeam(c), { requiresAuth: true, roles: ['admin', 'manager'] });
   registerRoute('profile', (c) => renderProfile(c), { requiresAuth: true });
 
   // Set guards

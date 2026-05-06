@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.Carcinome" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#06b6d4</item>
+        <item name="colorPrimaryVariant">#0891b2</item>
+        <item name="colorOnPrimary">#ffffff</item>
+        <item name="android:statusBarColor">#0a0f1a</item>
+        <item name="android:navigationBarColor">#0a0f1a</item>
+        <item name="android:windowBackground">#0a0f1a</item>
+    </style>
+</resources>

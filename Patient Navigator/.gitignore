@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Android build artifacts
+android/app/build/
+android/.gradle/
+android/build/
+android/local.properties
+
+# Scripts (contains DB credentials)
+scripts/
+
+# OS files
+.DS_Store
+Thumbs.db
+*.log

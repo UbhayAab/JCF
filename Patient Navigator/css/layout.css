@@ -454,3 +454,161 @@
   opacity: 1;
   pointer-events: auto;
 }
+
+/* ---- CALLING PORTAL ---- */
+.calling-portal {
+  display: flex;
+  gap: var(--space-6);
+  min-height: calc(100vh - 120px);
+}
+.calling-main {
+  flex: 1;
+  min-width: 0;
+}
+.calling-form-panel {
+  width: 380px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+.calling-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  text-align: center;
+  gap: var(--space-4);
+}
+.calling-empty-icon {
+  width: 96px; height: 96px;
+  border-radius: var(--radius-full);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  display: flex; align-items: center; justify-content: center;
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 20px rgba(6,182,212,0.1); }
+  50% { box-shadow: 0 0 40px rgba(6,182,212,0.25); }
+}
+.calling-selector {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+.calling-patient-card {
+  padding: var(--space-5) !important;
+}
+.calling-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--glass-border);
+}
+.calling-patient-name {
+  font-size: var(--font-2xl);
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+.calling-info-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3);
+}
+.calling-info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.calling-info-label {
+  font-size: var(--font-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.calling-phone-link {
+  font-size: var(--font-lg);
+  font-weight: 700;
+  color: var(--color-primary-400);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.calling-phone-link:hover {
+  color: var(--color-primary-300);
+  text-decoration: underline;
+}
+.calling-caregiver-phone {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--glass-border);
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.calling-timer-section {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.calling-timer {
+  font-size: var(--font-3xl);
+  font-weight: 700;
+  font-family: 'Courier New', monospace;
+  color: var(--color-text-muted);
+  letter-spacing: 0.1em;
+}
+.calling-timer.timer-active {
+  color: var(--color-success);
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+.calling-timer-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+.calling-history {
+  margin-top: var(--space-4);
+}
+.calling-history-item {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--glass-border);
+}
+.calling-queue-stats {
+  margin-top: var(--space-4);
+}
+
+/* ---- TEAM GRID ---- */
+.team-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+.team-card {
+  padding: var(--space-4) !important;
+}
+.team-stats {
+  display: flex;
+  gap: var(--space-6);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--glass-border);
+}
+
+/* ---- CALLING RESPONSIVE ---- */
+@media (max-width: 1024px) {
+  .calling-portal { flex-direction: column; }
+  .calling-form-panel { width: 100%; max-height: none; }
+  .calling-info-grid { grid-template-columns: repeat(2, 1fr); }
+}

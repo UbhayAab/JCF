@@ -1,0 +1,2 @@
+rootProject.name = 'CarcinomeNavigator'
+include ':app'
