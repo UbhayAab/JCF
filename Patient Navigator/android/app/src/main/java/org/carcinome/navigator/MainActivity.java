@@ -34,7 +34,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int PERMISSION_REQUEST_CODE = 100;
     private static final int FILE_CHOOSER_REQUEST_CODE = 200;
 
-    private static final String PORTAL_URL = "https://ubhayaab.github.io/Patient-Navigator/";
+    private static final String PORTAL_URL = "https://ubhayaab.github.io/JCF/Patient%20Navigator/index.html";
 
     private WebView webView;
     private ValueCallback<Uri[]> fileUploadCallback;
