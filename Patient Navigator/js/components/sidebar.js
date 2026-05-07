@@ -127,4 +127,39 @@ export function renderSidebar() {
       showToast(err.message, 'error');
     }
   });
+
+  renderBottomNav(role, currentRouteId);
+}
+
+// Mobile bottom-nav: 5 priority destinations. Admin/manager get "Team" in
+// place of "Profile" since profile is reachable from the header avatar.
+function renderBottomNav(role, currentRouteId) {
+  const el = document.getElementById('bottom-nav');
+  if (!el) return;
+
+  const isManagerOrAdminRole = ['admin', 'manager'].includes(role);
+  const items = [
+    { id: 'dashboard', label: 'Home',    route: 'dashboard', icon: 'layout-dashboard' },
+    { id: 'calling',   label: 'Call',    route: 'calling',   icon: 'phone-outgoing' },
+    { id: 'patients',  label: 'Patients',route: 'patients',  icon: 'users' },
+    { id: 'calls',     label: 'Logs',    route: 'calls',     icon: 'phone' },
+    isManagerOrAdminRole
+      ? { id: 'team',    label: 'Team',    route: 'team',    icon: 'users-group' }
+      : { id: 'profile', label: 'Profile', route: 'profile', icon: 'user' },
+  ];
+
+  el.innerHTML = `
+    <div class="bottom-nav-list">
+      ${items.map(it => `
+        <button class="bottom-nav-item ${currentRouteId === it.route ? 'active' : ''}" data-route="${it.route}" aria-label="${it.label}">
+          ${ICONS[it.icon] || ''}
+          <span>${it.label}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+
+  el.querySelectorAll('.bottom-nav-item').forEach(btn => {
+    btn.addEventListener('click', () => navigate(btn.dataset.route));
+  });
 }

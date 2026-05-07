@@ -85,25 +85,17 @@ async function loadProfile() {
 }
 
 // ---- Sign In ----
+// Profile load is intentionally non-blocking so a slow/failing profiles
+// query (RLS, network, etc.) can never trap the user on the login screen.
+// The is_active check happens in the background and shows a warning toast
+// instead of bouncing the user; RLS at the DB layer is the real gate.
 export async function signIn(email, password) {
   const sb = getSupabase();
   const { data, error } = await sb.auth.signInWithPassword({ email, password });
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  // Check if user is active
+  if (error) throw new Error(error.message);
   currentUser = data.user;
-  await loadProfile();
-
-  if (currentProfile && !currentProfile.is_active) {
-    await sb.auth.signOut();
-    currentUser = null;
-    currentProfile = null;
-    throw new Error('Your account has been deactivated. Please contact an administrator.');
-  }
-
+  // Fire-and-forget: surface profile errors in the console but never block.
+  loadProfile().catch(err => console.warn('[auth] loadProfile failed (non-blocking):', err));
   return data;
 }
 

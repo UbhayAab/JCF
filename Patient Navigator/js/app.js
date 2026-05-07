@@ -204,7 +204,7 @@ function renderAppShell() {
       <main class="main-content">
         <header class="header">
           <div class="header-left">
-            <button class="mobile-menu-btn" id="mobile-menu-btn">
+            <button class="mobile-menu-btn" id="mobile-menu-btn" aria-label="Open menu">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
             </button>
           </div>
@@ -217,6 +217,7 @@ function renderAppShell() {
         </header>
         <div class="page-content" id="page-content"></div>
       </main>
+      <nav class="bottom-nav" id="bottom-nav" aria-label="Primary"></nav>
     </div>
   `;
 
@@ -234,10 +235,13 @@ function renderAppShell() {
 
   // Profile button
   document.getElementById('header-profile-btn')?.addEventListener('click', () => navigate('profile'));
+
+  // Keep the sidebar + bottom-nav active state in sync with the current route.
+  window.addEventListener('hashchange', () => renderSidebar());
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20260507c';  // bumped on every breaking deploy
+const APP_BUILD = '20260507d';  // bumped on every breaking deploy
 let appBooted = false;
 function bootApp() {
   console.log('[boot] bootApp called, appBooted=' + appBooted + ', hash=' + window.location.hash);

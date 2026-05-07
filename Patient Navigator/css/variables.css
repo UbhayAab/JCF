@@ -1,76 +1,75 @@
 /* ============================================================
-   Patient Navigator — Design Tokens v2
-   Carcinome NGO | Premium Dark + Glassmorphism
+   Patient Navigator — Design Tokens v3
+   Carcinome NGO | Clean light healthcare UI (Tata 1mg-inspired)
    ============================================================ */
 
 :root {
-  /* ---- Color Palette ---- */
-  --color-bg-primary:     #06090f;
-  --color-bg-secondary:   #0c1220;
-  --color-bg-tertiary:    #131c2e;
-  --color-bg-elevated:    #182338;
-  --color-bg-hover:       #1e2d48;
-  --color-bg-active:      #253752;
+  /* ---- Surfaces ---- */
+  --color-bg-primary:     #f8fafc;   /* page background */
+  --color-bg-secondary:   #f1f5f9;
+  --color-bg-tertiary:    #e2e8f0;
+  --color-bg-elevated:    #ffffff;   /* cards, modals */
+  --color-bg-hover:       #f1f5f9;
+  --color-bg-active:      #e2e8f0;
 
-  /* Glassmorphism */
-  --glass-bg:             rgba(14, 21, 38, 0.65);
-  --glass-bg-strong:      rgba(14, 21, 38, 0.85);
-  --glass-border:         rgba(148, 163, 184, 0.08);
-  --glass-border-light:   rgba(148, 163, 184, 0.15);
-  --glass-blur:           16px;
-  --glass-blur-strong:    24px;
+  /* Cards */
+  --color-surface:        #ffffff;
+  --color-surface-hover:  #f8fafc;
+  --color-surface-border: #e2e8f0;
 
-  /* Surface / Card */
-  --color-surface:        rgba(18, 28, 48, 0.6);
-  --color-surface-hover:  rgba(24, 35, 56, 0.8);
-  --color-surface-border: rgba(148, 163, 184, 0.08);
+  /* Glass tokens kept as no-ops so legacy classes don't break the layout */
+  --glass-bg:             #ffffff;
+  --glass-bg-strong:      #ffffff;
+  --glass-border:         #e2e8f0;
+  --glass-border-light:   #cbd5e1;
+  --glass-blur:           0px;
+  --glass-blur-strong:    0px;
 
-  /* Primary — Teal (healthcare) */
-  --color-primary-50:     #ecfeff;
-  --color-primary-100:    #cffafe;
-  --color-primary-200:    #a5f3fc;
-  --color-primary-300:    #67e8f9;
-  --color-primary-400:    #22d3ee;
-  --color-primary-500:    #06b6d4;
-  --color-primary-600:    #0891b2;
-  --color-primary-700:    #0e7490;
-  --color-primary-800:    #155e75;
-  --color-primary-900:    #164e63;
+  /* ---- Brand ---- */
+  /* Primary: deep teal — healthcare trust palette */
+  --color-primary-50:     #f0fdfa;
+  --color-primary-100:    #ccfbf1;
+  --color-primary-200:    #99f6e4;
+  --color-primary-300:    #5eead4;
+  --color-primary-400:    #2dd4bf;
+  --color-primary-500:    #14b8a6;
+  --color-primary-600:    #0d9488;
+  --color-primary-700:    #0f766e;
+  --color-primary-800:    #115e59;
+  --color-primary-900:    #134e4a;
 
-  /* Accent — Violet */
-  --color-accent-300:     #c4b5fd;
-  --color-accent-400:     #a78bfa;
-  --color-accent-500:     #8b5cf6;
-  --color-accent-600:     #7c3aed;
+  /* Accent: warm orange — for primary CTAs (matches 1mg's energetic accent) */
+  --color-accent-300:     #fdba74;
+  --color-accent-400:     #fb923c;
+  --color-accent-500:     #f97316;
+  --color-accent-600:     #ea580c;
 
-  /* Accent 2 — Rose */
+  /* Secondary accent: coral / rose */
   --color-rose-400:       #fb7185;
   --color-rose-500:       #f43f5e;
 
   /* Semantic */
   --color-success:        #10b981;
-  --color-success-bg:     rgba(16, 185, 129, 0.1);
+  --color-success-bg:     #d1fae5;
   --color-warning:        #f59e0b;
-  --color-warning-bg:     rgba(245, 158, 11, 0.1);
+  --color-warning-bg:     #fef3c7;
   --color-danger:         #ef4444;
-  --color-danger-bg:      rgba(239, 68, 68, 0.1);
+  --color-danger-bg:      #fee2e2;
   --color-info:           #3b82f6;
-  --color-info-bg:        rgba(59, 130, 246, 0.1);
+  --color-info-bg:        #dbeafe;
 
-  /* Text */
-  --color-text-primary:   #f1f5f9;
-  --color-text-secondary: #94a3b8;
-  --color-text-muted:     #64748b;
-  --color-text-inverse:   #0f172a;
+  /* ---- Text ---- */
+  --color-text-primary:   #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-muted:     #94a3b8;
+  --color-text-inverse:   #ffffff;
 
-  /* Gradient presets */
-  --gradient-primary:     linear-gradient(135deg, #06b6d4, #8b5cf6);
-  --gradient-warm:        linear-gradient(135deg, #f43f5e, #f59e0b);
-  --gradient-cool:        linear-gradient(135deg, #3b82f6, #06b6d4);
-  --gradient-success:     linear-gradient(135deg, #10b981, #06b6d4);
-  --gradient-mesh:        radial-gradient(at 20% 30%, rgba(6,182,212,0.08) 0%, transparent 50%),
-                          radial-gradient(at 80% 60%, rgba(139,92,246,0.06) 0%, transparent 50%),
-                          radial-gradient(at 50% 90%, rgba(244,63,94,0.04) 0%, transparent 50%);
+  /* ---- Gradients ---- */
+  --gradient-primary:     linear-gradient(135deg, #0d9488, #14b8a6);
+  --gradient-warm:        linear-gradient(135deg, #f97316, #fb923c);
+  --gradient-cool:        linear-gradient(135deg, #3b82f6, #14b8a6);
+  --gradient-success:     linear-gradient(135deg, #10b981, #14b8a6);
+  --gradient-mesh:        none;
 
   /* ---- Typography ---- */
   --font-family:          'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -86,14 +85,14 @@
   --font-3xl:   1.875rem;
   --font-4xl:   2.25rem;
 
-  --font-weight-normal: 400;
-  --font-weight-medium: 500;
+  --font-weight-normal:   400;
+  --font-weight-medium:   500;
   --font-weight-semibold: 600;
-  --font-weight-bold: 700;
+  --font-weight-bold:     700;
 
-  --line-height-tight: 1.25;
-  --line-height-normal: 1.5;
-  --line-height-relaxed: 1.75;
+  --line-height-tight:    1.25;
+  --line-height-normal:   1.5;
+  --line-height-relaxed:  1.75;
 
   /* ---- Spacing ---- */
   --space-1:  0.25rem;
@@ -109,37 +108,39 @@
 
   /* ---- Border Radius ---- */
   --radius-sm:   0.375rem;
-  --radius-md:   0.5rem;
-  --radius-lg:   0.75rem;
-  --radius-xl:   1rem;
+  --radius-md:   0.625rem;
+  --radius-lg:   0.875rem;
+  --radius-xl:   1.125rem;
   --radius-2xl:  1.5rem;
   --radius-full: 9999px;
 
-  /* ---- Shadows ---- */
-  --shadow-sm:   0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md:   0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
-  --shadow-lg:   0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
-  --shadow-xl:   0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
-  --shadow-glow: 0 0 20px rgba(6, 182, 212, 0.2);
-  --shadow-glow-accent: 0 0 20px rgba(139, 92, 246, 0.2);
-  --shadow-glow-lg: 0 0 40px rgba(6, 182, 212, 0.15), 0 0 80px rgba(139, 92, 246, 0.08);
+  /* ---- Shadows (light theme) ---- */
+  --shadow-sm:   0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md:   0 2px 4px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-lg:   0 8px 16px rgba(15, 23, 42, 0.08), 0 2px 4px rgba(15, 23, 42, 0.04);
+  --shadow-xl:   0 16px 32px rgba(15, 23, 42, 0.10), 0 4px 8px rgba(15, 23, 42, 0.04);
+  --shadow-glow: 0 4px 12px rgba(13, 148, 136, 0.18);
+  --shadow-glow-accent: 0 4px 12px rgba(249, 115, 22, 0.18);
+  --shadow-glow-lg: 0 8px 24px rgba(13, 148, 136, 0.18);
 
   /* ---- Transitions ---- */
-  --transition-fast:   150ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-slow:   350ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-spring: 500ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  --transition-fast:   140ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 220ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow:   320ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-spring: 480ms cubic-bezier(0.34, 1.56, 0.64, 1);
 
   /* ---- Z-Index ---- */
   --z-dropdown: 100;
   --z-sidebar:  200;
+  --z-bottom-nav: 250;
   --z-modal:    300;
   --z-toast:    400;
   --z-tooltip:  500;
 
   /* ---- Layout ---- */
-  --sidebar-width: 260px;
+  --sidebar-width: 240px;
   --sidebar-collapsed-width: 68px;
-  --header-height: 64px;
-  --content-max-width: 1400px;
+  --header-height: 60px;
+  --bottom-nav-height: 64px;
+  --content-max-width: 1280px;
 }
