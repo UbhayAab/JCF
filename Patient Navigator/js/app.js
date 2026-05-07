@@ -175,14 +175,18 @@ function renderAppShell() {
 }
 
 // ---- Boot app shell and router ----
+let appBooted = false;
 function bootApp() {
-  renderAppShell();
-  initRouter();
-  // If no hash or on login hash, go to dashboard
+  if (appBooted) return;
+  appBooted = true;
+  // Set the target hash BEFORE mounting the shell so the router's first
+  // read doesn't trigger the login handler (which would overwrite the shell).
   const hash = window.location.hash.slice(1);
   if (!hash || hash === 'login') {
-    navigate('dashboard');
+    history.replaceState(null, '', '#dashboard');
   }
+  renderAppShell();
+  initRouter();
 }
 
 // ---- Initialize App ----
@@ -204,11 +208,17 @@ async function init() {
   setAuthGuard(() => !!getCurrentUser());
   setRoleGuard((roles) => roles.includes(getUserRole()));
 
-  // Listen for sign out to go back to login
+  // Listen for sign out to go back to login.
+  // Also handle SIGNED_IN events that didn't come from our login form
+  // (e.g., magic-link, OTP, oauth redirects) so the app boots correctly.
   const { getSupabase } = await import('./supabase.js');
-  getSupabase().auth.onAuthStateChange((event) => {
+  getSupabase().auth.onAuthStateChange(async (event, session) => {
     if (event === 'SIGNED_OUT') {
+      appBooted = false;
       renderLoginPage();
+    } else if (event === 'SIGNED_IN' && session && !appBooted) {
+      await initAuth();
+      bootApp();
     }
   });
 
