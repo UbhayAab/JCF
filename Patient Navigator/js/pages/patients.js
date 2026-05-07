@@ -251,6 +251,7 @@ function showPatientForm(existing = null) {
           </select>
         </div>
       </div>
+      </div>
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">Phone (last 4 digits for masking)</label>
@@ -263,6 +264,22 @@ function showPatientForm(existing = null) {
         <div class="form-group">
           <label class="form-label">City</label>
           <input class="form-input" id="pf-city" value="${sanitize(existing?.city || '')}" placeholder="e.g., Mumbai" />
+        </div>
+      </div>
+      
+      <h4 style="margin-bottom:var(--space-4);margin-top:var(--space-4)">Caregiver Information</h4>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Caregiver Name</label>
+          <input class="form-input" id="pf-caregiver-name" value="${sanitize(existing?.caregiver_name || '')}" placeholder="Caregiver's name" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Relationship</label>
+          <input class="form-input" id="pf-caregiver-rel" value="${sanitize(existing?.caregiver_relationship || '')}" placeholder="e.g., Son, Wife" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Caregiver Phone (Last 4)</label>
+          <input class="form-input" id="pf-caregiver-phone" value="${sanitize(existing?.caregiver_phone_masked || '')}" placeholder="e.g., 1234" maxlength="4" />
         </div>
       </div>
 
@@ -290,6 +307,18 @@ function showPatientForm(existing = null) {
       </div>
       <div class="form-row">
         <div class="form-group">
+          <label class="form-label">Current Treatment</label>
+          <input class="form-input" id="pf-treatment" value="${sanitize(existing?.current_treatment || '')}" placeholder="e.g., Chemotherapy" />
+        </div>
+        <div class="form-group">
+          <label class="form-checkbox" style="margin-top: 2rem;">
+            <input type="checkbox" id="pf-clinical-trial" ${existing?.clinical_trial_aware ? 'checked' : ''} />
+            <span>Aware of Clinical Trials</span>
+          </label>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
           <label class="form-label">Treating Hospital</label>
           <input class="form-input" id="pf-hospital" value="${sanitize(existing?.treating_hospital || '')}" placeholder="Hospital name" />
         </div>
@@ -301,6 +330,10 @@ function showPatientForm(existing = null) {
             <option value="uninsured" ${existing?.insurance_status === 'uninsured' ? 'selected' : ''}>Uninsured</option>
             <option value="govt_scheme" ${existing?.insurance_status === 'govt_scheme' ? 'selected' : ''}>Government Scheme</option>
           </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Payment Method</label>
+          <input class="form-input" id="pf-payment" value="${sanitize(existing?.payment_method || '')}" placeholder="e.g., PMYojna, Self" />
         </div>
         <div class="form-group">
           <label class="form-label">Economic Status</label>
@@ -347,12 +380,18 @@ function showPatientForm(existing = null) {
       phone_masked: formContent.querySelector('#pf-phone').value ? 'XXXXX-X' + formContent.querySelector('#pf-phone').value : null,
       state: formContent.querySelector('#pf-state').value || null,
       city: formContent.querySelector('#pf-city').value || null,
+      caregiver_name: formContent.querySelector('#pf-caregiver-name').value || null,
+      caregiver_relationship: formContent.querySelector('#pf-caregiver-rel').value || null,
+      caregiver_phone_masked: formContent.querySelector('#pf-caregiver-phone').value ? 'XXXXX-X' + formContent.querySelector('#pf-caregiver-phone').value : null,
       cancer_type: formContent.querySelector('#pf-cancer-type').value || null,
       cancer_stage: formContent.querySelector('#pf-cancer-stage').value,
       diagnosis_date: formContent.querySelector('#pf-diagnosis-date').value || null,
       treating_hospital: formContent.querySelector('#pf-hospital').value || null,
+      current_treatment: formContent.querySelector('#pf-treatment').value || null,
+      clinical_trial_aware: formContent.querySelector('#pf-clinical-trial').checked,
       insurance_status: formContent.querySelector('#pf-insurance').value,
       economic_status: formContent.querySelector('#pf-economic').value,
+      payment_method: formContent.querySelector('#pf-payment').value || null,
       consent_given: true,
       consent_date: new Date().toISOString(),
       consent_method: formContent.querySelector('#pf-consent-method').value,
@@ -435,16 +474,20 @@ async function renderPatientDetail(container, patientId) {
             <div style="display:grid;gap:var(--space-3)">
               <div><span class="text-muted">Cancer Type:</span> <strong class="text-primary">${sanitize(patient.cancer_type) || '—'}</strong></div>
               <div><span class="text-muted">Stage:</span> <span class="badge badge-neutral">${capitalize(patient.cancer_stage)}</span></div>
+              <div><span class="text-muted">Treatment:</span> ${sanitize(patient.current_treatment) || '—'}</div>
               <div><span class="text-muted">Diagnosed:</span> ${formatDate(patient.diagnosis_date)}</div>
               <div><span class="text-muted">Hospital:</span> ${sanitize(patient.treating_hospital) || '—'}</div>
-              <div><span class="text-muted">Registered by:</span> ${patient.profiles?.full_name || '—'}</div>
+              <div><span class="text-muted">Trials Aware:</span> ${patient.clinical_trial_aware ? 'Yes' : 'No'}</div>
+              <div><span class="text-muted">Payment:</span> ${sanitize(patient.payment_method) || '—'}</div>
             </div>
           </div>
         </div>
         <div class="col-span-4">
           <div class="card">
-            <h4 class="mb-4">Consent & Compliance</h4>
+            <h4 class="mb-4">Caregiver & Compliance</h4>
             <div style="display:grid;gap:var(--space-3)">
+              <div><span class="text-muted">Caregiver:</span> ${sanitize(patient.caregiver_name) || '—'} ${patient.caregiver_relationship ? `(${sanitize(patient.caregiver_relationship)})` : ''}</div>
+              <div><span class="text-muted">CG Phone:</span> ${patient.caregiver_phone_masked || '—'}</div>
               <div><span class="text-muted">Consent:</span> ${patient.consent_given ? '<span class="badge badge-success badge-dot">Given</span>' : '<span class="badge badge-danger badge-dot">Not Given</span>'}</div>
               <div><span class="text-muted">Method:</span> ${capitalize(patient.consent_method)}</div>
               <div><span class="text-muted">Consent Date:</span> ${formatDate(patient.consent_date)}</div>
