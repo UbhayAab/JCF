@@ -110,12 +110,20 @@ async function loadProfile() {
     .from('profiles')
     .select('*')
     .eq('id', currentUser.id)
-    .single();
+    .maybeSingle();
 
   if (error) {
     console.error('Failed to load profile:', error);
+    showToast('Failed to load profile: ' + error.message, 'error');
     return;
   }
+  
+  if (!data) {
+    console.error('Profile not found for user ID:', currentUser.id);
+    showToast('Your user profile is missing from the database. Please contact an administrator.', 'error');
+    return;
+  }
+  
   currentProfile = data;
 }
 
