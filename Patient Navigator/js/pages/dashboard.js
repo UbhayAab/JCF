@@ -271,7 +271,7 @@ async function loadDueToday() {
       .limit(8);
 
     if (!isManagerOrAdmin()) {
-      const { data: tm } = await sb.from('team_members').select('id').eq('profile_id', getCurrentProfile()?.id).single();
+      const { data: tm } = await sb.from('team_members').select('id').eq('profile_id', getCurrentProfile()?.id).maybeSingle();
       if (tm) {
         query = query.eq('assigned_to', tm.id);
       } else {

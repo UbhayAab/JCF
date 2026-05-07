@@ -141,7 +141,7 @@ async function showCallForm(existing = null, prefill = {}) {
   let patientsQuery = sb.from('patients').select('id, patient_code, full_name').eq('is_active', true).order('full_name');
   
   if (!isAdminUser) {
-    const { data: tm } = await sb.from('team_members').select('id').eq('profile_id', currentUser.id).single();
+    const { data: tm } = await sb.from('team_members').select('id').eq('profile_id', currentUser.id).maybeSingle();
     if (tm) {
       patientsQuery = patientsQuery.eq('assigned_to', tm.id);
     } else {

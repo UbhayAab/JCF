@@ -93,8 +93,12 @@ export async function initAuth() {
   }
 
   currentUser = session.user;
-  // Profile load is fire-and-forget — never block the boot.
-  loadProfile().catch(err => console.warn('[auth] loadProfile failed (non-blocking):', err));
+  // Profile load MUST be awaited now that we have RBAC, otherwise the sidebar renders empty.
+  try {
+    await loadProfile();
+  } catch (err) {
+    console.warn('[auth] loadProfile failed:', err);
+  }
   return session;
 }
 
@@ -125,8 +129,11 @@ export async function signIn(email, password) {
   const { data, error } = await sb.auth.signInWithPassword({ email, password });
   if (error) throw new Error(error.message);
   currentUser = data.user;
-  // Fire-and-forget: surface profile errors in the console but never block.
-  loadProfile().catch(err => console.warn('[auth] loadProfile failed (non-blocking):', err));
+  try {
+    await loadProfile();
+  } catch (err) {
+    console.warn('[auth] loadProfile failed:', err);
+  }
   return data;
 }
 

@@ -19,7 +19,7 @@ export async function renderPatients(container, params) {
     return;
   }
 
-  const userRole = (await getSupabase().from('profiles').select('role').eq('id', getCurrentUser().id).single())?.data?.role;
+  const userRole = (await getSupabase().from('profiles').select('role').eq('id', getCurrentUser().id).maybeSingle())?.data?.role;
   const canExport = ['admin', 'manager'].includes(userRole);
   const canCreate = userRole !== 'content';
 
@@ -127,7 +127,7 @@ async function loadPatients() {
 
     if (!isAdminUser) {
       // Get team member ID for the current user
-      const { data: tm } = await sb.from('team_members').select('id').eq('profile_id', currentUser.id).single();
+      const { data: tm } = await sb.from('team_members').select('id').eq('profile_id', currentUser.id).maybeSingle();
       if (tm) {
         query = query.eq('assigned_to', tm.id);
       } else {
