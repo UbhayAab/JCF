@@ -46,6 +46,11 @@ body::before {
   100% { opacity: 1; transform: scale(1); }
 }
 
+/* Disable heavy infinite background animations on small/low-power devices */
+@media (max-width: 768px) {
+  body::before { animation: none; opacity: 0.6; }
+}
+
 /* ---- Scrollbar ---- */
 ::-webkit-scrollbar {
   width: 5px;

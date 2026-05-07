@@ -20,25 +20,49 @@ export function getUserRole() {
 export function isAdmin() { return getUserRole() === 'admin'; }
 export function isManagerOrAdmin() { return ['admin', 'manager'].includes(getUserRole()); }
 
+// ---- Helper: wrap a promise with a hard timeout ----
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    ),
+  ]);
+}
+
 // ---- Initialize auth (check existing session) ----
+// Hard-bounded so a stalled network never leaves the user staring at a spinner.
 export async function initAuth() {
   const sb = getSupabase();
   if (!sb) return null;
 
   try {
-    const { data: { session }, error } = await sb.auth.getSession();
+    const { data: { session }, error } = await withTimeout(
+      sb.auth.getSession(),
+      6000,
+      'getSession'
+    );
     if (error) {
       console.warn('Session check failed:', error.message);
       return null;
     }
     if (session?.user) {
       currentUser = session.user;
-      await loadProfile();
+      try {
+        await withTimeout(loadProfile(), 6000, 'loadProfile');
+      } catch (profileErr) {
+        console.warn('Profile load failed/timed out:', profileErr.message);
+        currentUser = null;
+        currentProfile = null;
+        return null;
+      }
       return session;
     }
     return null;
   } catch (err) {
-    console.warn('Session init error:', err);
+    console.warn('Session init error:', err.message);
+    currentUser = null;
+    currentProfile = null;
     return null;
   }
 }

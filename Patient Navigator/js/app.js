@@ -231,5 +231,16 @@ async function init() {
   }
 }
 
-// Start the app
-document.addEventListener('DOMContentLoaded', init);
+// Start the app — wrap in try/catch so a startup error never leaves the boot spinner up.
+document.addEventListener('DOMContentLoaded', () => {
+  init().catch((err) => {
+    console.error('App init failed:', err);
+    try { renderLoginPage(); }
+    catch (_) {
+      document.getElementById('app').innerHTML =
+        '<div class="boot-screen"><p style="color:#ef4444">Failed to start: ' +
+        (err && err.message ? err.message : 'unknown error') +
+        '</p><a href="#" onclick="location.reload()" style="color:#22d3ee">Reload</a></div>';
+    }
+  });
+});

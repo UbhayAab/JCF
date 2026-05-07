@@ -46,6 +46,11 @@
   pointer-events: none;
 }
 
+/* Don't animate the orbs on small screens — they pin the CPU on phones */
+@media (max-width: 768px) {
+  .login-page::before, .login-page::after { animation: none; }
+}
+
 .login-card {
   width: 100%;
   max-width: 420px;
@@ -415,6 +420,7 @@
 
 @media (max-width: 768px) {
   .sidebar {
+    width: min(280px, 85vw);
     transform: translateX(-100%);
     box-shadow: var(--shadow-xl);
   }
@@ -423,20 +429,57 @@
   }
   .main-content {
     margin-left: 0;
+    width: 100%;
+    min-width: 0;
   }
   .mobile-menu-btn { display: flex; }
-  .page-content { padding: var(--space-4); }
-  .header { padding: 0 var(--space-4); }
-  .stats-grid { grid-template-columns: repeat(2, 1fr); }
-  .page-header { flex-direction: column; align-items: flex-start; }
+  .page-content { padding: var(--space-4) var(--space-3); }
+  .header { padding: 0 var(--space-3); height: 56px; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); gap: var(--space-3); }
+  .page-header { flex-direction: column; align-items: flex-start; gap: var(--space-2); margin-bottom: var(--space-4); }
+  .page-header h1 { font-size: var(--font-xl); }
   .form-row { grid-template-columns: 1fr; }
-  .table-toolbar { flex-direction: column; align-items: stretch; }
+  .table-toolbar { flex-direction: column; align-items: stretch; gap: var(--space-2); }
   .table-search { max-width: 100%; }
   .quick-actions { flex-direction: column; }
+  .quick-action-btn { width: 100%; min-width: 0; }
+  /* Form inputs: 44px tap target on mobile */
+  .form-input, .form-select, .btn { min-height: 44px; }
+  .btn-sm { min-height: 36px; }
+  /* Tables wrap inside container; cells stay readable */
+  .table-container { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .data-table { min-width: 600px; }
+  .data-table td, .data-table th { padding: var(--space-2) var(--space-3); }
+  /* Modal: full-screen on mobile */
+  .modal { max-height: 100vh; border-radius: var(--radius-lg) var(--radius-lg) 0 0; margin-top: auto; }
+  .modal-overlay { padding: 0; align-items: flex-end; }
+  .modal-header, .modal-body, .modal-footer { padding-left: var(--space-4); padding-right: var(--space-4); }
+  /* Login card */
+  .login-card { max-width: 100%; padding: 0 var(--space-2); }
+  .login-logo { margin-bottom: var(--space-6); }
+  /* Reduce blur cost on mobile (CPU expensive on phones) */
+  .sidebar, .header, .modal, .card, .table-container, .glass {
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
 }
 
 @media (max-width: 480px) {
   .stats-grid { grid-template-columns: 1fr; }
+  .stat-card .stat-value { font-size: var(--font-2xl); }
+  .page-content { padding: var(--space-3) var(--space-2); }
+  .card { padding: var(--space-4); }
+  .calling-info-grid { grid-template-columns: 1fr 1fr; }
+  .calling-patient-name { font-size: var(--font-lg); }
+}
+
+/* Respect users who prefer reduced motion — also helps low-end devices */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ---- MOBILE OVERLAY ---- */
