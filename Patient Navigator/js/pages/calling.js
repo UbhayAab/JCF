@@ -10,9 +10,36 @@ import { formatDate, formatRelativeTime, capitalize, getDialStatusBadge, getMind
 
 let currentQueueId = null;
 let currentPatient = null;
+let currentPatientPitches = null;  // pitched_*_at fields from DB
 let currentTeamMember = null;
 let timerInterval = null;
 let timerSeconds = 0;
+let userEditedFollowup = false;     // tracks if user manually changed the suggested follow-up date
+
+// Per-service definitions for pitch tracking. Order matches UI rendering.
+const PITCH_SERVICES = [
+  { key: 'therapy',         label: 'Therapy sessions',       column: 'pitched_therapy_at' },
+  { key: 'nutrition',       label: 'Nutrition counselling',  column: 'pitched_nutrition_at' },
+  { key: 'caregiver',       label: 'Caregiver support',      column: 'pitched_caregiver_at' },
+  { key: 'clinical_trial',  label: 'Clinical trial info',    column: 'pitched_clinical_trial_at' },
+  { key: 'financial_aid',   label: 'Financial aid',          column: 'pitched_financial_aid_at' },
+];
+
+// How many days from now to suggest the next call, by receptiveness bucket.
+// "Did not pick up" cases are handled separately (status != connected).
+const FOLLOWUP_DAYS_BY_RECEPTIVENESS = {
+  highly_receptive: 2,
+  neutral:          7,
+  skeptical:        14,
+  agitated:         14,
+  overwhelmed:      21,
+};
+
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
 
 export async function renderCalling(container) {
   const role = getUserRole();
@@ -138,10 +165,10 @@ export async function renderCalling(container) {
                 </select>
               </div>
               <div class="form-group">
-                <label class="form-label">Value Pitch Executed?</label>
-                <div class="flex gap-4">
-                  <label class="flex items-center gap-2"><input type="radio" name="cf-pitch" value="yes"> Yes</label>
-                  <label class="flex items-center gap-2"><input type="radio" name="cf-pitch" value="no" checked> No</label>
+                <label class="form-label">Services pitched on this call</label>
+                <span class="form-hint">Tick what you offered today. Already-pitched services are greyed out so you don't repeat the pitch.</span>
+                <div id="cf-pitches" style="display:flex;flex-direction:column;gap:var(--space-2);margin-top:var(--space-2)">
+                  <!-- Populated dynamically per patient in renderPitchCheckboxes() -->
                 </div>
               </div>
               <div class="form-row">
@@ -222,6 +249,37 @@ export async function renderCalling(container) {
   document.getElementById('cf-status')?.addEventListener('change', (e) => {
     const show = e.target.value === 'connected';
     document.getElementById('connected-fields')?.classList.toggle('hidden', !show);
+    // For non-connected statuses (no answer / busy / wrong number), suggest a
+    // sensible re-attempt window so the caller doesn't have to think about it.
+    if (!show && !userEditedFollowup) {
+      const status = e.target.value;
+      const followupEl = document.getElementById('cf-followup');
+      if (followupEl) {
+        if (status === 'no_answer' || status === 'busy' || status === 'voicemail') {
+          followupEl.value = addDays(new Date(), 3);
+        } else if (status === 'callback_requested') {
+          followupEl.value = addDays(new Date(), 1);
+        } else if (status === 'wrong_number') {
+          followupEl.value = '';
+        }
+      }
+    }
+  });
+
+  // When the caller picks a receptiveness bucket, auto-suggest the next-call
+  // date based on the org's playbook (unless the caller already set one).
+  document.getElementById('cf-receptiveness')?.addEventListener('change', (e) => {
+    if (userEditedFollowup) return;
+    const days = FOLLOWUP_DAYS_BY_RECEPTIVENESS[e.target.value];
+    if (days != null) {
+      const followupEl = document.getElementById('cf-followup');
+      if (followupEl) followupEl.value = addDays(new Date(), days);
+    }
+  });
+
+  // Track manual edits so we don't overwrite the caller's choice.
+  document.getElementById('cf-followup')?.addEventListener('input', () => {
+    userEditedFollowup = true;
   });
 
   document.getElementById('call-log-form')?.addEventListener('submit', submitCallLog);
@@ -356,6 +414,12 @@ async function getNextCall() {
     // Reset form
     document.getElementById('call-log-form').reset();
     document.getElementById('connected-fields').classList.add('hidden');
+    userEditedFollowup = false;
+
+    // Fetch the patient's pitch history so the checkboxes can show
+    // already-pitched services as greyed out (so we don't re-pitch).
+    await loadPatientPitches(data.patient_id);
+    renderPitchCheckboxes();
 
     // Reset timer
     timerSeconds = 0;
@@ -378,6 +442,34 @@ async function getNextCall() {
     btn.disabled = false;
     btn.innerHTML = 'Get Next Call';
   }
+}
+
+async function loadPatientPitches(patientId) {
+  const sb = getSupabase();
+  try {
+    const cols = PITCH_SERVICES.map(s => s.column).join(',');
+    const { data } = await sb.from('patients').select(cols).eq('id', patientId).single();
+    currentPatientPitches = data || {};
+  } catch (err) {
+    console.error('Load pitches error:', err);
+    currentPatientPitches = {};
+  }
+}
+
+function renderPitchCheckboxes() {
+  const container = document.getElementById('cf-pitches');
+  if (!container) return;
+  const pitches = currentPatientPitches || {};
+  container.innerHTML = PITCH_SERVICES.map(s => {
+    const previouslyPitched = !!pitches[s.column];
+    const datePitched = previouslyPitched ? new Date(pitches[s.column]).toLocaleDateString() : null;
+    return `
+      <label class="form-checkbox" style="${previouslyPitched ? 'opacity:0.55' : ''}">
+        <input type="checkbox" name="cf-pitch-service" value="${s.key}" ${previouslyPitched ? 'checked disabled' : ''} />
+        <span>${s.label}${previouslyPitched ? ` <small class="text-muted">— pitched ${datePitched}</small>` : ''}</span>
+      </label>
+    `;
+  }).join('');
 }
 
 async function loadPatientHistory(patientId, container) {
@@ -498,7 +590,12 @@ async function submitCallLog(e) {
       return; 
     }
 
-    const pitchEl = document.querySelector('input[name="cf-pitch"]:checked');
+    // Collect newly-pitched services from the checkboxes (already-pitched ones
+    // are disabled in the UI, so they won't appear here — that's intentional).
+    const newlyPitchedKeys = Array.from(
+      document.querySelectorAll('input[name="cf-pitch-service"]:checked:not(:disabled)')
+    ).map(el => el.value);
+
     const whatsappEl = document.querySelector('input[name="cf-whatsapp"]:checked');
     const socialEl = document.querySelector('input[name="cf-social"]:checked');
     const notes = document.getElementById('cf-notes')?.value?.trim() || null;
@@ -519,7 +616,8 @@ async function submitCallLog(e) {
       dial_status: dialStatus,
       call_duration_mins: Math.ceil(timerSeconds / 60) || null,
       receptiveness_bucket: receptiveness,
-      value_pitch_executed: pitchEl?.value === 'yes',
+      // Mark the legacy boolean true if ANY service was pitched on this call
+      value_pitch_executed: newlyPitchedKeys.length > 0,
       whatsapp_group_joined: whatsappEl?.value === 'yes',
       social_media_follow: socialEl?.value === 'yes',
       caller_notes: notes,
@@ -530,6 +628,22 @@ async function submitCallLog(e) {
     }).select().single();
 
     if (error) throw error;
+
+    // Persist newly-pitched services as timestamps on the patient record so
+    // future calls show those services as already-pitched (greyed out).
+    if (newlyPitchedKeys.length > 0) {
+      const now = new Date().toISOString();
+      const patientUpdate = {};
+      newlyPitchedKeys.forEach(key => {
+        const svc = PITCH_SERVICES.find(s => s.key === key);
+        if (svc) patientUpdate[svc.column] = now;
+      });
+      const { error: pitchErr } = await sb
+        .from('patients')
+        .update(patientUpdate)
+        .eq('id', currentPatient.patient_id);
+      if (pitchErr) console.warn('Pitch timestamp update failed:', pitchErr.message);
+    }
 
     // Handle recording upload
     const recordingFile = document.getElementById('cf-recording')?.files?.[0];
@@ -579,6 +693,8 @@ async function submitCallLog(e) {
 function resetCallView() {
   currentQueueId = null;
   currentPatient = null;
+  currentPatientPitches = null;
+  userEditedFollowup = false;
   timerSeconds = 0;
   clearInterval(timerInterval);
   timerInterval = null;
