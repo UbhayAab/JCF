@@ -175,14 +175,12 @@ function renderLoginPage() {
       } else {
         // login
         await signIn(email, password);
-        console.log('[auth] signIn OK; reloading into app shell');
+        console.log('[auth] signIn OK; mounting app shell');
         showToast('Welcome back!', 'success');
-        // BULLETPROOF: force a clean reload into the dashboard. The session
-        // is now persisted in localStorage, so initAuth() on the next page
-        // load detects it and boots straight into the app shell — no SPA
-        // race conditions possible.
-        window.location.hash = '#dashboard';
-        setTimeout(() => window.location.reload(), 200);
+        // Mount the app shell inline. The onAuthStateChange listener may
+        // also fire SIGNED_IN and call bootApp() — that's fine, the
+        // appBooted guard makes the second call a no-op.
+        bootApp();
       }
     } catch (err) {
       console.error('[auth] form error:', err);
@@ -241,7 +239,7 @@ function renderAppShell() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20260507d';  // bumped on every breaking deploy
+const APP_BUILD = '20260507e';  // bumped on every breaking deploy
 let appBooted = false;
 function bootApp() {
   console.log('[boot] bootApp called, appBooted=' + appBooted + ', hash=' + window.location.hash);

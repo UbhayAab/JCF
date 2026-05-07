@@ -30,41 +30,72 @@ function withTimeout(promise, ms, label) {
   ]);
 }
 
+// ---- Read the Supabase session directly from localStorage ----
+// Supabase JS persists sessions at key "sb-{project-ref}-auth-token".
+// If getSession() hangs on its network refresh, we still want to honor the
+// session that's already stored locally — the user logged in successfully,
+// the access_token is right there, we should let them into the app.
+function readSessionFromStorage() {
+  if (typeof localStorage === 'undefined') return null;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key || !key.startsWith('sb-') || !key.endsWith('-auth-token')) continue;
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const value = JSON.parse(raw);
+      // Some Supabase versions wrap the session under a "currentSession" key.
+      const session = value?.currentSession || value;
+      if (session?.access_token && session?.user) {
+        return session;
+      }
+    } catch (e) {
+      console.warn('[auth] could not parse stored session at', key, e);
+    }
+  }
+  return null;
+}
+
 // ---- Initialize auth (check existing session) ----
-// Hard-bounded so a stalled network never leaves the user staring at a spinner.
+// Two-stage: try the official getSession (which can hit the network to
+// refresh the token), and if it times out OR errors, fall back to whatever
+// Supabase already wrote to localStorage. RLS will reject any stale token
+// at the DB layer — but the user reaches the app shell instead of being
+// stranded on the login screen.
 export async function initAuth() {
   const sb = getSupabase();
   if (!sb) return null;
 
+  let session = null;
+
+  // Stage 1: try the official client (fast path)
   try {
-    const { data: { session }, error } = await withTimeout(
-      sb.auth.getSession(),
-      6000,
-      'getSession'
-    );
-    if (error) {
-      console.warn('Session check failed:', error.message);
-      return null;
+    const { data, error } = await withTimeout(sb.auth.getSession(), 4000, 'getSession');
+    if (!error && data?.session?.user) {
+      session = data.session;
+    } else if (error) {
+      console.warn('[auth] getSession returned error:', error.message);
     }
-    if (session?.user) {
-      currentUser = session.user;
-      try {
-        await withTimeout(loadProfile(), 6000, 'loadProfile');
-      } catch (profileErr) {
-        console.warn('Profile load failed/timed out:', profileErr.message);
-        currentUser = null;
-        currentProfile = null;
-        return null;
-      }
-      return session;
-    }
-    return null;
-  } catch (err) {
-    console.warn('Session init error:', err.message);
+  } catch (timeoutErr) {
+    console.warn('[auth] ' + timeoutErr.message + ' — falling back to localStorage');
+  }
+
+  // Stage 2: localStorage fallback
+  if (!session) {
+    session = readSessionFromStorage();
+    if (session) console.log('[auth] using cached session from localStorage');
+  }
+
+  if (!session?.user) {
     currentUser = null;
     currentProfile = null;
     return null;
   }
+
+  currentUser = session.user;
+  // Profile load is fire-and-forget — never block the boot.
+  loadProfile().catch(err => console.warn('[auth] loadProfile failed (non-blocking):', err));
+  return session;
 }
 
 // ---- Load user profile from profiles table ----
