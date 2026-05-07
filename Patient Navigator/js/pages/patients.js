@@ -479,6 +479,8 @@ async function renderPatientDetail(container, patientId) {
               <div><span class="text-muted">Hospital:</span> ${sanitize(patient.treating_hospital) || '—'}</div>
               <div><span class="text-muted">Trials Aware:</span> ${patient.clinical_trial_aware ? 'Yes' : 'No'}</div>
               <div><span class="text-muted">Payment:</span> ${sanitize(patient.payment_method) || '—'}</div>
+              <div><span class="text-muted">Assigned Caller:</span> <strong class="text-primary">${sanitize(patient.assigned_caller_name) || 'Unassigned'}</strong></div>
+              ${patient.legacy_notes ? `<div style="margin-top:0.5rem;padding:0.5rem;background:rgba(255,255,255,0.05);border-radius:var(--radius-sm)"><span class="text-muted">Legacy Notes:</span> <small>${sanitize(patient.legacy_notes)}</small></div>` : ''}
             </div>
           </div>
         </div>

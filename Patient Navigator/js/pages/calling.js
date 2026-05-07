@@ -109,7 +109,7 @@ export async function renderCalling(container) {
       <div class="calling-form-panel hidden" id="calling-form-panel">
         <div class="card">
           <div class="card-header">
-            <div class="card-title">Log This Call</div>
+            <div class="card-title">Log Interaction</div>
           </div>
           <form id="call-log-form">
             <div class="form-group">
@@ -127,16 +127,14 @@ export async function renderCalling(container) {
 
             <div id="connected-fields" class="hidden">
               <div class="form-group">
-                <label class="form-label">Patient Mindset</label>
-                <select class="form-select" id="cf-mindset">
-                  <option value="">Select...</option>
-                  <option value="hopeful">😊 Hopeful / Receptive</option>
-                  <option value="informed">📚 Informed</option>
-                  <option value="neutral">😐 Neutral / Skeptical</option>
-                  <option value="anxious">😰 Anxious</option>
-                  <option value="resistant">🚫 Resistant</option>
-                  <option value="distressed">😢 Distressed</option>
-                  <option value="grateful">🙏 Grateful</option>
+                <label class="form-label">Patient Receptiveness Bucket <span class="required">*</span></label>
+                <select class="form-select" id="cf-receptiveness">
+                  <option value="">Select bucket...</option>
+                  <option value="highly_receptive">🌟 Highly Receptive (Open to therapy/nutrition)</option>
+                  <option value="neutral">😐 Neutral (Listening but not committed)</option>
+                  <option value="skeptical">🤔 Skeptical (Needs more convincing/trust)</option>
+                  <option value="agitated">💢 Agitated (Upset, wants quick answers)</option>
+                  <option value="overwhelmed">😰 Overwhelmed (Too much going on, needs space)</option>
                 </select>
               </div>
               <div class="form-group">
@@ -169,13 +167,20 @@ export async function renderCalling(container) {
             </div>
 
             <div class="form-group">
-              <label class="form-label">Notes</label>
-              <textarea class="form-textarea" id="cf-notes" rows="3" placeholder="Call notes, follow-up info..."></textarea>
+              <label class="form-label">General Notes</label>
+              <textarea class="form-textarea" id="cf-notes" rows="2" placeholder="Brief interaction notes..."></textarea>
             </div>
 
-            <div class="form-group">
-              <label class="form-label">Follow-up Date</label>
-              <input type="date" class="form-input" id="cf-followup" />
+            <div class="form-group" style="padding:1rem;background:rgba(255,255,255,0.02);border:1px solid var(--glass-border);border-radius:var(--radius-md);margin-top:1rem;">
+              <h5 style="margin-top:0;margin-bottom:0.5rem;color:var(--color-primary-400)">Intelligent Follow-up</h5>
+              <div class="form-group">
+                <label class="form-label">Next Follow-up Date</label>
+                <input type="date" class="form-input" id="cf-followup" />
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label class="form-label">Follow-up Strategy / Judgment</label>
+                <textarea class="form-textarea" id="cf-strategy" rows="2" placeholder="e.g., Patient was agitated today, call in 2 weeks with a softer approach."></textarea>
+              </div>
             </div>
 
             <div class="form-group">
@@ -323,6 +328,22 @@ async function getNextCall() {
       document.getElementById('cp-caregiver').textContent = '—';
     }
 
+    // Show historical strategy if this is a follow-up
+    if (data.followup_strategy_notes) {
+      const historyEl = document.getElementById('cp-history');
+      if (historyEl) {
+        historyEl.innerHTML = `
+          <div style="background:rgba(255,165,0,0.1);border:1px solid rgba(255,165,0,0.3);padding:var(--space-3);border-radius:var(--radius-md);margin-bottom:var(--space-3)">
+            <h5 style="margin:0 0 var(--space-1) 0;color:#ffa500;font-size:var(--font-xs);text-transform:uppercase;letter-spacing:1px;">Follow-up Strategy (From Last Call)</h5>
+            <p style="margin:0;font-size:var(--font-sm)">${data.followup_strategy_notes}</p>
+            ${data.receptiveness_bucket ? `<div style="margin-top:var(--space-2)"><span class="badge badge-neutral">Bucket: ${data.receptiveness_bucket.replace('_', ' ')}</span></div>` : ''}
+          </div>
+        `;
+      }
+    } else {
+      document.getElementById('cp-history').innerHTML = '';
+    }
+
     if (data.caregiver_phone_full) {
       document.getElementById('cp-caregiver-phone-row').classList.remove('hidden');
       const cgPhone = document.getElementById('cp-caregiver-phone');
@@ -342,8 +363,11 @@ async function getNextCall() {
     document.getElementById('timer-start').classList.remove('hidden');
     document.getElementById('timer-stop').classList.add('hidden');
 
-    // Load call history for this patient
-    await loadPatientHistory(data.patient_id);
+    // Load call history for this patient (excluding strategy banner if rendered)
+    const historyContainer = document.createElement('div');
+    historyContainer.id = 'cp-history-list';
+    document.getElementById('cp-history').appendChild(historyContainer);
+    await loadPatientHistory(data.patient_id, historyContainer);
 
     // Load today's calls
     await loadTodayCalls();
@@ -356,7 +380,7 @@ async function getNextCall() {
   }
 }
 
-async function loadPatientHistory(patientId) {
+async function loadPatientHistory(patientId, container) {
   const sb = getSupabase();
   try {
     const { data } = await sb.from('call_logs')
@@ -365,14 +389,14 @@ async function loadPatientHistory(patientId) {
       .order('call_date', { ascending: false })
       .limit(5);
 
-    const el = document.getElementById('cp-history');
+    const el = container || document.getElementById('cp-history');
     if (!el) return;
     if (!data || data.length === 0) {
-      el.innerHTML = '<div class="text-muted" style="padding:var(--space-3);font-size:var(--font-sm)">No previous calls</div>';
+      el.innerHTML += '<div class="text-muted" style="padding:var(--space-3) 0;font-size:var(--font-sm)">No previous interactions logged</div>';
       return;
     }
 
-    el.innerHTML = `
+    el.innerHTML += `
       <div style="font-size:var(--font-sm);font-weight:600;padding:var(--space-3) 0 var(--space-1);color:var(--color-text-muted)">Previous Calls</div>
       ${data.map(c => `
         <div class="calling-history-item">
@@ -467,13 +491,20 @@ async function submitCallLog(e) {
     const dialStatus = document.getElementById('cf-status').value;
     if (!dialStatus) { showToast('Please select dial status', 'warning'); submitBtn.disabled = false; submitBtn.textContent = 'Submit & Next Call'; return; }
 
-    const mindset = document.getElementById('cf-mindset')?.value || null;
+    const receptiveness = document.getElementById('cf-receptiveness')?.value || null;
+    if (dialStatus === 'connected' && !receptiveness) { 
+      showToast('Please select a Receptiveness Bucket', 'warning'); 
+      submitBtn.disabled = false; submitBtn.textContent = 'Submit & Next Call'; 
+      return; 
+    }
+
     const pitchEl = document.querySelector('input[name="cf-pitch"]:checked');
     const whatsappEl = document.querySelector('input[name="cf-whatsapp"]:checked');
     const socialEl = document.querySelector('input[name="cf-social"]:checked');
     const notes = document.getElementById('cf-notes')?.value?.trim() || null;
     const requirements = document.getElementById('cf-requirements')?.value?.trim() || null;
     const followUp = document.getElementById('cf-followup')?.value || null;
+    const strategy = document.getElementById('cf-strategy')?.value?.trim() || null;
 
     // Get team member name
     const { data: tm } = await sb.from('team_members').select('name').eq('id', currentTeamMember).single();
@@ -487,13 +518,14 @@ async function submitCallLog(e) {
       call_date: new Date().toISOString(),
       dial_status: dialStatus,
       call_duration_mins: Math.ceil(timerSeconds / 60) || null,
-      patient_mindset: mindset,
+      receptiveness_bucket: receptiveness,
       value_pitch_executed: pitchEl?.value === 'yes',
       whatsapp_group_joined: whatsappEl?.value === 'yes',
       social_media_follow: socialEl?.value === 'yes',
       caller_notes: notes,
       requirements_noted: requirements,
       follow_up_date: followUp,
+      followup_strategy_notes: strategy,
       lead_source: 'other',
     }).select().single();
 
@@ -520,16 +552,17 @@ async function submitCallLog(e) {
       } catch (recErr) { console.warn('Recording upload failed:', recErr); }
     }
 
-    // Mark queue entry
-    const queueStatus = dialStatus === 'callback_requested' ? 'callback' : 'completed';
-    await sb.rpc('complete_queue_call', { p_queue_id: currentQueueId, p_status: queueStatus });
+    // Mark queue entry and potentially create the follow-up queue entry
+    const queueStatus = (dialStatus === 'callback_requested' || followUp) ? 'scheduled' : 'completed';
+    await sb.rpc('complete_queue_call', { 
+      p_queue_id: currentQueueId, 
+      p_status: queueStatus,
+      p_next_followup_date: followUp ? followUp + 'T00:00:00Z' : null,
+      p_strategy_notes: strategy,
+      p_receptiveness: receptiveness
+    });
 
-    // If callback, update scheduled_for
-    if (queueStatus === 'callback' && followUp) {
-      await sb.from('call_queue').update({ scheduled_for: followUp, status: 'callback' }).eq('id', currentQueueId);
-    }
-
-    showToast('Call logged successfully!', 'success');
+    showToast('Interaction logged successfully!', 'success');
     resetCallView();
 
     // Auto-get next
