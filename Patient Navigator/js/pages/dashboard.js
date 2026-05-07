@@ -64,10 +64,26 @@ export async function renderDashboard(container) {
       <div class="col-span-4">
         <div class="card">
           <div class="card-header">
-            <div class="card-title">Upcoming Follow-ups</div>
+            <div class="card-title">Calls Due Today</div>
+            <button class="btn btn-ghost btn-sm" id="view-calling">Open Portal →</button>
           </div>
-          <div id="upcoming-followups">${Array(4).fill('<div class="skeleton skeleton-row"></div>').join('')}</div>
+          <div id="due-today">${Array(4).fill('<div class="skeleton skeleton-row"></div>').join('')}</div>
         </div>
+
+        ${isAdmin ? `
+        <div class="card" style="margin-top:var(--space-4)">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Today's Intake</div>
+              <div class="card-subtitle" id="intake-subtitle">Loading…</div>
+            </div>
+          </div>
+          <div id="intake-summary"></div>
+          <button class="btn btn-primary" id="distribute-btn" style="width:100%;margin-top:var(--space-3)">
+            Distribute to Active Callers
+          </button>
+        </div>
+        ` : ''}
       </div>
     </div>
   `;
@@ -77,8 +93,12 @@ export async function renderDashboard(container) {
   document.getElementById('qa-log-call')?.addEventListener('click', () => navigate('calls'));
   document.getElementById('qa-analytics')?.addEventListener('click', () => navigate('analytics'));
   document.getElementById('view-all-calls')?.addEventListener('click', () => navigate('calls'));
+  document.getElementById('view-calling')?.addEventListener('click', () => navigate('calling'));
+  document.getElementById('distribute-btn')?.addEventListener('click', distributeIntake);
 
-  await Promise.all([loadStats(), loadRecentCalls(), loadFollowUps()]);
+  const tasks = [loadStats(), loadRecentCalls(), loadDueToday()];
+  if (isAdmin) tasks.push(loadIntakeSummary());
+  await Promise.all(tasks);
 }
 
 function getGreeting() {
@@ -234,35 +254,100 @@ async function loadRecentCalls() {
   }
 }
 
-async function loadFollowUps() {
+// "Calls Due Today" — call_queue entries that are scheduled/callback and due now or earlier.
+// RLS on call_queue is permissive for now, so admins see everything; callers see their own
+// once we wire team_members.profile_id correctly.
+async function loadDueToday() {
   const sb = getSupabase();
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const now = new Date().toISOString();
     const { data, error } = await sb
-      .from('call_logs')
-      .select('*, patients(patient_code, full_name)')
-      .gte('follow_up_date', today)
-      .order('follow_up_date', { ascending: true })
+      .from('call_queue')
+      .select('id, status, scheduled_for, priority, followup_strategy_notes, patients(full_name, patient_code, phone_full)')
+      .in('status', ['scheduled', 'callback', 'pending'])
+      .or(`scheduled_for.lte.${now},scheduled_for.is.null`)
+      .order('priority', { ascending: true })
+      .order('scheduled_for', { ascending: true, nullsFirst: false })
       .limit(8);
 
     if (error) throw error;
-    const el = document.getElementById('upcoming-followups');
+    const el = document.getElementById('due-today');
     if (!el) return;
     if (!data || data.length === 0) {
-      el.innerHTML = '<div class="empty-state" style="padding:var(--space-8)"><p>No upcoming follow-ups</p></div>';
+      el.innerHTML = '<div class="empty-state" style="padding:var(--space-6)"><p>Nothing due. Inbox zero.</p></div>';
       return;
     }
 
-    el.innerHTML = data.map(c => `
-      <div class="flex items-center gap-4" style="padding:var(--space-3) 0; border-bottom:1px solid var(--glass-border)">
-        <div class="flex-1">
-          <div class="font-medium text-primary">${c.patients?.full_name || c.patients?.patient_code || '—'}</div>
-          <div class="text-muted" style="font-size:var(--font-xs)">${formatDate(c.follow_up_date)}</div>
+    el.innerHTML = data.map(q => {
+      const due = q.scheduled_for ? formatRelativeTime(q.scheduled_for) : 'Pending';
+      const priorityBadge = q.priority === 'high' ? 'danger' : q.priority === 'medium' ? 'warning' : 'info';
+      return `
+        <div class="flex items-center gap-3" style="padding:var(--space-3) 0;border-bottom:1px solid var(--glass-border)">
+          <div class="flex-1" style="min-width:0">
+            <div class="font-medium text-primary" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${q.patients?.full_name || q.patients?.patient_code || '—'}</div>
+            <div class="text-muted" style="font-size:var(--font-xs)">${due}${q.status === 'callback' ? ' · Callback' : q.status === 'scheduled' ? ' · Follow-up' : ''}</div>
+          </div>
+          <span class="badge badge-${priorityBadge} badge-dot">${capitalize(q.priority || 'medium')}</span>
         </div>
-        <span class="badge badge-${c.follow_up_priority === 'high' ? 'danger' : c.follow_up_priority === 'medium' ? 'warning' : 'info'} badge-dot">${capitalize(c.follow_up_priority)}</span>
-      </div>
-    `).join('');
+      `;
+    }).join('');
   } catch (err) {
-    console.error('Follow-ups error:', err);
+    console.error('Due-today error:', err);
+    const el = document.getElementById('due-today');
+    if (el) el.innerHTML = '<div class="empty-state" style="padding:var(--space-6)"><p class="text-muted">Could not load queue.</p></div>';
+  }
+}
+
+// "Today's Intake" — patients added in the last 24h plus the count waiting for assignment.
+async function loadIntakeSummary() {
+  const sb = getSupabase();
+  try {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    const [{ count: newToday }, { count: unassigned }] = await Promise.all([
+      sb.from('patients').select('*', { count: 'exact', head: true }).gte('created_at', since),
+      sb.from('patients').select('*', { count: 'exact', head: true }).is('assigned_to', null).eq('do_not_call', false),
+    ]);
+
+    document.getElementById('intake-subtitle').textContent =
+      `${newToday || 0} new in last 24h · ${unassigned || 0} unassigned`;
+
+    const summaryEl = document.getElementById('intake-summary');
+    if (!summaryEl) return;
+    summaryEl.innerHTML = `
+      <div class="flex gap-4" style="padding:var(--space-2) 0">
+        <div style="flex:1">
+          <div class="stat-value" style="font-size:var(--font-2xl)">${newToday || 0}</div>
+          <div class="text-muted" style="font-size:var(--font-xs)">New (24h)</div>
+        </div>
+        <div style="flex:1">
+          <div class="stat-value" style="font-size:var(--font-2xl);color:${unassigned > 0 ? 'var(--color-warning)' : 'var(--color-text-primary)'}">${unassigned || 0}</div>
+          <div class="text-muted" style="font-size:var(--font-xs)">Unassigned</div>
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    console.error('Intake summary error:', err);
+  }
+}
+
+// Admin button: triggers the load-balanced distribution RPC and refreshes counts.
+async function distributeIntake() {
+  const sb = getSupabase();
+  const btn = document.getElementById('distribute-btn');
+  if (!btn) return;
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.innerHTML = '<div class="spinner" style="width:18px;height:18px;border-width:2px;margin:0 auto"></div>';
+  try {
+    const { data, error } = await sb.rpc('distribute_new_patients');
+    if (error) throw error;
+    showToast(`Distributed ${data || 0} patients to active callers`, 'success');
+    await loadIntakeSummary();
+  } catch (err) {
+    showToast('Distribution failed: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
   }
 }
