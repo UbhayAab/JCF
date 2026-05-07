@@ -107,7 +107,7 @@ export async function signIn(email, password) {
   return data;
 }
 
-// ---- Sign Up ----
+// ---- Sign Up (legacy password flow) ----
 export async function signUp(email, password, fullName) {
   const sb = getSupabase();
   const { data, error } = await sb.auth.signUp({
@@ -123,6 +123,56 @@ export async function signUp(email, password, fullName) {
   }
 
   return data;
+}
+
+// ---- Email-OTP signup, step 1: send 6-digit code to the email ----
+// shouldCreateUser:true means a new auth.users row is created on first OTP.
+// The on-signup trigger gives them a 'caller' profile with is_active=true,
+// but we flip it to false right after verification so admin must approve.
+export async function sendSignupOtp(email, fullName) {
+  const sb = getSupabase();
+  const { error } = await sb.auth.signInWithOtp({
+    email,
+    options: {
+      shouldCreateUser: true,
+      data: { full_name: fullName },
+    },
+  });
+  if (error) throw new Error(error.message);
+}
+
+// ---- Email-OTP signup, step 2: verify the code ----
+// On success we sign the new user OUT immediately and mark their profile
+// inactive — they wait for admin approval before the app lets them in.
+export async function verifySignupOtp(email, token, fullName) {
+  const sb = getSupabase();
+  const { data, error } = await sb.auth.verifyOtp({ email, token, type: 'email' });
+  if (error) throw new Error(error.message);
+
+  if (data?.user) {
+    try {
+      // Make sure the profile carries the user-typed name (the trigger may
+      // have only seen the email if metadata was missing) and mark inactive.
+      await sb.from('profiles').update({
+        full_name: fullName || data.user.email,
+        is_active: false,
+      }).eq('id', data.user.id);
+    } catch (profileErr) {
+      console.warn('Could not flag profile pending:', profileErr);
+    }
+    // Sign back out so the user can't access the app until approved.
+    await sb.auth.signOut();
+  }
+  return data;
+}
+
+// ---- Forgot password: send a one-time login link ----
+export async function sendPasswordReset(email) {
+  const sb = getSupabase();
+  const { error } = await sb.auth.resetPasswordForEmail(email, {
+    redirectTo: window.location.origin + window.location.pathname + '#login',
+  });
+  if (error) throw new Error(error.message);
 }
 
 // ---- Sign Out ----

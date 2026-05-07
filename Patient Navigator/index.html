@@ -8,6 +8,13 @@
   <meta name="robots" content="noindex, nofollow" />
   <meta name="format-detection" content="telephone=no" />
 
+  <!-- Force GitHub Pages / browser to NEVER serve a stale copy of this HTML.
+       Without this, GH Pages caches HTML for 10 min, so users keep seeing
+       last week's broken JS even after a deploy. -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+
   <!-- Open Graph -->
   <meta property="og:title" content="Patient Navigator — Carcinome NGO" />
   <meta property="og:description" content="Secure, DPDPA-compliant patient data management for cancer care navigation." />
@@ -63,8 +70,8 @@
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 
-  <!-- App entry point -->
-  <script type="module" src="js/app.js"></script>
+  <!-- App entry point — query string busts the browser cache when JS changes -->
+  <script type="module" src="js/app.js?v=20260507c"></script>
 
   <!-- Boot watchdog: surfaces a clear error if external scripts fail to load
        (network blocked, CDN down, captive portal, etc.) instead of leaving

@@ -2,7 +2,7 @@
 // Patient Navigator — Main App Controller
 // ============================================================
 
-import { initAuth, getCurrentUser, getCurrentProfile, getUserRole, signIn, signUp } from './auth.js';
+import { initAuth, getCurrentUser, getCurrentProfile, getUserRole, signIn, signUp, sendSignupOtp, verifySignupOtp, sendPasswordReset } from './auth.js';
 import { registerRoute, initRouter, navigate, setAuthGuard, setRoleGuard } from './router.js';
 import { renderSidebar } from './components/sidebar.js';
 import { showToast } from './components/toast.js';
@@ -65,36 +65,74 @@ function renderLoginPage() {
               <label class="form-label">Email</label>
               <input class="form-input" id="auth-email" type="email" placeholder="you@carcinome.org" required />
             </div>
-            <div class="form-group">
+            <div class="form-group" id="password-group">
               <label class="form-label">Password</label>
-              <input class="form-input" id="auth-password" type="password" placeholder="••••••••" required />
+              <input class="form-input" id="auth-password" type="password" placeholder="••••••••" autocomplete="current-password" />
+              <a href="#" id="forgot-password-link" style="font-size:var(--font-xs);margin-top:4px;align-self:flex-end">Forgot password?</a>
             </div>
             <div class="form-group hidden" id="signup-name-group">
               <label class="form-label">Full Name</label>
               <input class="form-input" id="auth-name" placeholder="Your full name" />
             </div>
+            <div class="form-group hidden" id="otp-group">
+              <label class="form-label">6-digit code from your email</label>
+              <input class="form-input" id="auth-otp" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="000000" autocomplete="one-time-code" />
+              <span class="form-hint">Check your inbox and spam folder.</span>
+            </div>
             <button type="submit" class="btn btn-primary btn-lg" style="width:100%" id="auth-submit-btn">Sign In</button>
           </form>
           <p style="text-align:center;margin-top:var(--space-4);font-size:var(--font-xs);color:var(--color-text-muted)">
-            New accounts default to Caller role. Admin approval required for elevated access.
+            New accounts must be approved by an administrator before sign-in.
           </p>
         </div>
       </div>
     </div>
   `;
 
-  let isSignup = false;
+  // Auth modes:
+  //   'login'        — email + password
+  //   'signup-step1' — email + name (sends OTP)
+  //   'signup-step2' — enter OTP from email
+  //   'forgot'       — email only (sends reset link)
+  let mode = 'login';
+  let pendingSignupEmail = null;
+  let pendingSignupName = null;
 
-  // Tab switching
+  function applyMode() {
+    const isSignup = mode === 'signup-step1' || mode === 'signup-step2';
+    const isOtp    = mode === 'signup-step2';
+    const isForgot = mode === 'forgot';
+    document.getElementById('signup-name-group').classList.toggle('hidden', !isSignup || isOtp);
+    document.getElementById('otp-group').classList.toggle('hidden', !isOtp);
+    document.getElementById('password-group').classList.toggle('hidden', isSignup || isForgot);
+    document.getElementById('auth-submit-btn').textContent =
+      mode === 'login'        ? 'Sign In' :
+      mode === 'signup-step1' ? 'Send verification code' :
+      mode === 'signup-step2' ? 'Verify & create account' :
+                                'Send reset link';
+    document.querySelectorAll('#auth-tabs .tab').forEach(t => {
+      t.classList.toggle('active', (t.dataset.tab === 'signup' && isSignup) || (t.dataset.tab === 'login' && !isSignup));
+    });
+  }
+
+  // Tab switching resets mode appropriately.
   document.querySelectorAll('#auth-tabs .tab').forEach(tab => {
     tab.addEventListener('click', () => {
-      document.querySelectorAll('#auth-tabs .tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      isSignup = tab.dataset.tab === 'signup';
-      document.getElementById('signup-name-group').classList.toggle('hidden', !isSignup);
-      document.getElementById('auth-submit-btn').textContent = isSignup ? 'Create Account' : 'Sign In';
+      mode = tab.dataset.tab === 'signup' ? 'signup-step1' : 'login';
+      pendingSignupEmail = null;
+      pendingSignupName = null;
+      applyMode();
     });
   });
+
+  // Forgot password link
+  document.getElementById('forgot-password-link')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    mode = 'forgot';
+    applyMode();
+  });
+
+  applyMode();
 
   // Form submit
   document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -102,32 +140,56 @@ function renderLoginPage() {
     const email = document.getElementById('auth-email').value.trim();
     const password = document.getElementById('auth-password').value;
     const name = document.getElementById('auth-name').value.trim();
+    const otp = document.getElementById('auth-otp').value.trim();
     const btn = document.getElementById('auth-submit-btn');
 
-    if (!validateEmail(email)) { showToast('Please enter a valid email', 'warning'); return; }
+    if (!validateEmail(email) && mode !== 'signup-step2') { showToast('Please enter a valid email', 'warning'); return; }
 
     btn.disabled = true;
     btn.innerHTML = '<div class="spinner" style="margin:0 auto"></div>';
 
     try {
-      if (isSignup) {
-        if (!name) { showToast('Name is required', 'warning'); btn.disabled = false; btn.textContent = 'Create Account'; return; }
-        const pwErr = validatePassword(password);
-        if (pwErr) { showToast(pwErr, 'warning'); btn.disabled = false; btn.textContent = 'Create Account'; return; }
-        await signUp(email, password, name);
-        showToast('Account created! You can now sign in.', 'success');
-        document.querySelector('#auth-tabs .tab[data-tab="login"]').click();
+      if (mode === 'signup-step1') {
+        if (!name) { throw new Error('Full name is required'); }
+        await sendSignupOtp(email, name);
+        pendingSignupEmail = email;
+        pendingSignupName = name;
+        mode = 'signup-step2';
+        applyMode();
+        showToast('Verification code sent. Check your email.', 'success');
+      } else if (mode === 'signup-step2') {
+        if (!/^\d{6}$/.test(otp)) { throw new Error('Enter the 6-digit code from your email'); }
+        await verifySignupOtp(pendingSignupEmail || email, otp, pendingSignupName);
+        showToast('Account created. An admin must approve before you can sign in.', 'success');
+        // Reset to login mode
+        mode = 'login';
+        pendingSignupEmail = null;
+        pendingSignupName = null;
+        document.getElementById('auth-otp').value = '';
+        applyMode();
+      } else if (mode === 'forgot') {
+        await sendPasswordReset(email);
+        showToast('Password-reset link sent. Check your email.', 'success');
+        mode = 'login';
+        applyMode();
       } else {
+        // login
         await signIn(email, password);
+        console.log('[auth] signIn OK; reloading into app shell');
         showToast('Welcome back!', 'success');
-        // After sign-in, boot the app shell
-        bootApp();
+        // BULLETPROOF: force a clean reload into the dashboard. The session
+        // is now persisted in localStorage, so initAuth() on the next page
+        // load detects it and boots straight into the app shell — no SPA
+        // race conditions possible.
+        window.location.hash = '#dashboard';
+        setTimeout(() => window.location.reload(), 200);
       }
     } catch (err) {
+      console.error('[auth] form error:', err);
       showToast(err.message, 'error');
     } finally {
       btn.disabled = false;
-      btn.textContent = isSignup ? 'Create Account' : 'Sign In';
+      applyMode();  // restores the correct button label
     }
   });
 }
@@ -175,9 +237,14 @@ function renderAppShell() {
 }
 
 // ---- Boot app shell and router ----
+const APP_BUILD = '20260507c';  // bumped on every breaking deploy
 let appBooted = false;
 function bootApp() {
-  if (appBooted) return;
+  console.log('[boot] bootApp called, appBooted=' + appBooted + ', hash=' + window.location.hash);
+  if (appBooted) {
+    console.log('[boot] already booted — skip');
+    return;
+  }
   appBooted = true;
   // Set the target hash BEFORE mounting the shell so the router's first
   // read doesn't trigger the login handler (which would overwrite the shell).
@@ -185,12 +252,24 @@ function bootApp() {
   if (!hash || hash === 'login') {
     history.replaceState(null, '', '#dashboard');
   }
-  renderAppShell();
-  initRouter();
+  try {
+    renderAppShell();
+    console.log('[boot] app shell mounted');
+    initRouter();
+    console.log('[boot] router initialized');
+  } catch (e) {
+    console.error('[boot] FAILED to render shell:', e);
+    appBooted = false;
+    document.getElementById('app').innerHTML =
+      '<div class="boot-screen"><p class="boot-msg boot-error">Boot error: ' +
+      (e && e.message ? e.message : 'unknown') +
+      '</p><button class="boot-link" onclick="location.reload()">Reload</button></div>';
+  }
 }
 
 // ---- Initialize App ----
 async function init() {
+  console.log('[init] starting Patient Navigator build ' + APP_BUILD);
   if (!checkConfig()) return;
 
   // Register routes
@@ -223,7 +302,9 @@ async function init() {
   });
 
   // Check for existing session
+  console.log('[init] checking existing session…');
   const session = await initAuth();
+  console.log('[init] session?', !!session);
   if (session) {
     bootApp();
   } else {
