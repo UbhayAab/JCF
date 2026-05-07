@@ -66,10 +66,17 @@ async function loadCalls() {
   const tableBody = document.getElementById('calls-table-body');
 
   try {
+    const currentUser = getCurrentUser();
+    const isAdminUser = isManagerOrAdmin();
+
     let query = sb.from('call_logs')
       .select('*, patients(patient_code, full_name, cancer_type), profiles:caller_id(full_name), reviewer:qa_reviewer_id(full_name)', { count: 'exact' })
       .order('call_date', { ascending: false })
       .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
+
+    if (!isAdminUser) {
+      query = query.eq('caller_id', currentUser.id);
+    }
 
     if (statusFilter) query = query.eq('dial_status', statusFilter);
 
@@ -128,8 +135,22 @@ async function showCallForm(existing = null, prefill = {}) {
   // Load patients for dropdown
   const sb = getSupabase();
   let patients = [];
+  const currentUser = getCurrentUser();
+  const isAdminUser = isManagerOrAdmin();
+
+  let patientsQuery = sb.from('patients').select('id, patient_code, full_name').eq('is_active', true).order('full_name');
+  
+  if (!isAdminUser) {
+    const { data: tm } = await sb.from('team_members').select('id').eq('profile_id', currentUser.id).single();
+    if (tm) {
+      patientsQuery = patientsQuery.eq('assigned_to', tm.id);
+    } else {
+      patientsQuery = patientsQuery.eq('created_by', currentUser.id);
+    }
+  }
+
   try {
-    const { data } = await sb.from('patients').select('id, patient_code, full_name').eq('is_active', true).order('full_name');
+    const { data } = await patientsQuery;
     patients = data || [];
   } catch (e) { /* fallback to empty */ }
 

@@ -261,7 +261,7 @@ async function loadDueToday() {
   const sb = getSupabase();
   try {
     const now = new Date().toISOString();
-    const { data, error } = await sb
+    let query = sb
       .from('call_queue')
       .select('id, status, scheduled_for, priority, followup_strategy_notes, patients(full_name, patient_code, phone_full)')
       .in('status', ['scheduled', 'callback', 'pending'])
@@ -269,6 +269,17 @@ async function loadDueToday() {
       .order('priority', { ascending: true })
       .order('scheduled_for', { ascending: true, nullsFirst: false })
       .limit(8);
+
+    if (!isManagerOrAdmin()) {
+      const { data: tm } = await sb.from('team_members').select('id').eq('profile_id', getCurrentProfile()?.id).single();
+      if (tm) {
+        query = query.eq('assigned_to', tm.id);
+      } else {
+        query = query.eq('assigned_to', '00000000-0000-0000-0000-000000000000'); // Force empty if no team member
+      }
+    }
+
+    const { data, error } = await query;
 
     if (error) throw error;
     const el = document.getElementById('due-today');

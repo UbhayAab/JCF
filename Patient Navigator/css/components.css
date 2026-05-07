@@ -97,6 +97,8 @@
 /* ---- CARDS ---- */
 .card {
   background: var(--color-surface);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
   border: 1px solid var(--color-surface-border);
   border-radius: var(--radius-lg);
   padding: var(--space-6);
@@ -111,6 +113,8 @@
 /* Stat Card */
 .stat-card {
   background: var(--color-surface);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
   border: 1px solid var(--color-surface-border);
   border-radius: var(--radius-lg);
   padding: var(--space-5);
@@ -220,8 +224,10 @@
 }
 .modal-overlay.active { opacity: 1; pointer-events: auto; }
 .modal {
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-surface-border);
+  background: var(--glass-bg-strong);
+  backdrop-filter: blur(var(--glass-blur-strong));
+  -webkit-backdrop-filter: blur(var(--glass-blur-strong));
+  border: 1px solid var(--glass-border-light);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-xl);
   width: 100%; max-width: 560px; max-height: 90vh; overflow-y: auto;
@@ -261,7 +267,7 @@
 
 /* ---- LOADING ---- */
 .skeleton {
-  background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+  background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.4s infinite;
   border-radius: var(--radius-md);

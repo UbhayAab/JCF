@@ -177,10 +177,9 @@ function renderLoginPage() {
         await signIn(email, password);
         console.log('[auth] signIn OK; mounting app shell');
         showToast('Welcome back!', 'success');
-        // Mount the app shell inline. The onAuthStateChange listener may
-        // also fire SIGNED_IN and call bootApp() — that's fine, the
-        // appBooted guard makes the second call a no-op.
+        // Mount the app shell inline.
         bootApp();
+        navigate('dashboard');
       }
     } catch (err) {
       console.error('[auth] form error:', err);
@@ -298,7 +297,9 @@ async function init() {
       appBooted = false;
       renderLoginPage();
     } else if (event === 'SIGNED_IN' && session && !appBooted) {
-      await initAuth();
+      if (!getCurrentUser()) {
+        await initAuth();
+      }
       bootApp();
     }
   });

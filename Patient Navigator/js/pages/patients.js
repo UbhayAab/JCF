@@ -117,10 +117,24 @@ async function loadPatients() {
   const tableBody = document.getElementById('patients-table-body');
 
   try {
+    const currentUser = getCurrentUser();
+    const isAdminUser = isAdmin() || isManagerOrAdmin();
+    
     let query = sb.from('patients').select('*, profiles:created_by(full_name)', { count: 'exact' })
       .eq('is_active', true)
       .order('created_at', { ascending: false })
       .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
+
+    if (!isAdminUser) {
+      // Get team member ID for the current user
+      const { data: tm } = await sb.from('team_members').select('id').eq('profile_id', currentUser.id).single();
+      if (tm) {
+        query = query.eq('assigned_to', tm.id);
+      } else {
+        // If they aren't a team member, they shouldn't see any assigned patients, just ones they created maybe?
+        query = query.eq('created_by', currentUser.id);
+      }
+    }
 
     if (search) {
       query = query.or(`full_name.ilike.%${search}%,patient_code.ilike.%${search}%,cancer_type.ilike.%${search}%,city.ilike.%${search}%`);

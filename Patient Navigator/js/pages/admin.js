@@ -226,7 +226,7 @@ async function loadUsers() {
                 <td><strong class="text-primary">${sanitize(u.full_name)}</strong></td>
                 <td class="text-muted">${u.id.slice(0,8)}...</td>
                 <td>${getRoleBadge(u.role)}</td>
-                <td>${u.is_active ? '<span class="badge badge-success badge-dot">Active</span>' : '<span class="badge badge-danger badge-dot">Inactive</span>'}</td>
+                <td>${u.is_active ? '<span class="badge badge-success badge-dot">Active</span>' : '<span class="badge badge-warning badge-dot">Pending/Inactive</span>'}</td>
                 <td>${formatDateTime(u.created_at)}</td>
                 <td>
                   <select class="form-select btn-sm" style="width:auto;height:30px;font-size:var(--font-xs)" data-user-id="${u.id}" data-action="role">
@@ -238,8 +238,8 @@ async function loadUsers() {
                     <option value="manager" ${u.role === 'manager' ? 'selected' : ''}>Manager</option>
                     <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
                   </select>
-                  <button class="btn btn-ghost btn-sm" data-user-id="${u.id}" data-action="toggle" data-active="${u.is_active}" title="${u.is_active ? 'Deactivate' : 'Activate'}">
-                    ${u.is_active ? '🔒' : '🔓'}
+                  <button class="btn btn-ghost btn-sm" data-user-id="${u.id}" data-action="toggle" data-active="${u.is_active}" title="${u.is_active ? 'Deactivate' : 'Approve / Activate'}">
+                    ${u.is_active ? '🔒' : '✅'}
                   </button>
                 </td>
               </tr>
