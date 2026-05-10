@@ -1,9 +1,9 @@
 // ============================================================
-// Patient Navigator — Admin Page v2 (Users + Invite + Audit)
+// Patient Navigator — Admin Page v3 (Users + Invite + Audit + Team Hierarchy)
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
-import { isAdmin, signUp } from '../auth.js';
+import { isAdmin, isManagerOrAdmin, signUp } from '../auth.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal } from '../components/modal.js';
 import { formatDateTime, capitalize, getRoleBadge } from '../utils/formatters.js';
@@ -49,14 +49,25 @@ export async function renderAdmin(container, params) {
 }
 
 // ---- Invite User Modal ----
-function showInviteModal() {
+async function showInviteModal() {
+  const sb = getSupabase();
+
+  // Load available managers for the dropdown
+  let managerOptions = '';
+  try {
+    const { data: managers } = await sb.rpc('get_available_managers');
+    managerOptions = (managers || []).map(m =>
+      `<option value="${m.id}">${sanitize(m.full_name)} (${m.role})</option>`
+    ).join('');
+  } catch (e) { /* non-critical */ }
+
   const formContent = document.createElement('div');
   formContent.innerHTML = `
     <form id="invite-form">
       <div class="consent-banner" style="background:rgba(6,182,212,0.06);border-color:rgba(6,182,212,0.15)">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--color-primary-400);flex-shrink:0;margin-top:2px"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
         <p style="color:var(--color-text-secondary);margin:0;font-size:var(--font-sm)">
-          Create a new user account with a pre-assigned role. Share the temporary password securely — the user should change it on first login.
+          Create a new user account. The user will sign in with this email and temporary password.
         </p>
       </div>
       <div class="form-group">
@@ -81,13 +92,20 @@ function showInviteModal() {
           </select>
         </div>
         <div class="form-group">
-          <label class="form-label">Temporary Password <span class="required">*</span></label>
-          <div class="flex gap-2">
-            <input class="form-input" id="inv-password" type="text" value="" style="flex:1" />
-            <button type="button" class="btn btn-secondary btn-sm" id="inv-gen-pw" title="Generate password">🔑</button>
-          </div>
-          <span class="form-hint">Min 8 chars, 1 uppercase, 1 number, 1 special</span>
+          <label class="form-label">Manager (optional)</label>
+          <select class="form-select" id="inv-manager">
+            <option value="">No manager</option>
+            ${managerOptions}
+          </select>
         </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Temporary Password <span class="required">*</span></label>
+        <div class="flex gap-2">
+          <input class="form-input" id="inv-password" type="text" value="" style="flex:1" />
+          <button type="button" class="btn btn-secondary btn-sm" id="inv-gen-pw" title="Generate password">&#128273;</button>
+        </div>
+        <span class="form-hint">Min 8 chars, 1 uppercase, 1 number, 1 special</span>
       </div>
       <div class="form-actions">
         <button type="button" class="btn btn-secondary" id="inv-cancel">Cancel</button>
@@ -100,8 +118,7 @@ function showInviteModal() {
 
   // Generate password
   formContent.querySelector('#inv-gen-pw').addEventListener('click', () => {
-    const pw = generatePassword();
-    formContent.querySelector('#inv-password').value = pw;
+    formContent.querySelector('#inv-password').value = generatePassword();
   });
   // Auto-generate on open
   formContent.querySelector('#inv-password').value = generatePassword();
@@ -113,6 +130,7 @@ function showInviteModal() {
     const email = formContent.querySelector('#inv-email').value.trim();
     const name = formContent.querySelector('#inv-name').value.trim();
     const role = formContent.querySelector('#inv-role').value;
+    const managerId = formContent.querySelector('#inv-manager').value || null;
     const password = formContent.querySelector('#inv-password').value;
     const submitBtn = formContent.querySelector('#inv-submit');
 
@@ -125,27 +143,25 @@ function showInviteModal() {
     submitBtn.innerHTML = '<div class="spinner" style="margin:0 auto"></div>';
 
     try {
-      // 1. Create the auth user via signUp
-      await signUp(email, password, name);
+      // 1. Create the auth user via signUp — returns data.user.id
+      const { user } = await signUp(email, password, name);
+      const userId = user?.id;
+      if (!userId) throw new Error('User creation did not return an ID');
 
-      // 2. Update their role if not default 'caller'
-      if (role !== 'caller') {
-        const sb = getSupabase();
-        // Small delay to ensure the profile trigger has fired
-        await new Promise(r => setTimeout(r, 1000));
+      // 2. Wait for the on-signup trigger to create the profile row
+      await new Promise(r => setTimeout(r, 800));
 
-        // Find the new user's profile by matching the name (since we can't get the auth ID directly)
-        const { data: profiles } = await sb.from('profiles').select('id, full_name').eq('full_name', name).order('created_at', { ascending: false }).limit(1);
-        if (profiles && profiles.length > 0) {
-          const { error } = await sb.rpc('update_user_role', { target_user_id: profiles[0].id, new_role: role });
-          if (error) console.warn('Role update failed:', error.message);
-        }
-      }
+      // 3. Onboard with role + optional manager
+      await sb.rpc('onboard_team_member', {
+        p_user_id: userId,
+        p_role: role,
+        p_manager_id: managerId || null,
+      });
 
       showToast(`Account created for ${name}!`, 'success');
-
-      // Show credentials in a follow-up modal
       closeModal();
+
+      // Show credentials
       setTimeout(() => {
         const credsContent = document.createElement('div');
         credsContent.innerHTML = `
@@ -170,7 +186,7 @@ function showInviteModal() {
               </div>
             </div>
             <p class="text-muted" style="margin-top:var(--space-4);font-size:var(--font-xs)">
-              ⚠️ Ask the user to change their password after first login.
+              Ask the user to change their password after first login.
             </p>
             <div class="form-actions" style="justify-content:center;border:none;margin-top:var(--space-4)">
               <button class="btn btn-primary" id="creds-done">Done</button>
@@ -202,31 +218,52 @@ function generatePassword() {
     const all = upper + lower + nums;
     pw += all[Math.floor(Math.random() * all.length)];
   }
-  // Shuffle
   return pw.split('').sort(() => Math.random() - 0.5).join('');
 }
 
-// ---- Load Users ----
+// ---- Load Users (with manager column) ----
 async function loadUsers() {
   const sb = getSupabase();
   const content = document.getElementById('admin-content');
   content.innerHTML = Array(5).fill('<div class="skeleton skeleton-row"></div>').join('');
 
   try {
-    const { data, error } = await sb.from('profiles').select('*').order('created_at', { ascending: true });
+    // Fetch profiles + manager names in one go
+    const { data: profiles, error } = await sb
+      .from('profiles')
+      .select('*, manager:manager_id(id, full_name, role)')
+      .order('created_at', { ascending: true });
+
     if (error) throw error;
+
+    // Load available managers for the reassign dropdown
+    const { data: managers } = await sb.rpc('get_available_managers');
+    const managerOpts = (managers || []).map(m =>
+      `<option value="${m.id}">${sanitize(m.full_name)} (${m.role})</option>`
+    ).join('');
 
     content.innerHTML = `
       <div class="table-container">
         <table class="data-table">
-          <thead><tr><th>Name</th><th>Email/ID</th><th>Role</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
+          <thead><tr>
+            <th>Name</th><th>Email/ID</th><th>Role</th><th>Manager</th><th>Status</th><th>Joined</th><th>Actions</th>
+          </tr></thead>
           <tbody>
-            ${(data || []).map(u => `
+            ${(profiles || []).map(u => {
+              const mgrName = u.manager ? sanitize(u.manager.full_name) : '—';
+              return `
               <tr class="animate-fade-in">
                 <td><strong class="text-primary">${sanitize(u.full_name)}</strong></td>
-                <td class="text-muted">${u.id.slice(0,8)}...</td>
+                <td class="text-muted">${u.id.slice(0, 8)}...</td>
                 <td>${getRoleBadge(u.role)}</td>
-                <td>${u.is_active ? '<span class="badge badge-success badge-dot">Active</span>' : '<span class="badge badge-warning badge-dot">Pending/Inactive</span>'}</td>
+                <td>
+                  <span class="text-muted" style="font-size:var(--font-xs)" id="mgr-label-${u.id}">${mgrName}</span>
+                  <select class="form-select btn-sm manager-select" style="width:auto;height:28px;font-size:var(--font-xs);margin-top:2px" data-user-id="${u.id}" id="mgr-select-${u.id}">
+                    <option value="">No manager</option>
+                    ${managerOpts}
+                  </select>
+                </td>
+                <td>${u.is_active ? '<span class="badge badge-success badge-dot">Active</span>' : '<span class="badge badge-warning badge-dot">Pending</span>'}</td>
                 <td>${formatDateTime(u.created_at)}</td>
                 <td>
                   <select class="form-select btn-sm" style="width:auto;height:30px;font-size:var(--font-xs)" data-user-id="${u.id}" data-action="role">
@@ -239,11 +276,11 @@ async function loadUsers() {
                     <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
                   </select>
                   <button class="btn btn-ghost btn-sm" data-user-id="${u.id}" data-action="toggle" data-active="${u.is_active}" title="${u.is_active ? 'Deactivate' : 'Approve / Activate'}">
-                    ${u.is_active ? '🔒' : '✅'}
+                    ${u.is_active ? '&#128274;' : '&#9989;'}
                   </button>
                 </td>
               </tr>
-            `).join('')}
+            `}).join('')}
           </tbody>
         </table>
       </div>
@@ -256,6 +293,28 @@ async function loadUsers() {
           const { error } = await sb.rpc('update_user_role', { target_user_id: sel.dataset.userId, new_role: sel.value });
           if (error) throw error;
           showToast('Role updated', 'success');
+        } catch (err) {
+          showToast(err.message, 'error');
+          loadUsers();
+        }
+      });
+    });
+
+    // Manager reassign handlers
+    content.querySelectorAll('.manager-select').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        const userId = sel.dataset.userId;
+        const newManagerId = sel.value || null;
+        try {
+          const { error } = await sb.rpc('set_user_manager', {
+            p_user_id: userId,
+            p_manager_id: newManagerId || null,
+          });
+          if (error) throw error;
+          const label = document.getElementById('mgr-label-' + userId);
+          const selectedOpt = sel.selectedOptions[0];
+          if (label) label.textContent = newManagerId ? selectedOpt.textContent : '—';
+          showToast('Manager updated', 'success');
         } catch (err) {
           showToast(err.message, 'error');
           loadUsers();
@@ -310,7 +369,7 @@ async function loadAuditLog() {
                 <td>${a.profiles?.full_name || '—'}</td>
                 <td><span class="badge ${a.action === 'DELETE' ? 'badge-danger' : a.action === 'INSERT' ? 'badge-success' : 'badge-info'}">${a.action}</span></td>
                 <td>${a.table_name}</td>
-                <td class="text-muted">${(a.record_id || '').slice(0,8)}...</td>
+                <td class="text-muted">${(a.record_id || '').slice(0, 8)}...</td>
               </tr>
             `).join('')}
           </tbody>

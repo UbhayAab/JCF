@@ -238,7 +238,7 @@ function renderAppShell() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20260507f';  // bumped on every breaking deploy
+const APP_BUILD = '20260510a';  // bumped on every breaking deploy
 let appBooted = false;
 function bootApp() {
   console.log('[boot] bootApp called, appBooted=' + appBooted + ', hash=' + window.location.hash);

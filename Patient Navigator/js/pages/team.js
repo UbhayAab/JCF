@@ -1,14 +1,14 @@
 // ============================================================
-// Patient Navigator — Team & Queue Management
-// Admin page for managing callers and call queue
+// Patient Navigator — Team & Queue Management v2
+// Shows profile-based team hierarchy. Manager can invite team members.
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
-import { isManagerOrAdmin } from '../auth.js';
+import { isAdmin, isManagerOrAdmin, getCurrentProfile, signUp } from '../auth.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal } from '../components/modal.js';
-import { formatDateTime, capitalize } from '../utils/formatters.js';
-import { sanitize } from '../utils/validators.js';
+import { formatDateTime, capitalize, getRoleBadge } from '../utils/formatters.js';
+import { sanitize, validateEmail, validatePassword } from '../utils/validators.js';
 
 export async function renderTeam(container) {
   if (!isManagerOrAdmin()) {
@@ -24,9 +24,9 @@ export async function renderTeam(container) {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
           Add All to Queue
         </button>
-        <button class="btn btn-primary" id="add-team-btn">
+        <button class="btn btn-primary" id="invite-team-btn">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
-          Add Team Member
+          Invite Team Member
         </button>
       </div>
     </div>
@@ -41,7 +41,7 @@ export async function renderTeam(container) {
     </div>
   `;
 
-  document.getElementById('add-team-btn')?.addEventListener('click', showAddTeamMemberModal);
+  document.getElementById('invite-team-btn')?.addEventListener('click', showInviteTeamMemberModal);
   document.getElementById('bulk-queue-btn')?.addEventListener('click', bulkAddToQueue);
 
   document.querySelectorAll('#team-tabs .tab').forEach(tab => {
@@ -56,161 +56,261 @@ export async function renderTeam(container) {
   await loadTeamMembers();
 }
 
+// ---- Load Team Members (from profiles, team-tree aware) ----
 async function loadTeamMembers() {
   const sb = getSupabase();
   const content = document.getElementById('team-content');
+  const profile = getCurrentProfile();
 
   try {
-    const { data, error } = await sb.from('team_members').select('*').order('name');
+    const { data, error } = await sb.rpc('get_team_tree');
     if (error) throw error;
 
     if (!data || data.length === 0) {
-      content.innerHTML = '<div class="empty-state"><h3>No team members</h3><p>Add your first team member to get started.</p></div>';
+      content.innerHTML = '<div class="empty-state"><h3>No team members</h3><p>Invite your first team member to get started.</p></div>';
       return;
     }
 
+    // Build a map of who reports to whom for display
+    const byId = {};
+    data.forEach(p => { byId[p.id] = p; });
+
+    // Count direct reports for each person
+    const directReports = {};
+    data.forEach(p => {
+      if (p.manager_id && byId[p.manager_id]) {
+        directReports[p.manager_id] = (directReports[p.manager_id] || 0) + 1;
+      }
+    });
+
     content.innerHTML = `
       <div class="team-grid">
-        ${data.map(tm => `
-          <div class="card team-card animate-fade-in">
-            <div class="flex justify-between items-start">
-              <div>
-                <div class="font-medium text-primary" style="font-size:var(--font-lg)">${sanitize(tm.name)}</div>
-                <div class="text-muted" style="font-size:var(--font-sm)">${tm.phone || 'No phone'}</div>
-                ${tm.email ? `<div class="text-muted" style="font-size:var(--font-xs)">${tm.email}</div>` : ''}
+        ${data.map(p => {
+          const mgrName = p.manager_id && byId[p.manager_id] ? byId[p.manager_id].full_name : null;
+          const reportCount = directReports[p.id] || 0;
+          return `
+            <div class="card team-card animate-fade-in">
+              <div class="flex justify-between items-start">
+                <div>
+                  <div class="font-medium text-primary" style="font-size:var(--font-lg)">${sanitize(p.full_name)}</div>
+                  <div class="text-muted" style="font-size:var(--font-sm)">${getRoleBadge(p.role)}</div>
+                  ${mgrName ? `<div class="text-muted" style="font-size:var(--font-xs)">Reports to: ${sanitize(mgrName)}</div>` : ''}
+                  ${reportCount > 0 ? `<div class="text-muted" style="font-size:var(--font-xs)">Team size: ${reportCount}</div>` : ''}
+                </div>
+                <span class="badge ${p.is_active ? 'badge-success' : 'badge-danger'} badge-dot">${p.is_active ? 'Active' : 'Inactive'}</span>
               </div>
-              <span class="badge ${tm.is_active ? 'badge-success' : 'badge-danger'} badge-dot">${tm.is_active ? 'Active' : 'Inactive'}</span>
-            </div>
-            <div class="team-stats">
-              <div>
-                <div class="stat-value" style="font-size:var(--font-xl)">${tm.calls_today || 0}</div>
-                <div class="text-muted" style="font-size:var(--font-xs)">Today</div>
-              </div>
-              <div>
-                <div class="stat-value" style="font-size:var(--font-xl)">${tm.calls_total || 0}</div>
-                <div class="text-muted" style="font-size:var(--font-xs)">Total</div>
+              <div class="team-stats">
+                <div>
+                  <div class="text-muted" style="font-size:var(--font-xs)">Joined</div>
+                  <div class="font-medium" style="font-size:var(--font-sm)">${formatDateTime(p.created_at)}</div>
+                </div>
               </div>
             </div>
-            <div class="flex gap-2" style="margin-top:var(--space-3)">
-              <button class="btn btn-ghost btn-sm flex-1" data-edit-team="${tm.id}" data-name="${tm.name}" data-phone="${tm.phone || ''}" data-email="${tm.email || ''}">Edit</button>
-              <button class="btn btn-ghost btn-sm" data-toggle-team="${tm.id}" data-active="${tm.is_active}" style="color:${tm.is_active ? 'var(--color-danger)' : 'var(--color-success)'}">${tm.is_active ? 'Deactivate' : 'Activate'}</button>
-            </div>
-          </div>
-        `).join('')}
+          `;
+        }).join('')}
       </div>
     `;
-
-    // Edit handlers
-    content.querySelectorAll('[data-edit-team]').forEach(btn => {
-      btn.addEventListener('click', () => showEditTeamMemberModal(btn.dataset.editTeam, btn.dataset.name, btn.dataset.phone, btn.dataset.email));
-    });
-
-    // Toggle handlers
-    content.querySelectorAll('[data-toggle-team]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const newStatus = btn.dataset.active !== 'true';
-        try {
-          await sb.from('team_members').update({ is_active: newStatus, updated_at: new Date().toISOString() }).eq('id', btn.dataset.toggleTeam);
-          showToast(`Team member ${newStatus ? 'activated' : 'deactivated'}`, 'success');
-          loadTeamMembers();
-        } catch (err) { showToast(err.message, 'error'); }
-      });
-    });
   } catch (err) {
     console.error('Load team error:', err);
-    showToast('Failed to load team members', 'error');
+    showToast('Failed to load team members: ' + err.message, 'error');
   }
 }
 
-function showAddTeamMemberModal() {
+// ---- Invite Team Member Modal (manager creates a subordinate) ----
+async function showInviteTeamMemberModal() {
+  const sb = getSupabase();
+  const profile = getCurrentProfile();
+  const isAdminUser = isAdmin();
+
+  // Build role options based on who is inviting
+  const subordinateRoles = [
+    { value: 'caller', label: 'Caller' },
+    { value: 'caregiver_mentor', label: 'Caregiver Mentor' },
+    { value: 'therapist', label: 'Therapist' },
+    { value: 'nutritionist', label: 'Nutritionist' },
+    { value: 'content', label: 'Content' },
+  ];
+  // Admin can also create managers
+  const allRoles = [
+    ...subordinateRoles,
+    { value: 'manager', label: 'Manager' },
+    { value: 'admin', label: 'Admin' },
+  ];
+  const roleOptions = (isAdminUser ? allRoles : subordinateRoles)
+    .map(r => `<option value="${r.value}">${r.label}</option>`)
+    .join('');
+
   const formContent = document.createElement('div');
   formContent.innerHTML = `
-    <form id="add-team-form">
+    <form id="invite-team-form">
+      <div class="consent-banner" style="background:rgba(6,182,212,0.06);border-color:rgba(6,182,212,0.15)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--color-primary-400);flex-shrink:0;margin-top:2px"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        <p style="color:var(--color-text-secondary);margin:0;font-size:var(--font-sm)">
+          ${isAdminUser
+            ? 'Create a new account and assign a role. You can optionally assign them to a manager.'
+            : 'Create a team member account. They will automatically report to you.'}
+        </p>
+      </div>
       <div class="form-group">
-        <label class="form-label">Name <span class="required">*</span></label>
+        <label class="form-label">Email <span class="required">*</span></label>
+        <input class="form-input" id="tm-email" type="email" placeholder="user@carcinome.org" required />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Full Name <span class="required">*</span></label>
         <input class="form-input" id="tm-name" placeholder="Full name" required />
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label class="form-label">Phone</label>
-          <input class="form-input" id="tm-phone" placeholder="10-digit number" />
+          <label class="form-label">Role</label>
+          <select class="form-select" id="tm-role">${roleOptions}</select>
         </div>
         <div class="form-group">
-          <label class="form-label">Email</label>
-          <input class="form-input" id="tm-email" type="email" placeholder="email@example.com" />
+          <label class="form-label">Temporary Password <span class="required">*</span></label>
+          <div class="flex gap-2">
+            <input class="form-input" id="tm-password" type="text" value="" style="flex:1" />
+            <button type="button" class="btn btn-secondary btn-sm" id="tm-gen-pw" title="Generate password">&#128273;</button>
+          </div>
+          <span class="form-hint">Min 8 chars, 1 uppercase, 1 number, 1 special</span>
         </div>
       </div>
-      <div class="form-actions">
-        <button type="button" class="btn btn-secondary" onclick="document.querySelector('.modal-overlay')?.click()">Cancel</button>
-        <button type="submit" class="btn btn-primary">Add Member</button>
-      </div>
-    </form>
-  `;
 
-  showModal({ title: 'Add Team Member', content: formContent });
-
-  formContent.querySelector('#add-team-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const name = formContent.querySelector('#tm-name').value.trim();
-    const phone = formContent.querySelector('#tm-phone').value.trim() || null;
-    const email = formContent.querySelector('#tm-email').value.trim() || null;
-
-    if (!name) { showToast('Name is required', 'warning'); return; }
-
-    try {
-      const sb = getSupabase();
-      await sb.from('team_members').insert({ name, phone, email });
-      showToast(`${name} added to team!`, 'success');
-      closeModal();
-      loadTeamMembers();
-    } catch (err) { showToast(err.message, 'error'); }
-  });
-}
-
-function showEditTeamMemberModal(id, name, phone, email) {
-  const formContent = document.createElement('div');
-  formContent.innerHTML = `
-    <form id="edit-team-form">
+      ${isAdminUser ? `
       <div class="form-group">
-        <label class="form-label">Name <span class="required">*</span></label>
-        <input class="form-input" id="tm-edit-name" value="${sanitize(name)}" required />
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Phone</label>
-          <input class="form-input" id="tm-edit-phone" value="${sanitize(phone)}" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">Email</label>
-          <input class="form-input" id="tm-edit-email" type="email" value="${sanitize(email)}" />
-        </div>
-      </div>
+        <label class="form-label">Assign to Manager (optional)</label>
+        <select class="form-select" id="tm-manager">
+          <option value="">No manager (or I'll assign later)</option>
+        </select>
+      </div>` : ''}
+
       <div class="form-actions">
-        <button type="button" class="btn btn-secondary" onclick="document.querySelector('.modal-overlay')?.click()">Cancel</button>
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="button" class="btn btn-secondary" id="tm-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="tm-submit">Create Account</button>
       </div>
     </form>
   `;
 
-  showModal({ title: 'Edit Team Member', content: formContent });
+  showModal({ title: 'Invite Team Member', content: formContent, size: 'lg' });
 
-  formContent.querySelector('#edit-team-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
+  // Load manager dropdown for admin
+  if (isAdminUser) {
     try {
-      const sb = getSupabase();
-      await sb.from('team_members').update({
-        name: formContent.querySelector('#tm-edit-name').value.trim(),
-        phone: formContent.querySelector('#tm-edit-phone').value.trim() || null,
-        email: formContent.querySelector('#tm-edit-email').value.trim() || null,
-        updated_at: new Date().toISOString(),
-      }).eq('id', id);
-      showToast('Team member updated', 'success');
+      const { data: managers } = await sb.rpc('get_available_managers');
+      const managerOpts = (managers || []).map(m =>
+        `<option value="${m.id}">${sanitize(m.full_name)} (${m.role})</option>`
+      ).join('');
+      const mgrSelect = formContent.querySelector('#tm-manager');
+      if (mgrSelect) mgrSelect.innerHTML += managerOpts;
+    } catch (e) { /* non-critical */ }
+  }
+
+  // Generate password
+  formContent.querySelector('#tm-gen-pw').addEventListener('click', () => {
+    formContent.querySelector('#tm-password').value = generatePassword();
+  });
+  formContent.querySelector('#tm-password').value = generatePassword();
+
+  formContent.querySelector('#tm-cancel').addEventListener('click', closeModal);
+
+  formContent.querySelector('#invite-team-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = formContent.querySelector('#tm-email').value.trim();
+    const name = formContent.querySelector('#tm-name').value.trim();
+    const role = formContent.querySelector('#tm-role').value;
+    const password = formContent.querySelector('#tm-password').value;
+    const submitBtn = formContent.querySelector('#tm-submit');
+
+    if (!validateEmail(email)) { showToast('Please enter a valid email', 'warning'); return; }
+    if (!name) { showToast('Full name is required', 'warning'); return; }
+    const pwErr = validatePassword(password);
+    if (pwErr) { showToast(pwErr, 'warning'); return; }
+
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<div class="spinner" style="margin:0 auto"></div>';
+
+    try {
+      // 1. Create the auth user
+      const { user } = await signUp(email, password, name);
+      const userId = user?.id;
+      if (!userId) throw new Error('User creation did not return an ID');
+
+      // 2. Wait for profile trigger
+      await new Promise(r => setTimeout(r, 800));
+
+      // 3. Onboard with role + manager
+      const managerId = isAdminUser
+        ? (formContent.querySelector('#tm-manager')?.value || null)
+        : profile.id; // Managers auto-assign to themselves
+
+      await sb.rpc('onboard_team_member', {
+        p_user_id: userId,
+        p_role: role,
+        p_manager_id: managerId || null,
+      });
+
+      showToast(`Team member ${name} created!`, 'success');
       closeModal();
-      loadTeamMembers();
-    } catch (err) { showToast(err.message, 'error'); }
+
+      // Show credentials
+      setTimeout(() => {
+        const credsContent = document.createElement('div');
+        credsContent.innerHTML = `
+          <div style="text-align:center;padding:var(--space-4)">
+            <div style="width:64px;height:64px;border-radius:var(--radius-full);background:rgba(16,185,129,0.1);display:flex;align-items:center;justify-content:center;margin:0 auto var(--space-4)">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" stroke-width="2"><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            </div>
+            <h3 style="margin-bottom:var(--space-2)">Team Member Created!</h3>
+            <p class="text-muted" style="margin-bottom:var(--space-6)">Share these credentials securely:</p>
+            <div class="card" style="text-align:left;background:var(--color-bg-tertiary)">
+              <div class="form-group" style="margin-bottom:var(--space-2)">
+                <label class="form-label" style="font-size:var(--font-xs)">Email</label>
+                <code class="text-primary">${email}</code>
+              </div>
+              <div class="form-group" style="margin-bottom:var(--space-2)">
+                <label class="form-label" style="font-size:var(--font-xs)">Password</label>
+                <code class="text-primary">${password}</code>
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label class="form-label" style="font-size:var(--font-xs)">Role</label>
+                <span>${getRoleBadge(role)}</span>
+              </div>
+            </div>
+            <div class="form-actions" style="justify-content:center;border:none;margin-top:var(--space-4)">
+              <button class="btn btn-primary" id="creds-done">Done</button>
+            </div>
+          </div>
+        `;
+        showModal({ title: '', content: credsContent, size: 'lg' });
+        credsContent.querySelector('#creds-done')?.addEventListener('click', () => {
+          closeModal();
+          loadTeamMembers();
+        });
+      }, 300);
+
+    } catch (err) {
+      showToast('Failed: ' + err.message, 'error');
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Create Account';
+    }
   });
 }
 
+function generatePassword() {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghjkmnpqrstuvwxyz';
+  const nums = '23456789';
+  const special = '@#$!%&';
+  let pw = '';
+  pw += upper[Math.floor(Math.random() * upper.length)];
+  pw += special[Math.floor(Math.random() * special.length)];
+  pw += nums[Math.floor(Math.random() * nums.length)];
+  for (let i = 0; i < 7; i++) {
+    const all = upper + lower + nums;
+    pw += all[Math.floor(Math.random() * all.length)];
+  }
+  return pw.split('').sort(() => Math.random() - 0.5).join('');
+}
+
+// ---- Bulk Add to Queue ----
 async function bulkAddToQueue() {
   const sb = getSupabase();
   const btn = document.getElementById('bulk-queue-btn');
@@ -218,7 +318,6 @@ async function bulkAddToQueue() {
   btn.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-width:2px;display:inline-block"></div> Adding...';
 
   try {
-    // Get all active patients not already in pending queue
     const { data: existing } = await sb.from('call_queue').select('patient_id').in('status', ['pending', 'in_progress']);
     const existingIds = new Set((existing || []).map(e => e.patient_id));
 
@@ -240,15 +339,13 @@ async function bulkAddToQueue() {
       status: 'pending',
     }));
 
-    // Insert in batches of 50
     for (let i = 0; i < entries.length; i += 50) {
       const batch = entries.slice(i, i + 50);
       await sb.from('call_queue').insert(batch);
     }
 
     showToast(`${toAdd.length} patients added to call queue!`, 'success');
-    
-    // Switch to queue tab
+
     document.querySelectorAll('#team-tabs .tab').forEach(t => t.classList.remove('active'));
     document.querySelector('#team-tabs .tab[data-tab="queue"]')?.classList.add('active');
     loadQueue();
@@ -261,6 +358,7 @@ async function bulkAddToQueue() {
   }
 }
 
+// ---- Load Queue ----
 async function loadQueue() {
   const sb = getSupabase();
   const content = document.getElementById('team-content');
@@ -278,23 +376,9 @@ async function loadQueue() {
       return;
     }
 
-    // Group by status
-    const statusGroups = { pending: [], in_progress: [], callback: [], completed: [], skipped: [] };
-    data.forEach(q => {
-      (statusGroups[q.status] || statusGroups.pending).push(q);
-    });
-
-    const statusColors = { pending: 'warning', in_progress: 'info', callback: 'primary', completed: 'success', skipped: 'danger' };
+    const statusColors = { pending: 'warning', in_progress: 'info', callback: 'primary', scheduled: 'primary', completed: 'success', skipped: 'danger' };
 
     content.innerHTML = `
-      <div class="flex gap-4 mb-4" style="flex-wrap:wrap">
-        ${Object.entries(statusGroups).map(([status, items]) => `
-          <div class="card" style="min-width:120px;text-align:center;padding:var(--space-3)">
-            <div class="stat-value">${items.length}</div>
-            <span class="badge badge-${statusColors[status] || 'neutral'}">${capitalize(status.replace('_', ' '))}</span>
-          </div>
-        `).join('')}
-      </div>
       <div class="flex gap-2 mb-4">
         <button class="btn btn-danger btn-sm" id="clear-completed-btn">Clear Completed</button>
         <button class="btn btn-warning btn-sm" id="reset-skipped-btn">Reset Skipped</button>
@@ -307,10 +391,10 @@ async function loadQueue() {
               <tr>
                 <td><strong class="text-primary">${q.patients?.patient_code || '—'}</strong><br><small class="text-muted">${sanitize(q.patients?.full_name || '—')}</small></td>
                 <td>${q.patients?.cancer_type || '—'}</td>
-                <td><span class="badge badge-${statusColors[q.status] || 'neutral'} badge-dot">${capitalize(q.status.replace('_', ' '))}</span></td>
+                <td><span class="badge badge-${statusColors[q.status] || 'neutral'} badge-dot">${capitalize((q.status || '').replace('_', ' '))}</span></td>
                 <td>${q.team_members?.name || '—'}</td>
                 <td>${q.attempts}/${q.max_attempts}</td>
-                <td><span class="badge badge-${q.priority === 'high' ? 'danger' : q.priority === 'low' ? 'neutral' : 'warning'}">${capitalize(q.priority)}</span></td>
+                <td><span class="badge badge-${q.priority === 'high' ? 'danger' : q.priority === 'low' ? 'neutral' : 'warning'}">${capitalize(q.priority || 'medium')}</span></td>
               </tr>
             `).join('')}
           </tbody>
@@ -318,7 +402,6 @@ async function loadQueue() {
       </div>
     `;
 
-    // Clear completed
     document.getElementById('clear-completed-btn')?.addEventListener('click', async () => {
       try {
         await sb.from('call_queue').delete().eq('status', 'completed');
@@ -327,7 +410,6 @@ async function loadQueue() {
       } catch (err) { showToast(err.message, 'error'); }
     });
 
-    // Reset skipped
     document.getElementById('reset-skipped-btn')?.addEventListener('click', async () => {
       try {
         await sb.from('call_queue').update({ status: 'pending', attempts: 0, updated_at: new Date().toISOString() }).eq('status', 'skipped');
