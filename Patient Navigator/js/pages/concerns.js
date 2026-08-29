@@ -405,8 +405,8 @@ function concernCard(r) {
             ${phone ? `<a class="cg-call" href="tel:${phone.replace(/[^+\d]/g, '')}" style="padding:3px 9px;font-size:13px"
               onclick="event.stopPropagation()">${icon('phone')}<span class="tnum">${sanitizeText(phone)}</span></a>` : ''}
           </div>
-          ${reviewLine(r)}
           ${r.note ? `<p style="font:var(--t-sm);color:var(--ink-2);margin:7px 0 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${r.note}</p>` : ''}
+          ${reviewLine(r)}
           <div class="hist-meta" style="margin-top:6px">
             ${r.source === 'auto' ? 'Flagged automatically' : `Raised by ${r.raiser?.full_name || 'N/A'}`} · ${formatRelativeTime(r.created_at)}
           </div>
