@@ -1366,14 +1366,19 @@ export async function renderDocumentsTab(el, p, sb, reload) {
   el.innerHTML = '<div class="card"><div class="spinner"></div></div>';
 
   const [bRes, dRes] = await Promise.all([
+    // uploaded_at, NOT created_at. Both of these tables stamp uploaded_at and
+    // neither has created_at, so the first version of this tab rendered its
+    // error state on every patient with
+    //   column document_batches.created_at does not exist
+    // which the live browser check caught on its first run.
     sb.from('document_batches')
-      .select('id, status, page_count, note, created_at, reviewed_at')
+      .select('id, status, page_count, note, uploaded_at, reviewed_at')
       .eq('patient_id', p.id).is('deleted_at', null)
-      .order('created_at', { ascending: false }).limit(20),
+      .order('uploaded_at', { ascending: false }).limit(20),
     sb.from('patient_documents')
-      .select('id, batch_id, doc_type, document_date, page_count, created_at')
+      .select('id, batch_id, doc_type, document_date, page_count, uploaded_at')
       .eq('patient_id', p.id).is('deleted_at', null)
-      .order('created_at', { ascending: false }).limit(200),
+      .order('uploaded_at', { ascending: false }).limit(200),
   ]);
 
   // An error and an empty list look identical on screen unless this is checked,
@@ -1421,7 +1426,7 @@ export async function renderDocumentsTab(el, p, sb, reload) {
           return `<div class="doc-callout ${cls}">
             <strong>${icon('fileText')} ${b.page_count || mine.length} page(s),
               ${BATCH_STATUS[b.status] || sanitize(b.status)}</strong>
-            <p>${new Date(b.created_at).toLocaleString()}${
+            <p>${new Date(b.uploaded_at).toLocaleString()}${
               b.reviewed_at ? ' &middot; reviewed ' + new Date(b.reviewed_at).toLocaleDateString() : ''}</p>
             ${b.note ? `<p class="form-hint">${sanitize(b.note)}</p>` : ''}
             ${mine.length ? `<ul style="margin:6px 0 0 18px">${mine.map((d) =>
