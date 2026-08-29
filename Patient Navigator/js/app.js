@@ -20,6 +20,7 @@ import { renderIntake } from './pages/intake.js';
 import { renderNutrition } from './pages/nutrition.js';
 import { renderLeaderboard } from './pages/leaderboard.js';
 import { renderConcerns } from './pages/concerns.js';
+import { renderBrief } from './pages/brief.js';
 import { renderSessions } from './pages/sessions.js';
 import { renderResources } from './pages/resources.js';
 import { renderExports } from './pages/exports.js';
@@ -451,7 +452,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20260829a';  // bumped on every breaking deploy
+const APP_BUILD = '20260830a';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -495,6 +496,9 @@ async function init() {
   // Register routes
   registerRoute('login', () => renderLoginPage(), { requiresAuth: false });
   registerRoute('dashboard', (c) => renderDashboard(c), { requiresAuth: true });
+  // The morning brief. Same roles as the calling portal, because it is the
+  // thing you read on the way into it.
+  registerRoute('brief', (c) => renderBrief(c), { requiresAuth: true, roles: CARE_ROLES });
   registerRoute('patients', (c, p) => renderPatients(c, p), { requiresAuth: true });
   registerRoute('calls', (c) => renderCalls(c), { requiresAuth: true, roles: CARE_ROLES });
   registerRoute('admin', (c, p) => renderAdmin(c, p), { requiresAuth: true, roles: ['admin', 'manager'] });

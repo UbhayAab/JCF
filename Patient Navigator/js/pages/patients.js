@@ -13,6 +13,7 @@ import { showModal, closeModal, confirmModal } from '../components/modal.js';
 import { openCallForm } from '../components/callForm.js';
 import { openWhatsappShare, recipientsFromPatient } from '../components/whatsappShare.js';
 import { openAssessmentFlow } from '../components/assessmentFlow.js';
+import { mountBeforeYouCall } from '../components/beforeYouCall.js';
 import { formatDate, formatRelativeTime, capitalize, getDialStatusBadge, exportToCSV, renderSkeleton } from '../utils/formatters.js';
 import { sanitize } from '../utils/validators.js';
 import { navigate } from '../router.js';
@@ -828,6 +829,7 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
         ${gaps.map(g => `<span class="badge ${g.stage >= 3 ? 'badge-neutral' : 'badge-warn'}" title="${g.ask.replace(/"/g, '&quot;')}">${g.label}${g.stage >= 3 ? ` · call ${g.stage}+` : ''}</span>`).join('')}
       </div>
     </div>` : ''}
+    <div id="byc-mount"></div>
     <div class="content-grid">
       <div class="col-span-6"><div class="card">
         <div class="card-header"><div class="card-title">Clinical profile</div></div>
@@ -905,6 +907,9 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
   el.querySelector('#nut-release-one')?.addEventListener('click', (e) =>
     setNutOwner(e.currentTarget, null, 'Handed back. Anyone on the nutrition team can pick them up.'));
   if (deceased) renderBereavePanel(el.querySelector('#bereave-mount'), p, assessments, sb, reload);
+  // Not awaited: the record must not sit behind two more round trips, and
+  // this card renders nothing at all when there is nothing to say.
+  mountBeforeYouCall(el.querySelector('#byc-mount'), p);
 }
 
 // ---- Bereavement panel (deceased patients) ----

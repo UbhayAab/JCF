@@ -114,7 +114,21 @@ async function load() {
     if (seq !== loadSeq) return;             // a newer load owns the page
     if (openRes.error) throw openRes.error;
     if (doneRes.error) throw doneRes.error;
-    rows = [...(openRes.data || []), ...(doneRes.data || [])].map(indexRow);
+
+    // v108: what the reader made of each open flag. A separate query rather
+    // than a join, because a project that has not run sql/108 yet still has a
+    // working concerns page; an error here degrades to no badges, never to a
+    // blank list.
+    const revRes = await sb.from('concern_reviews')
+      .select('concern_id, verdict, quote, calls_since, days_open')
+      .abortSignal(controller.signal);
+    if (revRes.error) console.warn('concern reviews unavailable:', revRes.error.message);
+    const byConcern = {};
+    for (const v of (revRes.data || [])) byConcern[v.concern_id] = v;
+
+    rows = [...(openRes.data || []), ...(doneRes.data || [])]
+      .map((r) => ({ ...r, review: byConcern[r.id] || null }))
+      .map(indexRow);
     paint();
   } catch (e) {
     if (seq !== loadSeq) return;
@@ -304,6 +318,54 @@ function primaryPhone(r) {
 }
 
 // The search term is typed by a user and goes back into innerHTML.
+// ---- v108: what the reader made of this flag ------------------------------
+//
+// Four verdicts, and only two of them are worth a mentor's eye. `still_open`
+// is the one that matters: calls HAVE happened and none of them touched this,
+// which is a different and worse thing than nobody having rung at all.
+//
+// `looks_handled` always shows its quote. It is the only verdict that could
+// lead to a flag being closed, so the words from the later call that justify
+// it are shown beside it and the mentor decides. She is not told to close it,
+// and nothing closes itself.
+const VERDICT = {
+  still_open: {
+    label: 'Not addressed yet', tone: 'warn',
+    line: (v) => `${v.calls_since} call${v.calls_since === 1 ? '' : 's'} since this was raised`
+               + `, and none of them touched it`,
+  },
+  nothing_since: {
+    label: 'Nobody has called', tone: 'danger',
+    line: () => 'No call at all since this was raised',
+  },
+  looks_handled: {
+    label: 'Looks handled', tone: 'ok',
+    line: (v) => `A later call suggests this was dealt with. You decide`,
+  },
+  cannot_tell: {
+    label: 'Cannot tell', tone: 'plain',
+    line: (v) => `${v.calls_since} call${v.calls_since === 1 ? '' : 's'} since, too thin to say either way`,
+  },
+};
+
+export function reviewLine(r) {
+  const v = r.review;
+  if (!v || r.status === 'resolved') return '';
+  const meta = VERDICT[v.verdict];
+  if (!meta) return '';                     // an unknown verdict shows nothing
+  const days = Number.isFinite(v.days_open)
+    ? ` · ${v.days_open} day${v.days_open === 1 ? '' : 's'} open` : '';
+  return `
+    <div class="verdict is-${meta.tone}">
+      <div class="verdict-head">
+        <span class="badge badge-${meta.tone === 'ok' ? 'ok' : meta.tone === 'danger' ? 'danger'
+          : meta.tone === 'warn' ? 'warn' : 'neutral'}">${meta.label}</span>
+        <span>${sanitizeText(meta.line(v))}${days}</span>
+      </div>
+      ${v.quote ? `<div class="verdict-quote">&ldquo;${sanitizeText(v.quote)}&rdquo;</div>` : ''}
+    </div>`;
+}
+
 function sanitizeText(t) {
   return String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -343,6 +405,7 @@ function concernCard(r) {
             ${phone ? `<a class="cg-call" href="tel:${phone.replace(/[^+\d]/g, '')}" style="padding:3px 9px;font-size:13px"
               onclick="event.stopPropagation()">${icon('phone')}<span class="tnum">${sanitizeText(phone)}</span></a>` : ''}
           </div>
+          ${reviewLine(r)}
           ${r.note ? `<p style="font:var(--t-sm);color:var(--ink-2);margin:7px 0 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${r.note}</p>` : ''}
           <div class="hist-meta" style="margin-top:6px">
             ${r.source === 'auto' ? 'Flagged automatically' : `Raised by ${r.raiser?.full_name || 'N/A'}`} · ${formatRelativeTime(r.created_at)}

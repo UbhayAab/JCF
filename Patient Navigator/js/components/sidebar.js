@@ -24,6 +24,7 @@ const NAV_ITEMS = [
   {
     section: 'Main',
     items: [
+      { id: 'brief',     label: 'This morning',   icon: 'sun',       route: 'brief',     roles: ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist'] },
       { id: 'dashboard', label: 'Dashboard',      icon: 'grid',      route: 'dashboard', roles: ALL_ROLES },
       { id: 'calling',   label: 'Calling Portal', icon: 'phoneCall', route: 'calling',   roles: ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'content'] },
       { id: 'nutrition', label: 'Nutrition',      icon: 'leaf',      route: 'nutrition', roles: ['nutritionist', 'manager', 'admin'] },

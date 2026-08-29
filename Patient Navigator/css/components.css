@@ -1110,3 +1110,78 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 .doc-card-fields[open] > summary::before { transform: rotate(90deg); }
 .doc-card-fields > summary:hover { color: var(--ink); }
+
+
+/* ============================================================
+   The morning brief, and the concern verdict block.
+   js/pages/brief.js and the reviewLine() in js/pages/concerns.js.
+
+   These live here rather than as inline styles because of one rule in
+   base.css: `img, svg { display: block }`. Every icon on a brief card is
+   inline in a sentence ("(i) Overdue by 9 days"), and with the global rule
+   each one took its own line and pushed the text below it. That is not
+   fixable per-call-site without repeating the override a dozen times.
+
+   The other reason: .hist-meta is `var(--t-mono)` at 11px, built for a
+   timestamp in a call history row. The brief renders sentences a mentor
+   reads at speed, and a paragraph of 11px monospace is the wrong instrument.
+   ============================================================ */
+
+.brief-list { display: flex; flex-direction: column; gap: 10px; }
+
+.brief-card { padding: 12px 14px; border-left: 4px solid var(--line); }
+.brief-card.is-urgent { border-left-color: var(--danger); }
+.brief-card.is-high   { border-left-color: var(--warn); }
+.brief-card.is-watch  { border-left-color: var(--info); }
+
+.brief-top   { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.brief-main  { flex: 1; min-width: 240px; }
+.brief-name  { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.brief-name .btn { padding: 2px 8px; font-weight: 700; font-size: 14.5px; }
+
+/* One line of quiet prose. Icons inside sit on the text baseline. */
+.brief-line {
+  font: var(--t-sm); color: var(--ink-2); margin-top: 6px;
+  display: flex; align-items: baseline; gap: 6px;
+}
+.brief-line svg,
+.brief-sig  svg { display: inline-block; flex: none; transform: translateY(2px); }
+
+.brief-sigs { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+.brief-sig  { display: flex; gap: 7px; align-items: baseline; flex-wrap: wrap;
+              font: var(--t-sm); color: var(--ink-2); }
+.brief-sig .badge { flex: none; }
+.brief-quote { color: var(--ink-3); font-style: italic; }
+.brief-more  { font: var(--t-sm); color: var(--ink-3); }
+
+.brief-worse { margin-top: 7px; display: flex; flex-direction: column; gap: 3px; }
+
+/* The verdict on an open concern. Same block on the brief and the concerns
+   page, so it is one rule and looks the same in both places. */
+.verdict {
+  margin: 8px 0 0; padding: 7px 10px; border-radius: var(--r-sm);
+  background: var(--surface-2); border-left: 3px solid var(--line-2);
+}
+.verdict-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+                font: var(--t-sm); color: var(--ink-2); }
+.verdict-quote { font: var(--t-sm); color: var(--ink-3); font-style: italic; margin-top: 5px; }
+.verdict.is-warn   { border-left-color: var(--warn); }
+.verdict.is-danger { border-left-color: var(--danger); }
+.verdict.is-ok     { border-left-color: var(--primary); }
+
+/* "Before you call" - js/components/beforeYouCall.js, on the patient record. */
+.byc-handover { padding: 10px 12px; margin-bottom: 12px; border-radius: var(--r-sm);
+                background: var(--surface-2); border-left: 3px solid var(--primary); }
+.byc-ho-field { margin-top: 8px; }
+.byc-ho-label { font: var(--t-mono-label); text-transform: uppercase; letter-spacing: .06em;
+                color: var(--ink-3); }
+.byc-ho-value { font: var(--t-sm); color: var(--ink-1); margin-top: 2px; }
+.byc-ho-blank { font: var(--t-sm); color: var(--ink-4); font-style: italic; margin-top: 10px; }
+
+.byc-sigs { display: flex; flex-direction: column; gap: 9px; }
+.byc-sig  { padding-left: 10px; border-left: 2px solid var(--line-2); }
+.byc-sig-head { display: flex; gap: 7px; align-items: baseline; flex-wrap: wrap;
+                font: var(--t-sm); color: var(--ink-2); }
+.byc-when  { color: var(--ink-4); margin-left: auto; white-space: nowrap; }
+.byc-quote { font: var(--t-sm); color: var(--ink-3); font-style: italic; margin-top: 3px; }
+.brief-when { font: var(--t-sm); color: var(--ink-4); white-space: nowrap; }
