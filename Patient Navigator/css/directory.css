@@ -1,0 +1,259 @@
+/* ============================================================
+   Patient Navigator - Public help directory
+   A page a frightened family opens on a cheap phone, once, at
+   11pm. Big tap targets, plain language, no chrome to learn.
+   Every colour comes from variables.css, so it is the same
+   brand as the portal without importing the app shell.
+   ============================================================ */
+
+.dir-body { background: var(--bg); color: var(--ink); }
+.dir-wrap { width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 18px; }
+
+/* ---- header ---- */
+.dir-head {
+  position: sticky; top: 0; z-index: 20;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px) saturate(1.1); -webkit-backdrop-filter: blur(10px) saturate(1.1);
+  border-bottom: 1px solid var(--line);
+}
+.dir-head-in { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 62px; }
+.dir-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; }
+.dir-mark {
+  width: 34px; height: 34px; flex: none; border-radius: 10px;
+  display: grid; place-items: center;
+  background: var(--primary); color: var(--on-primary);
+}
+.dir-brand-tx { display: flex; flex-direction: column; line-height: 1.15; }
+.dir-brand-tx b { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+.dir-brand-tx i { font-style: normal; font-size: 12px; color: var(--ink-3); }
+.dir-share {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 9px 14px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--surface); color: var(--ink);
+  font: inherit; font-size: 13.5px; font-weight: 600;
+  transition: border-color .18s ease, transform .18s ease;
+}
+.dir-share:hover { border-color: var(--primary); transform: translateY(-1px); }
+
+/* ---- hero ---- */
+.dir-hero { padding: 44px 0 26px; }
+.dir-eyebrow {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px; letter-spacing: .2em; text-transform: uppercase;
+  color: var(--primary); font-weight: 600; margin-bottom: 14px;
+}
+.dir-hero h1 {
+  font-size: clamp(27px, 4.4vw, 44px); line-height: 1.12;
+  letter-spacing: -0.025em; font-weight: 600; max-width: 17ch;
+}
+.dir-sub { margin-top: 14px; max-width: 60ch; color: var(--ink-2); font-size: 16px; line-height: 1.6; }
+
+/* Arriving on a shared shortlist: the questions are already answered, so
+   the pitch shrinks out of the way and the answers come first. */
+.dir-shared .dir-hero { padding: 22px 0 6px; }
+.dir-shared .dir-hero h1 { font-size: clamp(21px, 2.6vw, 27px); max-width: 24ch; }
+.dir-shared .dir-sub { font-size: 14.5px; }
+.dir-shared .dir-bar { scroll-margin-top: 74px; }
+
+/* ---- steps ---- */
+.dir-main { padding-bottom: 60px; }
+.dir-step { margin-top: 34px; }
+.dir-step-h {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 17px; font-weight: 650; letter-spacing: -0.015em; margin-bottom: 14px;
+}
+.dir-num {
+  width: 24px; height: 24px; flex: none; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--primary); color: var(--on-primary); font-size: 12.5px; font-weight: 700;
+}
+.dir-step-sub { margin: -8px 0 14px 34px; color: var(--ink-3); font-size: 13.5px; }
+
+/* ---- category chips ---- */
+.dir-cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+.dir-cat {
+  display: flex; align-items: center; gap: 11px; text-align: left;
+  padding: 14px 15px; border-radius: 14px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  font: inherit; transition: border-color .18s ease, transform .18s ease, background .18s ease;
+}
+.dir-cat:hover { border-color: var(--primary); transform: translateY(-2px); }
+.dir-cat.on { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }
+.dir-cat.on .dir-cat-n { color: color-mix(in srgb, var(--on-primary) 75%, transparent); }
+.dir-cat-ico { width: 20px; height: 20px; flex: none; display: grid; place-items: center; }
+.dir-cat-tx { display: flex; flex-direction: column; min-width: 0; }
+.dir-cat-tx b { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.dir-cat-n { font-size: 12px; color: var(--ink-3); }
+
+/* ---- filters ---- */
+.dir-filters { display: flex; flex-wrap: wrap; gap: 12px; }
+.dir-field { display: flex; flex-direction: column; gap: 6px; min-width: 190px; }
+.dir-field-grow { flex: 1; min-width: 240px; }
+.dir-field > span { font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+.dir-field select, .dir-field input {
+  font: inherit; font-size: 15px; color: var(--ink);
+  padding: 12px 13px; border-radius: 11px;
+  border: 1px solid var(--line-2); background: var(--surface);
+  width: 100%; -webkit-appearance: none; appearance: none;
+}
+.dir-field select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23867F73' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px;
+}
+.dir-field select:focus, .dir-field input:focus { outline: 2px solid var(--primary); outline-offset: 1px; border-color: transparent; }
+
+/* ---- track cards ---- */
+.dir-tracks { display: grid; grid-template-columns: repeat(auto-fit, minmax(232px, 1fr)); gap: 11px; }
+.dir-track {
+  text-align: left; padding: 16px; border-radius: 14px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit;
+  transition: border-color .18s ease, transform .18s ease;
+}
+.dir-track:hover { border-color: var(--primary); transform: translateY(-2px); }
+.dir-track.on { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.dir-track b { display: block; font-size: 14.5px; font-weight: 650; margin-bottom: 5px; }
+.dir-track span { display: block; font-size: 13px; color: var(--ink-2); line-height: 1.5; }
+
+/* ---- results bar ---- */
+.dir-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 34px 0 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line);
+}
+.dir-count { font-size: 14.5px; font-weight: 600; }
+.dir-count b { color: var(--primary); }
+.dir-clear {
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  background: none; border: none; color: var(--primary); text-decoration: underline; padding: 4px;
+}
+
+/* ---- result cards ---- */
+.dir-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 13px; align-items: start; }
+.dir-card {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 17px 18px; border-radius: 15px;
+  border: 1px solid var(--line); background: var(--surface);
+}
+.dir-card-top { display: flex; align-items: flex-start; gap: 11px; }
+.dir-card h3 { font-size: 15.5px; font-weight: 650; letter-spacing: -0.015em; line-height: 1.3; flex: 1; }
+.dir-tag {
+  flex: none; font-size: 11px; font-weight: 700; padding: 4px 9px; border-radius: 999px;
+  letter-spacing: .02em; white-space: nowrap;
+}
+.dir-tag.free { background: var(--ok-soft); color: var(--ok); }
+.dir-tag.subsidised { background: var(--gold-soft); color: var(--gold-deep); }
+.dir-tag.paid { background: var(--surface-3); color: var(--ink-2); }
+.dir-where { font-size: 12.5px; color: var(--ink-3); }
+.dir-card p { font-size: 13.5px; color: var(--ink-2); line-height: 1.55; }
+.dir-block { border-top: 1px dashed var(--line-2); padding-top: 10px; }
+.dir-block-h {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .09em;
+  color: var(--primary); margin-bottom: 5px;
+}
+.dir-block p { font-size: 13px; }
+.dir-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 4px; }
+.dir-act {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 10px 14px; border-radius: 10px; text-decoration: none;
+  font-size: 13.5px; font-weight: 650; border: 1px solid var(--line-2);
+  background: var(--surface-2); color: var(--ink);
+  transition: border-color .16s ease, background .16s ease;
+}
+.dir-act:hover { border-color: var(--primary); }
+.dir-act.call { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.dir-act.wa { background: #25D366; border-color: #25D366; color: #06331A; }
+
+/* ---- empty + skeleton ---- */
+.dir-empty { grid-column: 1 / -1; text-align: center; padding: 54px 20px; color: var(--ink-3); }
+.dir-empty b { display: block; font-size: 17px; color: var(--ink); margin-bottom: 7px; font-weight: 600; }
+.dir-sk { height: 148px; border-radius: 15px; border: 1px solid var(--line); background: var(--surface-2); animation: dirpulse 1.35s ease-in-out infinite; }
+@keyframes dirpulse { 0%,100% { opacity: 1 } 50% { opacity: .5 } }
+
+/* ---- footer + toast ---- */
+.dir-foot { border-top: 1px solid var(--line); padding: 30px 0 46px; background: var(--surface-2); }
+.dir-foot p { font-size: 13.5px; color: var(--ink-2); max-width: 70ch; }
+.dir-fine { margin-top: 9px; font-size: 12.5px; color: var(--ink-3); }
+.dir-toast {
+  position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 20px);
+  background: var(--panel); color: var(--panel-text); padding: 12px 20px; border-radius: 999px;
+  font-size: 13.5px; font-weight: 600; opacity: 0; pointer-events: none;
+  transition: opacity .2s ease, transform .2s ease; z-index: 60; max-width: 90vw; text-align: center;
+}
+.dir-toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+@media (max-width: 640px) {
+  .dir-hero { padding: 30px 0 18px; }
+  .dir-cats { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); }
+  .dir-results { grid-template-columns: 1fr; }
+  .dir-brand-tx i { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dir-cat, .dir-track, .dir-share { transition: none; }
+  .dir-sk { animation: none; }
+}
+
+/* ============================================================
+   v2 - progressive journey: the invitation, the per-card reveal,
+   the freshness signal, and the "try the next thing" endcap.
+   ============================================================ */
+
+/* Shown instead of results until a family has chosen something. */
+.dir-invite {
+  grid-column: 1 / -1;
+  padding: var(--s6, 28px);
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  background: var(--surface-2);
+  text-align: center;
+}
+.dir-invite b { display: block; font-size: 1.08rem; margin-bottom: 6px; }
+.dir-invite p { margin: 0 auto 6px; max-width: 46ch; color: var(--ink-2); }
+
+.dir-card-meta {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin: 8px 0 2px; font-size: .82rem; color: var(--ink-3);
+}
+.dir-card-meta > span { white-space: nowrap; }
+
+.dir-fresh { font-weight: 600; }
+.dir-fresh.ok  { color: var(--ok); }
+.dir-fresh.mid { color: var(--gold-deep); }
+.dir-fresh.old,
+.dir-fresh.unk { color: var(--ink-3); font-weight: 500; }
+
+.dir-more { margin-top: 10px; }
+
+.dir-act.open {
+  border: 0; cursor: pointer; font: inherit;
+  background: var(--primary); color: var(--on-primary);
+}
+.dir-act.open[disabled] { opacity: .6; cursor: default; }
+
+.dir-more-btn {
+  grid-column: 1 / -1;
+  padding: 13px 18px; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--primary);
+  background: transparent; color: var(--primary);
+  font: inherit; font-weight: 600;
+}
+.dir-more-btn:hover { background: var(--primary); color: var(--on-primary); }
+
+.dir-endcap {
+  grid-column: 1 / -1;
+  padding: var(--s5, 22px);
+  border-radius: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.dir-endcap b { display: block; margin-bottom: 4px; }
+.dir-endcap p { margin: 0 0 10px; color: var(--ink-2); }
+.dir-nexts { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 10px; }
+.dir-next {
+  padding: 10px 14px; border-radius: 10px; cursor: pointer; font: inherit;
+  border: 1px solid var(--primary);
+  background: var(--surface); color: var(--primary); text-align: left;
+}
+.dir-next:hover { background: var(--primary); color: var(--on-primary); }
+
+@media (prefers-reduced-motion: reduce) {
+  .dir-more-btn, .dir-next, .dir-act.open { transition: none; }
+}

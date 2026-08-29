@@ -1,0 +1,585 @@
+/* ============================================================
+   JARURAT CARE · Patient Navigator: Design Tokens v10
+   "WARD PAPER": one palette, rebuilt for all three themes.
+
+   Type   : Archivo (grotesk superfamily) · Spline Sans Mono
+   Accent : petrol-teal primary (healing, not corporate-blue)
+            honey-amber warmth for human moments
+   Ground : sand in light, slate in dark, iris in colorful. Every
+            colour is a rung on an OKLCH lightness ladder, so the
+            steps are perceptually even and every text pair was
+            solved against the ground it actually lands on.
+
+   THREE MODES, all token-driven so every view re-skins for free:
+     :root                        -> LIGHT    (sand paper, night panel)
+     :root[data-theme="dark"]     -> DARK     (light rises: every plane
+                                               above --bg is lighter, and
+                                               --panel is the most lifted)
+     :root[data-theme="colorful"] -> COLORFUL (the bad-light theme: iris
+                                               grounds, no neutral surface,
+                                               chips at 2x the chroma)
+
+   Rules the values obey, so a later edit does not quietly undo them:
+     · --ink-4 is still a TEXT token. It is solved on --surface-3, the
+       worst ground it actually lands on, not on --surface.
+     · --line-strong is a control boundary and clears 3:1 on --surface.
+       --line stays a soft divider. They are not interchangeable.
+     · --panel-line-2 is opaque and clears 3:1 against BOTH --panel-3 and
+       --bg, so the sidebar edge is legal from either side (WCAG 1.4.11).
+     · In dark, resting shadows are a 1px lit ring, never "none": several
+       rules read box-shadow: var(--hi), var(--sh-1), and "none" inside a
+       shadow list drops the whole declaration.
+     · --primary-soft-2 is a heavy chip and a border tone. It carries
+       --ink only, never an accent ink.
+
+   Only colour / gradient / shadow tokens change per theme; every
+   structural token (space, radius, type, motion, layout) and every
+   legacy alias lives once in :root and follows the theme via var().
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&family=Spline+Sans+Mono:ital,wght@0,400..700;1,400..700&display=swap');
+
+/* ============================================================
+   LIGHT  (default): sand grounds, white cards, a slate night panel.
+   ============================================================ */
+:root {
+  color-scheme: light;
+
+  /* ---- Grounds: sand, white cards; the night panel sits 16.6:1 below the ground ---- */
+  --bg: #F6F2EA;
+  --bg-2: #EDE7DB;
+  --bg-sunken: #E8E1D4;
+  --surface: #FFFFFF;
+  --surface-2: #FBF8F3;
+  --surface-3: #F2EDE2;
+  --overlay: rgba(13,10,5,.52);
+  --app-bg-image:
+    radial-gradient(1100px 620px at 8% -10%, rgba(0,100,105,0.07), transparent 62%),
+    radial-gradient(900px 520px at 96% 4%, rgba(122,76,0,0.07), transparent 60%),
+    radial-gradient(1000px 700px at 50% 108%, rgba(91,72,146,0.05), transparent 64%);
+
+  /* ---- Ink ladder: 17.1 / 10.9 / 8.2 / 6.0 on --surface ---- */
+  --ink: #201B12;
+  --ink-2: #433C2F;
+  --ink-3: #554E40;
+  --ink-4: #6A6253;
+  --ink-inv: #FBF8F3;
+  /* --paper: the companion of --ink-inv. css/components.css:705 and six
+     inline styles in js/pages/analytics.js paint it on background:var(--ink),
+     and nothing used to define it, so it fell back to near white. */
+  --paper: #FBF8F3;
+
+  /* ---- Lines: --line divides, --line-strong bounds a control at 3:1 ---- */
+  --line: #E8E1D4;
+  --line-2: #C4BBAA;
+  --line-strong: #8F8777;
+  --hairline: rgba(13,10,5,.08);
+
+  /* ---- Night panel (sidebar, dock, toasts): slate, one hue with the primary ---- */
+  --panel-deep: #050C0C;
+  --panel: #0A1516;
+  --panel-2: #111F1F;
+  --panel-3: #182828;
+  --panel-line: #1F3031;
+  --panel-line-2: #758D8E;
+  --panel-text: #EAF5F5;
+  --panel-text-2: #9CB6B6;
+  --panel-text-3: #829B9C;
+
+  /* ---- Primary: petrol teal ---- */
+  --primary: #006469;
+  --primary-2: #005255;
+  --primary-hover: #005255;
+  --primary-press: #003A3D;
+  --primary-bright: #00979E;
+  --primary-glow: #00AAB1;
+  --primary-soft: #BCE7E9;
+  --primary-soft-2: #99DBDE;
+  --primary-tint: rgba(0,100,105,.07);
+  --on-primary: #FFFFFF;
+
+  /* ---- Accent: honey amber (legacy name "gold") for "New", chips, warmth ---- */
+  --gold: #7A4C00;
+  --gold-deep: #643D00;
+  --gold-bright: #C7862F;
+  --gold-soft: #F3D8BB;
+  --gold-tint: rgba(122,76,0,.12);
+
+  /* ---- Secondary: soft violet (legacy "clay") ---- */
+  --clay: #5B4892;
+  --clay-soft: #DED8FC;
+
+  /* ---- Warmth: the same amber ink (awards, heart moments) ---- */
+  --warmth: #7A4C00;
+  --warmth-deep: #643D00;
+  --warmth-bright: #C7862F;
+  --warmth-soft: #F3D8BB;
+
+  /* ---- Semantic: each ink carries 4.5:1 on its own chip ---- */
+  --ok: #106841;             --ok-soft: #C7E6D3;
+  --warn: #7A4C00;           --warn-soft: #F3D8BB;
+  --danger: #953028;         --danger-soft: #FFD1CA;
+  --info: #295B86;           --info-soft: #CAE0F5;
+  --violet: #5B4892;         --violet-soft: #DED8FC;
+
+  /* ---- Priority ---- */
+  --pri-high: #953028;       --pri-high-soft: #FFD1CA;
+  --pri-med: #7A4C00;        --pri-med-soft: #F3D8BB;
+  --pri-low: #554E40;        --pri-low-soft: #F2EDE2;
+
+  /* ---- Gradients: material & atmosphere ---- */
+  --grad-primary: linear-gradient(180deg, #00757A, #006469 58%, #005255);
+  --grad-primary-hover: linear-gradient(180deg, #00858B, #00757A 58%, #006469);
+  --grad-sky: linear-gradient(180deg, #00979E, #006469);
+  --grad-clay: linear-gradient(180deg, #6A55A8, #5B4892);
+  --grad-ok: linear-gradient(180deg, #1A784D, #106841);
+  --grad-ink: linear-gradient(160deg, #111F1F, #0A1516 46%, #050C0C);
+  --grad-ink-aurora:
+    radial-gradient(760px 420px at 18% -6%, rgba(0,170,177,0.145), transparent 62%),
+    radial-gradient(620px 380px at 92% 104%, rgba(199,134,47,0.14), transparent 60%),
+    linear-gradient(160deg, #111F1F, #0A1516 46%, #050C0C);
+  --grad-text: linear-gradient(92deg, #006469, #00979E 50%, #006469);
+  --grad-hairline: linear-gradient(90deg, transparent, #00979E 22%, #00AAB1 55%, #C7862F 88%, transparent);
+  --grad-sheen: linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,.05));
+
+  /* ---- Elevation: warm ink, layered, inner light ---- */
+  --hi: inset 0 1px 0 rgba(255,255,255,0.6);
+  --hi-dark: inset 0 1px 0 rgba(255,255,255,0.079);
+  --sh-1: 0 1px 2px rgba(13,10,5,.06);
+  --sh-2: 0 2px 6px -1px rgba(13,10,5,.10), 0 1px 2px rgba(13,10,5,.06);
+  --sh-3: 0 8px 20px -6px rgba(13,10,5,.16), 0 2px 6px -2px rgba(13,10,5,.09);
+  --sh-4: 0 18px 40px -12px rgba(13,10,5,.22), 0 4px 10px -4px rgba(13,10,5,.10);
+  --sh-float: 0 28px 60px -18px rgba(13,10,5,.30), 0 8px 18px -8px rgba(13,10,5,.14);
+  --sh-primary: 0 4px 14px -4px rgba(0,100,105,.30);
+  --sh-primary-lg: 0 12px 30px -8px rgba(0,100,105,.38);
+  --sh-panel: 0 12px 34px -6px rgba(13,10,5,.42);
+  --sh-gold: 0 8px 22px -8px rgba(122,76,0,.34);
+  --ring: 0 0 0 3px rgba(0,100,105,.28);
+  --ring-danger: 0 0 0 3px rgba(149,48,40,.26);
+
+  /* ============================================================
+     STRUCTURE (theme-invariant)
+     ============================================================ */
+
+  /* ---- Typography: Archivo grotesk superfamily + Spline mono.
+     Display dialled from shouty to refined: lighter weight, tighter
+     tracking; the app reads premium, not loud. ---- */
+  --font-ui: 'Archivo', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Archivo', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: 'Archivo', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Spline Sans Mono', 'JetBrains Mono', ui-monospace, 'Cascadia Mono', monospace;
+
+  --stretch-wide: 104%;
+  --stretch-narrow: 86%;
+  --w-display: 660;
+  --w-number: 620;
+
+  --t-display: 660 34px/1.1 var(--font-ui);
+  --t-h1: 660 26px/1.16 var(--font-ui);
+  --t-h2: 640 21px/1.22 var(--font-ui);
+  --t-h3: 620 17px/1.3 var(--font-ui);
+  --t-body: 400 15px/1.55 var(--font-ui);
+  --t-body-strong: 600 15px/1.5 var(--font-ui);
+  --t-sm: 400 13.5px/1.5 var(--font-ui);
+  --t-xs: 500 12px/1.4 var(--font-ui);
+  --t-label: 600 11.5px/1.2 var(--font-ui);
+  --t-mono: 500 12px/1.4 var(--font-mono);
+  --t-mono-label: 600 10.5px/1.3 var(--font-mono);
+
+  /* ---- Spacing ---- */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px;
+  --s5: 20px; --s6: 24px; --s7: 32px; --s8: 40px;
+  --s9: 48px; --s10: 64px; --s11: 80px;
+
+  /* ---- Radius (tightened: precise, not bubbly) ---- */
+  --r-xs: 6px; --r-sm: 9px; --r-md: 11px; --r-lg: 14px; --r-xl: 18px; --r-2xl: 24px; --r-pill: 999px;
+
+  /* ---- Motion ---- */
+  --ease: cubic-bezier(0.22, 0.68, 0.16, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --spring: cubic-bezier(0.34, 1.45, 0.5, 1);
+  --snap: cubic-bezier(0.6, 0, 0.2, 1);
+  --fast: 140ms; --base: 240ms; --slow: 420ms; --slower: 640ms;
+
+  /* ---- Layout ---- */
+  --sidebar-w: 264px;
+  --header-h: 68px;
+  --bottomnav-h: 78px;
+  --z-nav: 40; --z-header: 50; --z-drawer: 60; --z-modal-new: 70; --z-toast-new: 80;
+
+  /* subtle grain (off by default; premium surfaces stay clean) */
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+
+  /* ============================================================
+     LEGACY TOKEN ALIASES: every legacy name resolves through the
+     canonical tokens above, so it follows the active theme for free.
+     ============================================================ */
+  --color-bg-primary:     var(--bg);
+  --color-bg-secondary:   var(--bg-sunken);
+  --color-bg-tertiary:    var(--bg-sunken);
+  --color-bg-elevated:    var(--surface);
+  --color-bg-hover:       var(--surface-3);
+  --color-bg-active:      var(--primary-soft);
+  --color-surface:        var(--surface);
+  --color-surface-hover:  var(--surface-2);
+  --color-surface-border: var(--line);
+  --color-border:         var(--line);
+  --color-text:           var(--ink);
+
+  --glass-bg:             var(--surface);
+  --glass-bg-strong:      var(--surface);
+  --glass-border:         var(--line);
+  --glass-border-light:   var(--line-strong);
+  --glass-blur:           0px;
+  --glass-blur-strong:    0px;
+
+  --color-primary-50:     var(--primary-soft);
+  --color-primary-100:    var(--primary-soft);
+  --color-primary-200:    var(--primary-soft-2);
+  --color-primary-300:    var(--primary-glow);
+  --color-primary-400:    var(--primary-bright);
+  --color-primary-500:    var(--primary);
+  --color-primary-600:    var(--primary);
+  --color-primary-700:    var(--primary-hover);
+  --color-primary-800:    var(--primary-press);
+  --color-primary-900:    var(--primary-press);
+
+  --color-accent-300:     var(--gold-bright);
+  --color-accent-400:     var(--gold);
+  --color-accent-500:     var(--gold);
+  --color-accent-600:     var(--gold-deep);
+  --color-rose-400:       var(--clay);
+  --color-rose-500:       var(--clay);
+
+  --color-success:        var(--ok);     --color-success-bg: var(--ok-soft);
+  --color-warning:        var(--warn);   --color-warning-bg: var(--warn-soft);
+  --color-danger:         var(--danger); --color-danger-bg:  var(--danger-soft);
+  --color-info:           var(--info);   --color-info-bg:    var(--info-soft);
+
+  --color-text-primary:   var(--ink);
+  --color-text-secondary: var(--ink-2);
+  --color-text-muted:     var(--ink-3);
+  --color-text-inverse:   var(--ink-inv);
+
+  --gradient-primary:     var(--grad-primary);
+  --gradient-warm:        var(--grad-sky);
+  --gradient-cool:        linear-gradient(145deg, var(--info), var(--violet));
+  --gradient-success:     var(--grad-ok);
+  --gradient-mesh:        none;
+
+  --font-family:          var(--font-ui);
+  --font-xs:    0.75rem;
+  --font-sm:    0.875rem;
+  --font-base:  0.9375rem;
+  --font-md:    1.0625rem;
+  --font-lg:    1.25rem;
+  --font-xl:    1.5rem;
+  --font-2xl:   1.75rem;
+  --font-3xl:   2.125rem;
+  --font-4xl:   2.75rem;
+  --font-weight-normal:   400;
+  --font-weight-medium:   500;
+  --font-weight-semibold: 600;
+  --font-weight-bold:     700;
+  --line-height-tight:    1.16;
+  --line-height-normal:   1.55;
+  --line-height-relaxed:  1.75;
+
+  --space-1:  var(--s1);  --space-2:  var(--s2);  --space-3:  var(--s3);
+  --space-4:  var(--s4);  --space-5:  var(--s5);  --space-6:  var(--s6);
+  --space-8:  var(--s7);  --space-10: var(--s8);  --space-12: var(--s9);
+  --space-16: var(--s10);
+
+  --radius-sm:   var(--r-sm);
+  --radius-md:   var(--r-md);
+  --radius-lg:   var(--r-lg);
+  --radius-xl:   var(--r-xl);
+  --radius-2xl:  var(--r-2xl);
+  --radius-full: var(--r-pill);
+
+  --shadow-sm:   var(--sh-1);
+  --shadow-md:   var(--sh-2);
+  --shadow-lg:   var(--sh-3);
+  --shadow-xl:   var(--sh-4);
+  --shadow-glow: var(--sh-primary);
+  --shadow-glow-accent: var(--sh-gold);
+  --shadow-glow-lg: var(--sh-primary-lg);
+
+  --transition-fast:   140ms var(--ease);
+  --transition-normal: 240ms var(--ease);
+  --transition-slow:   420ms var(--ease);
+  --transition-spring: 420ms var(--spring);
+
+  --z-dropdown: 30;
+  --z-sidebar:  40;
+  --z-bottom-nav: 40;
+  --z-modal:    70;
+  --z-toast:    80;
+  --z-tooltip:  90;
+
+  --sidebar-width: var(--sidebar-w);
+  --sidebar-collapsed-width: 76px;
+  --header-height: var(--header-h);
+  --bottom-nav-height: var(--bottomnav-h);
+  --content-max-width: 1400px;
+}
+
+/* ============================================================
+   DARK: light rises. --bg is the floor and every plane above it is
+   lighter, so --panel finally sits ABOVE --bg (1.72:1, dL +0.174)
+   instead of below it (1.01:1, dL -0.009, which is what collapsed
+   the sidebar). Contrast ratio is degenerate near black, so the
+   elevation budget is spent in OKLCH lightness and the 3:1
+   boundaries are carried by opaque border tokens, never by fill.
+   ============================================================ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* ---- Grounds: slate, floor at --bg; everything above it is lighter ---- */
+  --bg: #0A1516;
+  --bg-2: #111F1F;
+  --bg-sunken: #050C0C;
+  --surface: #182828;
+  --surface-2: #1F3031;
+  --surface-3: #263939;
+  --overlay: rgba(5,12,12,.68);
+  --app-bg-image:
+    radial-gradient(1100px 620px at 8% -10%, rgba(60,188,195,0.09), transparent 62%),
+    radial-gradient(900px 520px at 96% 4%, rgba(215,154,78,0.06), transparent 60%),
+    radial-gradient(1000px 700px at 50% 108%, rgba(171,153,236,0.06), transparent 64%);
+
+  /* ---- Ink ladder: 13.2 / 10.1 / 8.1 / 6.1 on --surface ---- */
+  --ink: #E2F1F1;
+  --ink-2: #BFD7D8;
+  --ink-3: #A8C2C3;
+  --ink-4: #8FA8A9;
+  --ink-inv: #0A1516;
+  /* --paper: the companion of --ink-inv. css/components.css:705 and six
+     inline styles in js/pages/analytics.js paint it on background:var(--ink),
+     and nothing used to define it, so it fell back to near white. */
+  --paper: #0A1516;
+
+  /* ---- Lines: --line divides, --line-strong bounds a control at 3:1 ---- */
+  --line: #2D4142;
+  --line-2: #3E5354;
+  --line-strong: #5C7475;
+  --hairline: rgba(255,255,255,.08);
+
+  /* ---- Night panel (sidebar, dock, toasts): the most lifted slab on screen, +0.174 dL over --bg ---- */
+  --panel-deep: #263939;
+  --panel: #2D4142;
+  --panel-2: #354A4B;
+  --panel-3: #3E5354;
+  --panel-line: #3E5354;
+  --panel-line-2: #B3CDCE;
+  --panel-text: #EAF5F5;
+  --panel-text-2: #DAECEC;
+  --panel-text-3: #B3CDCE;
+
+  /* ---- Primary: petrol teal ---- */
+  --primary: #3CBCC3;
+  --primary-2: #00AAB1;
+  --primary-hover: #6ECCD1;
+  --primary-press: #00979E;
+  --primary-bright: #99DBDE;
+  --primary-glow: #BCE7E9;
+  --primary-soft: #003A3D;
+  --primary-soft-2: #005255;
+  --primary-tint: rgba(60,188,195,.13);
+  --on-primary: #0A1516;
+
+  /* ---- Accent: honey amber (legacy name "gold") for "New", chips, warmth ---- */
+  --gold: #D79A4E;
+  --gold-deep: #E3B074;
+  --gold-bright: #F3D8BB;
+  --gold-soft: #482B00;
+  --gold-tint: rgba(215,154,78,.14);
+
+  /* ---- Secondary: soft violet (legacy "clay") ---- */
+  --clay: #AB99EC;
+  --clay-soft: #342A54;
+
+  /* ---- Warmth: the same amber ink (awards, heart moments) ---- */
+  --warmth: #D79A4E;
+  --warmth-deep: #E3B074;
+  --warmth-bright: #F3D8BB;
+  --warmth-soft: #482B00;
+
+  /* ---- Semantic: each ink carries 4.5:1 on its own chip ---- */
+  --ok: #6CBC8F;             --ok-soft: #0F3C26;
+  --warn: #D79A4E;           --warn-soft: #482B00;
+  --danger: #F38375;         --danger-soft: #561D18;
+  --info: #78ADDE;           --info-soft: #19354D;
+  --violet: #AB99EC;         --violet-soft: #342A54;
+
+  /* ---- Priority ---- */
+  --pri-high: #F38375;       --pri-high-soft: #561D18;
+  --pri-med: #D79A4E;        --pri-med-soft: #482B00;
+  --pri-low: #A8C2C3;        --pri-low-soft: #263939;
+
+  /* ---- Gradients: material & atmosphere ---- */
+  --grad-primary: linear-gradient(180deg, #00AAB1, #3CBCC3 58%, #6ECCD1);
+  --grad-primary-hover: linear-gradient(180deg, #00979E, #00AAB1 58%, #3CBCC3);
+  --grad-sky: linear-gradient(180deg, #00858B, #3CBCC3);
+  --grad-clay: linear-gradient(180deg, #9985DD, #AB99EC);
+  --grad-ok: linear-gradient(180deg, #53AA7B, #6CBC8F);
+  --grad-ink: linear-gradient(160deg, #354A4B, #2D4142 46%, #263939);
+  --grad-ink-aurora:
+    radial-gradient(760px 420px at 18% -6%, rgba(188,231,233,0.085), transparent 62%),
+    radial-gradient(620px 380px at 92% 104%, rgba(243,216,187,0.1), transparent 60%),
+    linear-gradient(160deg, #354A4B, #2D4142 46%, #263939);
+  --grad-text: linear-gradient(92deg, #3CBCC3, #99DBDE 50%, #3CBCC3);
+  --grad-hairline: linear-gradient(90deg, transparent, #99DBDE 22%, #BCE7E9 55%, #F3D8BB 88%, transparent);
+  --grad-sheen: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02));
+
+  /* ---- Elevation: a lit ring, not a black hole: on a night ground things that come toward you get lighter ---- */
+  --hi: inset 0 1px 0 rgba(255,255,255,0.086);
+  --hi-dark: inset 0 1px 0 rgba(255,255,255,0.066);
+  --sh-1: 0 0 0 1px rgba(255,255,255,.055);
+  --sh-2: 0 0 0 1px rgba(255,255,255,.075), 0 6px 16px -10px rgba(5,12,12,.60);
+  --sh-3: 0 0 0 1px rgba(255,255,255,.095), 0 14px 30px -14px rgba(5,12,12,.70);
+  --sh-4: 0 0 0 1px rgba(255,255,255,.115), 0 26px 52px -20px rgba(5,12,12,.78);
+  --sh-float: 0 0 0 1px rgba(255,255,255,.135), 0 34px 70px -22px rgba(5,12,12,.84);
+  --sh-primary: 0 4px 14px -4px rgba(60,188,195,.42);
+  --sh-primary-lg: 0 12px 30px -8px rgba(60,188,195,.50);
+  --sh-panel: 1px 0 0 #B3CDCE, 0 16px 44px -10px rgba(5,12,12,.80);
+  --sh-gold: 0 8px 22px -8px rgba(215,154,78,.44);
+  --ring: 0 0 0 3px rgba(60,188,195,.40);
+  --ring-danger: 0 0 0 3px rgba(243,131,117,.38);
+}
+
+/* ============================================================
+   COLORFUL: the bad-light theme. Same skeleton, same petrol-teal
+   primary, same violet identity, but no neutral surface anywhere,
+   chip fills at roughly 2x light's chroma, and accent inks one rung
+   deeper so a badge is identifiable by colour before it is read.
+   For a family member holding a phone outdoors, where shadow dies
+   in glare and only hue, edge and area survive.
+   ============================================================ */
+:root[data-theme="colorful"] {
+  color-scheme: light;
+
+  /* ---- Grounds: iris; --surface is never pure white ---- */
+  --bg: #EEEAFF;
+  --bg-2: #E3DDFA;
+  --bg-sunken: #DCD6F6;
+  --surface: #F9F7FF;
+  --surface-2: #F3F0FF;
+  --surface-3: #E9E4FD;
+  --overlay: rgba(11,8,20,.52);
+  --app-bg-image:
+    radial-gradient(1100px 620px at 8% -10%, rgba(0,82,85,0.16), transparent 62%),
+    radial-gradient(900px 520px at 96% 4%, rgba(100,61,0,0.15), transparent 60%),
+    radial-gradient(1000px 700px at 50% 108%, rgba(74,59,119,0.13), transparent 64%);
+
+  /* ---- Ink ladder: 16.1 / 10.4 / 7.9 / 5.7 on --surface ---- */
+  --ink: #1D192B;
+  --ink-2: #3F3853;
+  --ink-3: #504967;
+  --ink-4: #655E7E;
+  --ink-inv: #F3F0FF;
+  /* --paper: the companion of --ink-inv. css/components.css:705 and six
+     inline styles in js/pages/analytics.js paint it on background:var(--ink),
+     and nothing used to define it, so it fell back to near white. */
+  --paper: #F3F0FF;
+
+  /* ---- Lines: --line divides, --line-strong bounds a control at 3:1 ---- */
+  --line: #DCD6F6;
+  --line-2: #BEB6DB;
+  --line-strong: #8A82A5;
+  --hairline: rgba(11,8,20,.08);
+
+  /* ---- Night panel (sidebar, dock, toasts): iris, the darkest rung of the same ramp ---- */
+  --panel-deep: #0B0814;
+  --panel: #14101F;
+  --panel-2: #1D192B;
+  --panel-3: #262136;
+  --panel-line: #36304A;
+  --panel-line-2: #8A82A5;
+  --panel-text: #F3F0FF;
+  --panel-text-2: #B2AACE;
+  --panel-text-3: #978FB2;
+
+  /* ---- Primary: petrol teal ---- */
+  --primary: #005255;
+  --primary-2: #003A3D;
+  --primary-hover: #003A3D;
+  --primary-press: #002527;
+  --primary-bright: #00979E;
+  --primary-glow: #00AAB1;
+  --primary-soft: #6ECCD1;
+  --primary-soft-2: #3CBCC3;
+  --primary-tint: rgba(0,82,85,.07);
+  --on-primary: #F9F7FF;
+
+  /* ---- Accent: honey amber (legacy name "gold") for "New", chips, warmth ---- */
+  --gold: #643D00;
+  --gold-deep: #482B00;
+  --gold-bright: #C7862F;
+  --gold-soft: #E3B074;
+  --gold-tint: rgba(100,61,0,.12);
+
+  /* ---- Secondary: soft violet (legacy "clay") ---- */
+  --clay: #4A3B77;
+  --clay-soft: #BDAFF5;
+
+  /* ---- Warmth: the same amber ink (awards, heart moments) ---- */
+  --warmth: #643D00;
+  --warmth-deep: #482B00;
+  --warmth-bright: #C7862F;
+  --warmth-soft: #E3B074;
+
+  /* ---- Semantic: each ink carries 4.5:1 on its own chip ---- */
+  --ok: #105535;             --ok-soft: #8BCCA6;
+  --warn: #643D00;           --warn-soft: #E3B074;
+  --danger: #792821;         --danger-soft: #FC9D91;
+  --info: #224A6D;           --info-soft: #94C0E8;
+  --violet: #4A3B77;         --violet-soft: #BDAFF5;
+
+  /* ---- Priority ---- */
+  --pri-high: #792821;       --pri-high-soft: #FC9D91;
+  --pri-med: #643D00;        --pri-med-soft: #E3B074;
+  --pri-low: #504967;        --pri-low-soft: #E9E4FD;
+
+  /* ---- Gradients: material & atmosphere ---- */
+  --grad-primary: linear-gradient(180deg, #006469, #005255 58%, #003A3D);
+  --grad-primary-hover: linear-gradient(180deg, #00757A, #006469 58%, #005255);
+  --grad-sky: linear-gradient(180deg, #00858B, #005255);
+  --grad-clay: linear-gradient(180deg, #5B4892, #4A3B77);
+  --grad-ok: linear-gradient(180deg, #106841, #105535);
+  --grad-ink: linear-gradient(160deg, #1D192B, #14101F 46%, #0B0814);
+  --grad-ink-aurora:
+    radial-gradient(760px 420px at 18% -6%, rgba(0,170,177,0.14), transparent 62%),
+    radial-gradient(620px 380px at 92% 104%, rgba(199,134,47,0.16), transparent 60%),
+    linear-gradient(160deg, #1D192B, #14101F 46%, #0B0814);
+  --grad-text: linear-gradient(92deg, #005255, #4A3B77 52%, #643D00);
+  --grad-hairline: linear-gradient(90deg, transparent, #00979E 22%, #4A3B77 55%, #C7862F 88%, transparent);
+  --grad-sheen: linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,.05));
+
+  /* ---- Elevation: iris ink, layered, inner light ---- */
+  --hi: inset 0 1px 0 rgba(255,255,255,0.6);
+  --hi-dark: inset 0 1px 0 rgba(255,255,255,0.079);
+  --sh-1: 0 1px 2px rgba(11,8,20,.06);
+  --sh-2: 0 2px 6px -1px rgba(11,8,20,.10), 0 1px 2px rgba(11,8,20,.06);
+  --sh-3: 0 8px 20px -6px rgba(11,8,20,.16), 0 2px 6px -2px rgba(11,8,20,.09);
+  --sh-4: 0 18px 40px -12px rgba(11,8,20,.22), 0 4px 10px -4px rgba(11,8,20,.10);
+  --sh-float: 0 28px 60px -18px rgba(11,8,20,.30), 0 8px 18px -8px rgba(11,8,20,.14);
+  --sh-primary: 0 4px 14px -4px rgba(0,82,85,.30);
+  --sh-primary-lg: 0 12px 30px -8px rgba(0,82,85,.38);
+  --sh-panel: 0 12px 34px -6px rgba(11,8,20,.42);
+  --sh-gold: 0 8px 22px -8px rgba(100,61,0,.34);
+  --ring: 0 0 0 3px rgba(0,82,85,.28);
+  --ring-danger: 0 0 0 3px rgba(121,40,33,.26);
+}
+
+/* The four rotating colourful .card / .stat / .qa background washes that used
+   to live here are gone. Measured, they were too weak to read as colour (card
+   fills came out #FFFFFF to #F2F9F9) while making the card background depend
+   on a DOM index, which generated 44 separate --ink-3 contrast failures, one
+   per wash variant. A contract cannot specify a non deterministic ground. The
+   colour moved into --surface, the iris grounds and the chips, where it is one
+   known value with one known ratio. */
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --fast: 0ms; --base: 0ms; --slow: 0ms; --slower: 0ms; }
+}

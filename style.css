@@ -1,0 +1,348 @@
+/* ─── Base Styles & Mobile First ─── */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+    --navy: #0a1628;
+    --navy-mid: #132744;
+    --blue-deep: #1a3a5c;
+    --blue: #2563eb;
+    --blue-light: #60a5fa;
+    --white: #ffffff;
+    --gray-400: #94a3b8;
+    --radius: 16px;
+    --radius-sm: 10px;
+    --shadow-lg: 0 8px 40px rgba(10, 22, 40, 0.18);
+    --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Force mobile-friendly view on devices */
+html {
+    -webkit-text-size-adjust: 100%;
+}
+
+body {
+    font-family: 'Montserrat', sans-serif;
+    min-height: 100vh;
+    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-mid) 40%, var(--blue-deep) 100%);
+    display: flex;
+    align-items: flex-start; /* Start from top on mobile */
+    justify-content: center;
+    padding: 12px;
+    color: var(--white);
+    background-attachment: fixed;
+}
+
+/* ─── Language Overlay ─── */
+.lang-overlay {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(10, 22, 40, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.lang-modal {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: var(--radius);
+    padding: 32px 24px;
+    text-align: center;
+    width: 100%;
+    max-width: 400px;
+    box-shadow: var(--shadow-lg);
+    animation: fadeUp 0.4s ease-out;
+}
+
+.lang-logo {
+    margin-bottom: 20px;
+}
+
+.lang-modal h2 {
+    font-size: 18px;
+    margin-bottom: 12px;
+    font-weight: 700;
+}
+
+.lang-modal .lang-sub {
+    font-size: 13px;
+    color: var(--gray-400);
+    margin-bottom: 6px;
+}
+.lang-modal .lang-sub:last-of-type {
+    margin-bottom: 24px;
+}
+
+.lang-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.lang-btn {
+    padding: 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(255,255,255,0.05);
+    color: var(--white);
+    font-family: 'Montserrat', sans-serif;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.lang-btn:hover, .lang-btn:active {
+    background: var(--blue-light);
+    border-color: var(--blue-light);
+    color: var(--navy);
+}
+
+/* ─── Container ─── */
+.container {
+    width: 100%;
+    max-width: 450px; /* Mobile optimal width */
+    background: rgba(255,255,255,0.06);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    animation: fadeUp 0.6s ease-out;
+    margin-top: 20px;
+}
+
+@keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Header ─── */
+.header {
+    background: linear-gradient(135deg, var(--blue) 0%, var(--blue-light) 100%);
+    padding: 24px 20px 20px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+}
+
+.logo-icon {
+    width: 46px; height: 46px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 10px;
+    font-size: 22px;
+    box-shadow: 0 0 20px rgba(255,255,255,0.15);
+}
+
+.header h1 {
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.3;
+}
+.header h1 span {
+    display: block;
+    font-size: 20px;
+    font-weight: 800;
+    margin-top: 2px;
+}
+
+.header .tagline {
+    margin-top: 10px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* ─── Body ─── */
+.body {
+    padding: 20px;
+}
+
+.step-label {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--blue-light);
+    margin-bottom: 12px;
+}
+
+/* ─── Radio Cards ─── */
+.options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: calc(100vh - 350px);
+    min-height: 250px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+.options::-webkit-scrollbar { width: 4px; }
+.options::-webkit-scrollbar-track { background: transparent; }
+.options::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+
+.option-card {
+    position: relative;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+.option-card input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    width: 0; height: 0;
+}
+.option-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px;
+    border-radius: var(--radius-sm);
+    border: 1.5px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.04);
+    transition: var(--transition);
+}
+.option-card:hover .option-label {
+    background: rgba(255,255,255,0.08);
+}
+.option-card input:checked + .option-label {
+    border-color: var(--blue-light);
+    background: rgba(37, 99, 235, 0.12);
+    box-shadow: 0 0 0 1px var(--blue-light);
+}
+
+.radio-dot {
+    width: 20px; height: 20px;
+    min-width: 20px;
+    border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.25);
+    display: flex; align-items: center; justify-content: center;
+    margin-top: 2px;
+}
+.radio-dot::after {
+    content: '';
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--blue-light);
+    transform: scale(0);
+    transition: 0.2s transform;
+}
+.option-card input:checked + .option-label .radio-dot {
+    border-color: var(--blue-light);
+}
+.option-card input:checked + .option-label .radio-dot::after {
+    transform: scale(1);
+}
+
+.opt-title {
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.35;
+    margin-bottom: 4px;
+}
+
+.opt-subtypes {
+    margin-top: 6px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.6);
+    line-height: 1.5;
+}
+.opt-subtypes span {
+    display: inline-block;
+    background: rgba(255,255,255,0.08);
+    border-radius: 4px;
+    padding: 2px 6px;
+    margin: 2px 4px 2px 0;
+}
+
+/* ─── WhatsApp Button ─── */
+.btn-wrap { margin-top: 20px; }
+
+.btn {
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: var(--transition);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    -webkit-tap-highlight-color: transparent;
+}
+.btn-primary {
+    background: linear-gradient(135deg, #25d366 0%, #128c7e 100%);
+    color: var(--white);
+    box-shadow: 0 4px 16px rgba(37, 211, 102, 0.3);
+}
+.btn-primary:active { transform: scale(0.98); }
+.btn:disabled {
+    opacity: 0.35;
+    pointer-events: none;
+    box-shadow: none;
+}
+.wa-icon { width: 22px; height: 22px; }
+
+/* ─── Social Media Buttons ─── */
+.social-section {
+    margin-top: 28px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255,255,255,0.1);
+}
+.social-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--gray-400);
+    text-align: center;
+    margin-bottom: 12px;
+}
+
+.social-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 12px;
+    border-radius: var(--radius-sm);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--white);
+    margin-bottom: 10px;
+    transition: var(--transition);
+}
+.social-btn:active { transform: scale(0.98); }
+
+.btn-ig {
+    background: linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%);
+    box-shadow: 0 4px 12px rgba(220, 39, 67, 0.2);
+}
+.btn-yt {
+    background: linear-gradient(135deg, #ff0000 0%, #aa0000 100%);
+    box-shadow: 0 4px 12px rgba(255, 0, 0, 0.2);
+}
+
+/* ─── Footer ─── */
+.footer {
+    text-align: center;
+    padding: 0 20px 20px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.3);
+    line-height: 1.6;
+}
+
+/* ─── Language Logic ─── */
+/* English active */
+.app-en .lang-hi, .app-en .lang-mr { display: none !important; }
+/* Hindi active */
+.app-hi .lang-en, .app-hi .lang-mr { display: none !important; }
+/* Marathi active */
+.app-mr .lang-en, .app-mr .lang-hi { display: none !important; }

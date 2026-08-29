@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Help near you - Jarurat Care</title>
+  <meta name="description" content="Free and low-cost help for families facing cancer in India: places to stay near treatment, financial schemes, food, travel and support. No sign-up needed." />
+  <meta name="theme-color" content="#0C6E74" />
+
+  <meta property="og:title" content="Help near you - Jarurat Care" />
+  <meta property="og:description" content="Places to stay near treatment, financial schemes, food and travel help for families facing cancer. Filter by your city and what you need." />
+  <meta property="og:type" content="website" />
+
+  <link rel="stylesheet" href="css/variables.css?v=20260804a" />
+  <link rel="stylesheet" href="css/base.css?v=20260804a" />
+  <link rel="stylesheet" href="css/directory.css?v=20260804a" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230C6E74' stroke-width='2'><path d='M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z'/></svg>" />
+</head>
+<body class="dir-body">
+
+  <header class="dir-head">
+    <div class="dir-wrap dir-head-in">
+      <a class="dir-brand" href="directory.html">
+        <span class="dir-mark">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+        </span>
+        <span class="dir-brand-tx"><b>Jarurat Care</b><i>Help near you</i></span>
+      </a>
+      <button class="dir-share" id="share-btn" type="button">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+        Share this list
+      </button>
+    </div>
+  </header>
+
+  <section class="dir-hero">
+    <div class="dir-wrap">
+      <p class="dir-eyebrow">Free to use &middot; no sign-up &middot; nothing to fill in</p>
+      <h1>You should not have to hunt for this while someone you love is ill.</h1>
+      <p class="dir-sub">Places to stay near the hospital, schemes that pay for treatment, food, travel and people who will simply pick up the phone. Tell us where you are and what you need.</p>
+    </div>
+  </section>
+
+  <main class="dir-wrap dir-main">
+
+    <section class="dir-step" id="step-need">
+      <h2 class="dir-step-h"><span class="dir-num">1</span>What kind of help do you need?</h2>
+      <div class="dir-cats" id="cats"></div>
+    </section>
+
+    <section class="dir-step">
+      <h2 class="dir-step-h"><span class="dir-num">2</span>Where are you looking?</h2>
+      <div class="dir-filters">
+        <label class="dir-field">
+          <span>State</span>
+          <select id="f-state"><option value="">Anywhere in India</option></select>
+        </label>
+        <label class="dir-field">
+          <span>City</span>
+          <select id="f-city"><option value="">Any city</option></select>
+        </label>
+        <label class="dir-field dir-field-grow">
+          <span>Search by name</span>
+          <input id="f-q" type="search" placeholder="e.g. Tata Memorial, Ayushman, dharamshala" autocomplete="off" />
+        </label>
+      </div>
+    </section>
+
+    <section class="dir-step">
+      <h2 class="dir-step-h"><span class="dir-num">3</span>What can you spend right now?</h2>
+      <p class="dir-step-sub">Answer honestly. It only changes what we show you first, and nobody is told.</p>
+      <div class="dir-tracks" id="tracks"></div>
+    </section>
+
+    <div class="dir-bar" id="bar">
+      <div class="dir-count" id="count">Loading the directory&hellip;</div>
+      <button class="dir-clear" id="clear-btn" type="button" hidden>Clear filters</button>
+    </div>
+
+    <div id="results" class="dir-results" aria-live="polite"></div>
+
+  </main>
+
+  <footer class="dir-foot">
+    <div class="dir-wrap">
+      <p><b>Jarurat Care</b> is a not-for-profit navigation programme for families facing cancer in India. Everything listed here is free to contact.</p>
+      <p class="dir-fine">We check these listings regularly, but schemes and prices change. Please confirm details on the phone before you travel. If something here is wrong or has closed, tell the person who sent you this link and we will fix it.</p>
+    </div>
+  </footer>
+
+  <div class="dir-toast" id="toast" role="status"></div>
+
+  <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7"></script>
+  <script type="module" src="js/directory.js?v=20260804a"></script>
+</body>
+</html>

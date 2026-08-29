@@ -1,0 +1,1449 @@
+// ============================================================
+// Patient Navigator: Calling Portal (per-caller worklist)
+// Identifies the caller by their login; pulls THEIR assignments
+// for today; structured tap-to-select notes. (v2 scheduling)
+// ============================================================
+
+import { getSupabase } from '../supabase.js';
+import { getCurrentProfile, getUserRole } from '../auth.js';
+import { showToast } from '../components/toast.js';
+import { openAssessmentFlow } from '../components/assessmentFlow.js';
+import { formatRelativeTime, capitalize } from '../utils/formatters.js';
+import { icon } from '../components/icons.js';
+import { DIAL_STATUSES, RECEPTIVENESS, REQUIREMENTS, CONDITIONS, giLabel, statusBadge, vulnerabilityBadge, stageGuide, GI_SUBTYPES, dataGaps, CONCERN_REASONS, CONCERN_SEVERITIES, sessionKind, sessionStatus } from '../utils/catalog.js';
+import { showModal, closeModal } from '../components/modal.js';
+import { navigate } from '../router.js';
+import { openWhatsappShare, recipientsFromPatient } from '../components/whatsappShare.js';
+import { AVATAR_COLORS, avatarColor, initials } from '../utils/avatar.js';
+
+// ---- module state ----
+let me = null;                 // current profile
+let currentQueueId = null;
+let currentPatient = null;
+let currentPatientPitches = null;
+let currentPatientPriority = null;
+let currentPatientSessions = [];   // live 1:1 sessions (invited/agreed/scheduled)
+let timerInterval = null;
+let timerSeconds = 0;
+let timerRunning = false;
+let timerStartEpoch = null;     // wall-clock anchor so duration survives a reload
+let currentHistory = [];
+let availableToday = true;
+const form = blankForm();
+
+// --- active-call persistence: survive a WebView reload, leaving the site to
+// take the call, or closing the app entirely. The patient, the running timer
+// AND every form field they'd already tapped come back exactly as left.
+// localStorage (not sessionStorage): callers leave the site mid-call.
+const ACTIVE_KEY = () => `jcf_active_call_${me?.id || 'x'}`;
+const ACTIVE_TTL_MS = 20 * 3600 * 1000;   // stale drafts die after ~a day
+function saveActive() {
+  if (!currentQueueId) return;
+  try {
+    localStorage.setItem(ACTIVE_KEY(), JSON.stringify({
+      queueId: currentQueueId, patient: currentPatient, history: currentHistory || [],
+      timerSeconds, timerRunning, timerStartEpoch, form: { ...form }, ts: Date.now(),
+    }));
+  } catch {}
+}
+function loadActive() {
+  try {
+    const r = localStorage.getItem(ACTIVE_KEY()) || sessionStorage.getItem(ACTIVE_KEY());
+    if (!r) return null;
+    const s = JSON.parse(r);
+    if (s.ts && Date.now() - s.ts > ACTIVE_TTL_MS) { clearActive(); return null; }
+    return s;
+  } catch { return null; }
+}
+function clearActive() { try { localStorage.removeItem(ACTIVE_KEY()); sessionStorage.removeItem(ACTIVE_KEY()); } catch {} }
+// Debounced save for fast-typing text fields: everything else saves instantly.
+let saveSoonTimer = null;
+function saveActiveSoon() { clearTimeout(saveSoonTimer); saveSoonTimer = setTimeout(saveActive, 400); }
+async function restoreActive(s) {
+  currentQueueId = s.queueId; currentPatient = s.patient; currentHistory = s.history || [];
+  Object.assign(form, blankForm());
+  timerSeconds = s.timerSeconds || 0;
+  timerRunning = !!s.timerRunning;
+  timerStartEpoch = s.timerStartEpoch || null;
+  // If the call was timing when the page reloaded (tapping the tel: link
+  // reloads the WebView), recover the TRUE elapsed time from the wall clock
+  // instead of the stale snapshot. This is what was wiping the duration.
+  if (timerRunning && timerStartEpoch) timerSeconds = Math.floor((Date.now() - timerStartEpoch) / 1000);
+  await Promise.all([loadPatientPitches(s.patient.patient_id), loadPatientSessions(s.patient.patient_id), loadPatientPriority(s.patient.patient_id)]);
+  mountActive(s.patient, currentHistory);
+  applySavedForm(s.form);
+  if (timerRunning) resumeRunningTimer();
+}
+
+// Re-apply a saved draft to the freshly rendered form. Buttons are "clicked"
+// programmatically so the existing handlers rebuild both form state and the
+// visual selection; text fields are set directly.
+function applySavedForm(saved) {
+  if (!saved) return;
+  const click = (sel) => document.querySelector(sel)?.click();
+  if (saved.dialStatus) click(`#seg-outcome .seg-btn[data-status="${saved.dialStatus}"]`);
+  if (saved.receptiveness) click(`#recep .recep-btn[data-recep="${saved.receptiveness}"]`);
+  if (saved.condition) click(`#seg-condition .seg-btn[data-cond="${saved.condition}"]`);
+  (saved.requirements || []).forEach(k => click(`#reqs .chip[data-req="${CSS.escape(k)}"]`));
+  (saved.services || []).forEach(k => {
+    const label = document.querySelector(`#services .svc[data-svc="${k}"]`);
+    const input = label?.querySelector('input');
+    if (input && !input.disabled && !input.checked) { input.checked = true; input.dispatchEvent(new Event('change')); }
+  });
+  ['waLink', 'whatsapp', 'social', 'consent'].forEach(f => {
+    if (saved[f] === true || saved[f] === false)
+      click(`.yesno[data-yn="${f}"] .yn[data-v="${saved[f] ? 'yes' : 'no'}"]`);
+  });
+  const setText = (id, field) => {
+    const v = saved[field];
+    if (!v) return;
+    const el = document.getElementById(id); if (el) el.value = v;
+    form[field] = v;
+  };
+  setText('f-customreq', 'customReq');
+  setText('f-fb-patient', 'fbPatient');
+  setText('f-fb-caregiver', 'fbCaregiver');
+  setText('f-notes', 'notes');
+  setText('f-strategy', 'strategy');
+  if (saved.dateManual && saved.followupDate) {
+    form.followupDate = saved.followupDate; form.dateManual = true;
+    const el = document.getElementById('f-followup'); if (el) el.value = saved.followupDate;
+    const auto = document.getElementById('fu-auto'); if (auto) auto.style.display = 'none';
+  }
+  updateSubmit();
+  saveActive();
+}
+
+function blankForm() {
+  return { dialStatus: '', receptiveness: '', services: [], whatsapp: null, social: null, waLink: null,
+    requirements: [], customReq: '', condition: '', notes: '', followupDate: '', strategy: '',
+    fbPatient: '', fbCaregiver: '', consent: null, dateManual: false };
+}
+
+// services the caller can OFFER on this call (pitched_* columns on patients)
+const SERVICES = [
+  { key: 'therapy',        label: 'Therapy & counselling',   icon: 'heart',       column: 'pitched_therapy_at' },
+  { key: 'nutrition',      label: 'Nutrition guidance',      icon: 'leaf',        column: 'pitched_nutrition_at' },
+  { key: 'caregiver',      label: 'Caregiver support',       icon: 'users',       column: 'pitched_caregiver_at' },
+  { key: 'clinical_trial', label: 'Clinical-trial info',     icon: 'fileText',    column: 'pitched_clinical_trial_at' },
+  { key: 'financial_aid',  label: 'Financial-aid guidance',  icon: 'shieldCheck', column: 'pitched_financial_aid_at' },
+];
+// Didn't pick up (no answer / busy / voicemail) → try again in a week. A
+// requested callback also waits a week. Nothing marked comes back the next
+// day, ever. Kept in sync with the auto_followup_date trigger (sql/49).
+const STATUS_DAYS = { no_answer: 7, busy: 7, voicemail: 7, callback_requested: 7, wrong_number: null };
+// days overdue → badge tone + label, for the "catch up" signal
+// One household, several numbers: show the dial order (patient first,
+// then caregiver 1, then caregiver 2). Once anyone answers, that's the
+// family reached: the queue won't resurface them for a week.
+const PHONE_LABELS = { patient: 'Patient', caregiver_1: 'Caregiver 1', caregiver_2: 'Caregiver 2', other: 'Other' };
+
+// Every number we hold for this family, in dial order. patients.phone_full is
+// the patient's own line and is often blank, while the family's real numbers
+// live in patient_phones (sql/48), so the button at the top has to look here too.
+function dialablePhones(p) {
+  const linked = (Array.isArray(p.phones) ? p.phones : []).filter(ph => ph && ph.phone);
+  if (linked.length) return linked;
+  // Fallback for a project where sql/48 has not been run: read the flat columns.
+  const flat = [];
+  if (p.phone_full) flat.push({ phone: p.phone_full, label: 'patient' });
+  if (p.caregiver_phone_full) flat.push({ phone: p.caregiver_phone_full, label: 'caregiver_1', contact_name: p.caregiver_name, relationship: p.caregiver_relationship });
+  return flat;
+}
+
+// The one number the big "Tap to call" button dials.
+function primaryPhone(p) {
+  const all = dialablePhones(p);
+  if (p.phone_full) return { phone: p.phone_full, label: 'patient' };
+  return all[0] || null;
+}
+
+function renderDialOrder(p) {
+  const phones = Array.isArray(p.phones) ? p.phones : [];
+  if (phones.length <= 1) return '';
+  const LABELS = PHONE_LABELS;
+  return `
+    <div class="dial-order" style="margin-top:10px;border:1px solid var(--line);border-radius:var(--r-md);padding:11px 13px">
+      <div class="info-label" style="margin-bottom:7px">No pickup? Try in this order</div>
+      ${phones.map((ph, i) => `
+        <a class="cg-call" href="tel:${String(ph.phone).replace(/\s/g, '')}" style="display:flex;align-items:center;gap:9px;margin-top:${i ? 7 : 0}px">
+          <span class="badge badge-${i === 0 ? 'primary' : 'neutral'}" style="min-width:24px;justify-content:center">${i + 1}</span>
+          <span class="tnum" style="font-weight:600">${ph.phone}</span>
+          <span class="faint" style="font-size:12px;color:var(--ink-3)">${LABELS[ph.label] || ph.label}${ph.contact_name && ph.label !== 'patient' ? ' · ' + ph.contact_name : ''}${ph.relationship ? ' (' + ph.relationship + ')' : ''}</span>
+        </a>`).join('')}
+      <div class="faint" style="font-size:11.5px;color:var(--ink-3);margin-top:9px">One family, one conversation: once anyone answers, log it and stop dialling the other numbers.</div>
+    </div>`;
+}
+
+function overdueBadge(days) {
+  const d = days || 0;
+  if (d <= 0) return '';
+  const tone = d >= 7 ? 'danger' : 'warn';
+  return `<span class="badge badge-${tone}">${icon('clock')}${d}d overdue</span>`;
+}
+
+function fmtTimer(s) { return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
+function addDays(n) { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().split('T')[0]; }
+function badge(tone, label) { return `<span class="badge badge-${tone}"><span class="dot"></span>${label}</span>`; }
+
+export async function renderCalling(container) {
+  me = getCurrentProfile();
+  container.innerHTML = `<div id="portal-content"></div>`;
+  if (!me?.id) { root().innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Not signed in</h4><p>Please sign in again.</p></div>`; return; }
+  const saved = loadActive();
+  if (saved && saved.queueId && saved.patient) { await restoreActive(saved); return; }
+  await mountReady();
+}
+function root() { return document.getElementById('portal-content'); }
+
+// The Calling Portal is ONE PERSON'S list: get_next_call only ever serves rows
+// where call_queue.assigned_to is you. A manager who assigns three patients to a
+// mentor, reads that mentor's "3 to go / 8 done" on Team & Queue and then opens
+// this page sees an empty queue, which is correct but read as a bug. So the empty
+// states now say whose list this is and where the team's calls actually live.
+function supervises() {
+  const r = getUserRole();
+  return r === 'manager' || r === 'admin';
+}
+
+// "Nothing was ever assigned to you" and "you finished your list" are different
+// facts. Saying "you've worked through your list" to someone who never had one is
+// what made this look broken.
+function emptyReason(summary) {
+  if (summary.done_today > 0) {
+    return `You have reached everyone on <strong>your</strong> list today: ${summary.done_today} done. Nothing further is queued for you.`;
+  }
+  return supervises()
+    ? `Nothing is assigned to <strong>you</strong> today. This page only ever serves calls queued to your own name, so a mentor's list will not appear here.`
+    : `No one is assigned to you yet today. Ask your manager to build today's list, or check back soon.`;
+}
+
+function teamPointerHTML() {
+  return `<div style="border:1px solid var(--line);border-radius:var(--r-md);padding:11px 13px;background:var(--surface-2);font:var(--t-xs);color:var(--ink-2);line-height:1.5;text-align:left">
+      Looking for calls you assigned to someone else? They sit in that person's queue.
+      <button class="btn btn-ghost btn-sm" id="goto-team" style="margin-top:7px">${icon('users')}Open Team &amp; Queue</button>
+    </div>`;
+}
+
+// ============================================================ Ready
+async function mountReady() {
+  resetState();
+  const sb = getSupabase();
+  // current availability for today
+  try {
+    const { data } = await sb.from('caller_availability').select('available').eq('caller_id', me.id).eq('day', new Date().toISOString().slice(0, 10)).maybeSingle();
+    availableToday = data ? data.available : true;
+  } catch { availableToday = true; }
+
+  let summary = { pending: 0, follow_ups: 0, new_leads: 0, done_today: 0, overdue: 0, oldest_overdue_days: 0, scheduled_ahead: 0 };
+  try { const { data } = await sb.rpc('get_worklist_summary', { p_caller_id: me.id }); if (data) summary = data; } catch {}
+
+  // Today's progress + what's queued for the coming days (list is capped at
+  // 15/day; the rest is scheduled forward, so this stays manageable).
+  const total = (summary.done_today || 0) + (summary.pending || 0);
+  const pct = total ? Math.round((summary.done_today / total) * 100) : 0;
+  const overdue = summary.overdue || 0;
+  const oldest = summary.oldest_overdue_days || 0;
+  const ahead = summary.scheduled_ahead || 0;
+  const catchupHTML = `
+    <div class="catchup" style="border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px;background:var(--surface-2);margin:2px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center;font:var(--t-xs);color:var(--ink-3)">
+        <span>Today's progress</span><span><strong style="color:var(--ink)">${summary.done_today}</strong> done · ${summary.pending} to go</span>
+      </div>
+      <div style="height:8px;background:var(--surface-3);border-radius:999px;overflow:hidden;margin:7px 0">
+        <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,var(--primary-bright),var(--primary));transition:width .4s"></div>
+      </div>
+      ${overdue > 0
+        ? `<div style="display:flex;align-items:center;gap:7px;font:var(--t-xs);color:var(${oldest >= 7 ? '--danger' : '--clay'})"><span style="width:15px;height:15px;display:inline-flex;flex:none">${icon('alertCircle')}</span><span><strong>${overdue} overdue</strong> · oldest ${oldest} day${oldest === 1 ? '' : 's'} behind: reach these first.</span></div>`
+        : ahead > 0
+          ? `<div style="display:flex;align-items:center;gap:7px;font:var(--t-xs);color:var(--ink-3)"><span style="width:15px;height:15px;display:inline-flex;flex:none">${icon('calendar')}</span><span><strong style="color:var(--ink-2)">${ahead}</strong> more scheduled for the coming days: spread at about 22 a day.</span></div>`
+          : `<div style="display:flex;align-items:center;gap:7px;font:var(--t-xs);color:var(--ok)"><span style="width:15px;height:15px;display:inline-flex;flex:none">${icon('checkCircle')}</span>You're all caught up.</div>`}
+    </div>`;
+
+  const el = root();
+  el.innerHTML = `
+    <div class="ready">
+      <div style="width:100%;max-width:450px;display:flex;flex-direction:column;gap:var(--s5)">
+      <div class="ready-card">
+        <div class="ready-ico">${icon('phoneCall')}</div>
+        <h2>Ready when you are, ${me.full_name?.split(' ')[0] || 'there'}.</h2>
+        <p>${summary.pending > 0
+          ? `You have <strong>${summary.pending}</strong> ${summary.pending === 1 ? 'person' : 'people'} to reach today: ${summary.follow_ups} follow-up${summary.follow_ups === 1 ? '' : 's'} and ${summary.new_leads} new. One conversation at a time.`
+          : emptyReason(summary)}</p>
+
+        ${summary.pending > 0 ? catchupHTML : ''}
+        ${summary.pending === 0 && supervises() ? teamPointerHTML() : ''}
+
+        <div class="avail-row" id="avail-row" style="display:flex;align-items:center;justify-content:center;gap:10px;margin-top:4px">
+          <span class="badge ${availableToday ? 'badge-ok' : 'badge-warn'}" id="avail-badge"><span class="dot"></span>${availableToday ? 'Calling today' : 'Off today'}</span>
+          <button class="btn btn-ghost btn-sm" id="avail-toggle">${availableToday ? 'Mark me off today' : "I'm calling today"}</button>
+        </div>
+
+        <button class="btn btn-primary btn-lg btn-block" id="start" ${summary.pending > 0 ? '' : 'disabled'} style="margin-top:6px">${icon('phoneCall')}Start calling</button>
+        <div class="ready-stats">
+          <div data-goto-list style="cursor:pointer" title="See who's on today's list"><div class="rs-num" id="rs-follow">${summary.follow_ups}</div><div class="rs-lbl">Follow-ups</div></div>
+          <div class="rs-div"></div>
+          <div data-goto-list style="cursor:pointer" title="See who's on today's list"><div class="rs-num" id="rs-new">${summary.new_leads}</div><div class="rs-lbl">New leads</div></div>
+          <div class="rs-div"></div>
+          <div><div class="rs-num">${summary.done_today}</div><div class="rs-lbl">Done today</div></div>
+        </div>
+      </div>
+      <div class="card card-flush" id="today-list">
+        <div class="card-head"><h3>Today's list</h3><span class="badge badge-neutral" id="tl-count">…</span></div>
+        <div id="tl-body"><div style="padding:var(--s4)">${Array(3).fill('<div class="sk skeleton-row"></div>').join('')}</div></div>
+      </div>
+      </div>
+    </div>`;
+
+  document.getElementById('start')?.addEventListener('click', getNextCall);
+  document.getElementById('goto-team')?.addEventListener('click', () => navigate('team'));
+  document.getElementById('avail-toggle')?.addEventListener('click', toggleAvailability);
+  el.querySelectorAll('[data-goto-list]').forEach(t => t.addEventListener('click', scrollToTodayList));
+  loadTodayList();
+}
+
+// ---- Today's list: the SAME rows get_next_call draws from (one shared
+// definition, get_my_worklist), so what the mentor SEES is what gets served.
+// Servable rows are tappable; resting ones stay visible, greyed, with the
+// date they resurface. No one silently vanishes.
+async function loadTodayList() {
+  const card = document.getElementById('today-list');
+  const body = document.getElementById('tl-body');
+  const countEl = document.getElementById('tl-count');
+  if (!card || !body) return;
+  try {
+    const { data, error } = await getSupabase().rpc('get_my_worklist');
+    if (error) throw error;
+    const rows = data || [];
+    if (!rows.length) { card.style.display = 'none'; return; }
+    const servable = rows.filter(r => r.servable).sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));
+    const resting = rows.filter(r => !r.servable && r.resting && !r.no_number)
+      .sort((a, b) => String(a.resting_until || '').localeCompare(String(b.resting_until || '')));
+    // Un-callable rows (sql/72): nothing to dial, so they never reach the top
+    // of the queue any more. They stay listed, because the number is the work.
+    const noNumber = rows.filter(r => r.no_number);
+    const later = rows.length - servable.length - resting.length - noNumber.length;
+    if (countEl) countEl.textContent = servable.length ? `${servable.length} to call` : 'none to call';
+    body.innerHTML = `
+      <div class="due-list">
+        ${servable.map(r => worklistRowHTML(r, true)).join('')}
+        ${resting.map(r => worklistRowHTML(r, false)).join('')}
+        ${noNumber.map(r => worklistRowHTML(r, false)).join('')}
+      </div>
+      ${noNumber.length ? `<div class="due-meta" style="padding:0 var(--s5) var(--s4);color:var(--ink-3)">
+        ${noNumber.length} ${noNumber.length === 1 ? 'person has' : 'people have'} no phone number on file, so they are held out of the call order instead of blocking it. Open the profile to add a number and they come back into the list.</div>` : ''}
+      ${later > 0 ? `<div class="due-meta" style="padding:0 var(--s5) var(--s4);color:var(--ink-3)">+ ${later} more scheduled for the coming days.</div>` : ''}`;
+    body.querySelectorAll('[data-qid]').forEach(row => row.addEventListener('click', () => startFromList(row.dataset.qid, row)));
+    body.querySelectorAll('[data-pid]').forEach(row => row.addEventListener('click', () => navigate('patients/' + row.dataset.pid)));
+  } catch (err) {
+    // RPC not deployed yet or a network blip: the Start button still works.
+    console.warn('Worklist error:', err);
+    card.style.display = 'none';
+  }
+}
+
+function worklistRowHTML(r, servable) {
+  const name = r.full_name || r.patient_code || 'Patient';
+  const srcBadge = r.source === 'followup' ? badge('primary', 'Follow-up') : badge('gold', 'New');
+  const meta = servable
+    ? (r.last_call_date ? `Last call ${formatRelativeTime(r.last_call_date)}` : 'First conversation')
+    : r.no_number
+      ? 'No phone number on file: add one to bring them back into the list'
+      : `Resting: resurfaces ${fmtDayIN(r.resting_until)}`;
+  // An un-callable row opens the profile instead of the call flow: the only
+  // useful action on it is filling in the number.
+  const attrs = servable
+    ? `data-qid="${r.queue_id}" style="cursor:pointer" title="Call ${name} now"`
+    : r.no_number
+      ? `data-pid="${r.patient_id}" style="cursor:pointer;opacity:.75" title="Open ${name} and add a number"`
+      : 'style="opacity:.55"';
+  return `
+    <div class="due-row${servable || r.no_number ? ' clickable' : ''}" ${attrs}>
+      <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span>
+      <div class="grow" style="flex:1;min-width:0">
+        <div class="due-name">${name}</div>
+        <div class="due-meta">${meta}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        ${r.no_number ? badge('warn', 'No number') : srcBadge}${servable ? overdueBadge(r.overdue_days) : ''}
+      </div>
+    </div>`;
+}
+function fmtDayIN(d) { return d ? new Date(d).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }) : 'soon'; }
+
+function scrollToTodayList() {
+  const card = document.getElementById('today-list');
+  if (!card || card.style.display === 'none') { showToast('Your list is empty right now', 'info'); return; }
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  card.style.transition = 'box-shadow .35s ease';
+  card.style.boxShadow = '0 0 0 3px var(--primary-bright)';
+  setTimeout(() => { card.style.boxShadow = ''; }, 1300);
+}
+
+// Tap a specific person on the list: same claim + same active-call flow as
+// "Start calling", just this patient instead of rank #1.
+async function startFromList(queueId, rowEl) {
+  if (!queueId || currentQueueId) return;
+  if (rowEl) { rowEl.style.pointerEvents = 'none'; rowEl.style.opacity = '.6'; }
+  try {
+    const { data, error } = await getSupabase().rpc('get_call_by_queue_id', { p_queue_id: queueId });
+    if (error) throw error;
+    if (!data || data.found === false) { showToast('Could not open this call, refreshing your list', 'warning'); await mountReady(); return; }
+    await startCallSession(data);
+  } catch (err) {
+    // The RPC raises human messages ('resting until…' / 'already completed').
+    showToast(err.message || 'Could not open this call', 'warning');
+    await mountReady();
+  }
+}
+
+async function toggleAvailability() {
+  const sb = getSupabase();
+  const next = !availableToday;
+  try {
+    await sb.rpc('mark_availability', { p_available: next });
+    availableToday = next;
+    showToast(next ? "You're marked as calling today" : "You're marked off today. Your patients will be covered", next ? 'success' : 'info');
+    const badge = document.getElementById('avail-badge');
+    const btn = document.getElementById('avail-toggle');
+    if (badge) { badge.className = `badge ${next ? 'badge-ok' : 'badge-warn'}`; badge.innerHTML = `<span class="dot"></span>${next ? 'Calling today' : 'Off today'}`; }
+    if (btn) btn.textContent = next ? 'Mark me off today' : "I'm calling today";
+  } catch (e) { showToast('Could not update availability: ' + e.message, 'error'); }
+}
+
+// ============================================================ Get next
+async function getNextCall() {
+  const sb = getSupabase();
+  const btn = document.getElementById('start');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:20px;height:20px;border-width:2.5px"></span>Finding the next person…'; }
+  try {
+    const { data, error } = await sb.rpc('get_next_call', { p_team_member_id: me.id });
+    if (error) throw error;
+    if (!data || !data.found) { await mountQueueEmpty(); return; }
+    await startCallSession(data);
+  } catch (err) {
+    showToast('Something went wrong: ' + err.message, 'error');
+    if (btn) { btn.disabled = false; btn.innerHTML = `${icon('phoneCall')}Start calling`; }
+  }
+}
+
+// One entry into the active-call view: get_next_call and the tappable
+// Today's list both land here with the same claimed-queue JSON.
+async function startCallSession(data) {
+  currentQueueId = data.queue_id;
+  currentPatient = data;
+  Object.assign(form, blankForm());
+  timerSeconds = 0; timerRunning = false; timerStartEpoch = null;
+  clearInterval(timerInterval); timerInterval = null;
+  await Promise.all([loadPatientPitches(data.patient_id), loadPatientSessions(data.patient_id), loadPatientPriority(data.patient_id)]);
+  currentHistory = await loadPatientHistory(data.patient_id);
+  saveActive();
+  mountActive(data, currentHistory);
+}
+
+async function loadPatientPitches(patientId) {
+  const sb = getSupabase();
+  try {
+    const cols = SERVICES.map(s => s.column).join(',');
+    // maybeSingle: callers can't always SELECT unassigned new leads (RLS).
+    // Zero rows is normal there, not an error.
+    const { data } = await sb.from('patients').select(cols).eq('id', patientId).maybeSingle();
+    currentPatientPitches = data || {};
+  } catch { currentPatientPitches = {}; }
+}
+// Live 1:1 sessions for the invitation moment + the "session coming up"
+// banner (care_sessions is team-readable, so this works even for patients
+// whose row RLS hides from this mentor).
+// The one line of context a mentor should have BEFORE she dials: which band
+// this family is in and what put them there. Same row the patients list sorts
+// by (v_patient_priority, sql/80), so the queue, the list and this card cannot
+// tell her three different stories about the same person.
+async function loadPatientPriority(patientId) {
+  const sb = getSupabase();
+  try {
+    const { data } = await sb.from('v_patient_priority')
+      .select('band, reason, concern_sev, overdue_days, fields_known, fields_total, calls_held')
+      .eq('patient_id', patientId)
+      .maybeSingle();
+    currentPatientPriority = data || null;
+  } catch { currentPatientPriority = null; }
+}
+
+async function loadPatientSessions(patientId) {
+  const sb = getSupabase();
+  try {
+    const { data } = await sb.from('care_sessions')
+      .select('id, kind, status, scheduled_at, assigned_to')
+      .eq('patient_id', patientId)
+      .in('status', ['invited', 'agreed', 'scheduled'])
+      .order('created_at', { ascending: false });
+    currentPatientSessions = data || [];
+  } catch { currentPatientSessions = []; }
+}
+async function loadPatientHistory(patientId) {
+  const sb = getSupabase();
+  // SECURITY DEFINER RPC: the caller on this queue entry sees the FULL
+  // history, everyone's notes, not just their own (plain RLS hides those).
+  try {
+    const { data, error } = await sb.rpc('get_patient_call_history', { p_patient_id: patientId });
+    if (error) throw error;
+    return data || [];
+  } catch {
+    try {
+      const { data } = await sb.from('call_logs').select('*').eq('patient_id', patientId).order('call_date', { ascending: false }).limit(20);
+      return (data || []).map(h => ({ ...h, caller_name: h.contacted_by_name, is_mine: false }));
+    } catch { return []; }
+  }
+}
+
+// ============================================================ Active view
+function mountActive(p, history) {
+  currentHistory = history || [];
+  const el = root(); if (!el) return;
+  const name = p.full_name || p.patient_code || 'Patient';
+  const attemptTone = p.attempt >= 3 ? 'danger' : p.attempt === 2 ? 'warn' : 'info';
+  const location = [p.city, p.state].filter(Boolean).join(', ') || 'N/A';
+  const srcBadge = p.source === 'followup' ? badge('primary', 'Follow-up') : badge('gold', 'New lead');
+  const info = [
+    { label: 'Age / Gender', value: `${p.age || 'N/A'} · ${capitalize(p.gender || 'N/A')}` },
+    { label: 'Location', value: location },
+    { label: 'Cancer', value: giLabel(p.gi_subtype) || p.cancer_type || 'Not reported' },
+    { label: 'Stage', value: p.tnm_stage || capitalize(p.cancer_stage || 'N/A') },
+    { label: 'Treatment', value: p.current_treatment || 'N/A' },
+    { label: 'Hospital', value: p.treating_hospital || 'N/A' },
+    { label: 'Trajectory', value: capitalize(p.trajectory || 'N/A') },
+    { label: 'ECOG', value: p.ecog_status != null ? String(p.ecog_status) + ' / 4' : 'N/A' },
+    { label: 'Paying via', value: p.payment_method || capitalize(p.insurance_status || 'N/A') },
+    { label: 'Language', value: p.primary_language || 'N/A' },
+  ];
+  // The number the big button dials. It used to read patients.phone_full only,
+  // so a family whose numbers are all caregiver lines saw "No number on file"
+  // with those very numbers listed underneath, and the button's href="#" threw
+  // the hash router onto the login screen.
+  const dialPrimary = primaryPhone(p);
+  const dialWho = dialPrimary && dialPrimary.label && dialPrimary.label !== 'patient'
+    ? `${PHONE_LABELS[dialPrimary.label] || 'Contact'}${dialPrimary.contact_name ? ' · ' + dialPrimary.contact_name : ''}`
+    : '';
+  el.innerHTML = `
+    <div class="portal-grid">
+      <div class="col-left">
+        <div class="card pcard">
+          <div class="pcard-head">
+            <span class="avatar avatar-lg" style="background:${avatarColor(name)}">${initials(name)}</span>
+            <div class="grow" style="flex:1;min-width:0">
+              <h2 class="pcard-name">${name}</h2>
+              <div class="row gap2" style="display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap">
+                <span class="faint tnum" style="font-size:12.5px;color:var(--ink-3)">${p.patient_code || ''}</span>
+                ${srcBadge}${overdueBadge(p.days_overdue)}<span class="badge badge-${attemptTone}">Attempt ${p.attempt || 1}</span>
+                ${p.patient_status ? statusBadge(p.patient_status) : ''}${vulnerabilityBadge(p.vulnerability_score)}
+              </div>
+            </div>
+          </div>
+          ${dialPrimary ? `
+          <a class="callbtn" href="tel:${String(dialPrimary.phone).replace(/\s/g, '')}">
+            <span class="cb-ico">${icon('phone')}</span>
+            <div class="grow" style="flex:1"><div class="cb-label">Tap to call${dialWho ? ' · ' + dialWho : ''}</div><div class="cb-num tnum">${dialPrimary.phone}</div></div>
+            ${icon('chevronRight')}
+          </a>
+          <button class="btn btn-secondary" id="copy-num" data-num="${String(dialPrimary.phone).replace(/\s/g, '')}" style="width:100%;justify-content:center;gap:8px;margin-top:8px">${icon('copy')}Copy number</button>`
+          : `
+          <div class="strategy" style="margin-bottom:0">
+            <div class="strategy-head"><span class="strategy-ico">${icon('phone')}</span>
+              <div><div class="strategy-title">No number on file</div></div>
+            </div>
+            <p class="strategy-body">There is nothing to dial for this family yet. Add a number on their profile and they come back into the call order. Your notes here are kept while you go.</p>
+          </div>
+          <button class="btn btn-secondary" id="open-profile-num" style="width:100%;justify-content:center;gap:8px;margin-top:8px">${icon('user')}Open profile to add a number</button>`}
+          <button class="btn btn-gold" id="wa-share-btn" style="width:100%;justify-content:center;gap:8px;margin-top:8px">${icon('phone')}Send resources on WhatsApp</button>
+          ${renderDialOrder(p)}
+          ${renderPriorityBanner()}
+          ${renderStageGuide(p)}
+          ${p.followup_strategy_notes ? `
+          <div class="strategy">
+            <div class="strategy-head"><span class="strategy-ico">${icon('handHeart')}</span>
+              <div><div class="strategy-title">A note from the last call</div>
+              ${p.receptiveness_bucket ? `<div class="faint" style="font-size:12.5px;color:var(--ink-3)">Last spoke · they were <strong style="color:var(--ink-2)">${capitalize(p.receptiveness_bucket)}</strong></div>` : ''}</div>
+            </div>
+            <p class="strategy-body">${p.followup_strategy_notes}</p>
+          </div>` : ''}
+          ${renderSessionBanner()}
+          <div class="info-grid">${info.map(i => `<div class="info-cell"><div class="info-label">${i.label}</div><div class="info-value">${i.value}</div></div>`).join('')}</div>
+          ${p.caregiver_name ? `
+          <div class="caregiver">
+            <div class="row gap2" style="display:flex;align-items:center;gap:8px"><span class="cg-ico">${icon('users')}</span>
+              <div><div class="info-label">Caregiver</div><div class="info-value">${p.caregiver_name}${p.caregiver_relationship ? ' · ' + p.caregiver_relationship : ''}</div></div></div>
+            ${p.caregiver_phone_full && !(Array.isArray(p.phones) && p.phones.length > 1) ? `<a class="cg-call" href="tel:${p.caregiver_phone_full.replace(/\s/g, '')}">${icon('phone')}<span class="tnum">${p.caregiver_phone_full}</span></a>` : ''}
+          </div>` : ''}
+          <div class="timer">
+            <div class="timer-display"><span class="timer-dot" id="t-dot"></span><span class="timer-time tnum" id="t-time">${fmtTimer(timerSeconds)}</span></div>
+            <button class="btn btn-primary" id="t-toggle">${icon('play')}Start call</button>
+          </div>
+          <!-- The timer can only start from inside the portal (tapping a number,
+               copying one, or Start call). Anyone dialling on a separate handset
+               while the portal is open on a laptop had no way to record how long
+               they talked, so the minutes were being lost or corrected later. -->
+          <div class="timer-manual" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <span class="info-label" style="color:var(--ink-3)">Dialled from another phone?</span>
+            <label style="display:flex;align-items:center;gap:6px">
+              <input class="input tnum" id="t-mins" type="number" min="0" max="600" step="1" placeholder="min"
+                     value="${timerSeconds ? Math.ceil(timerSeconds / 60) : ''}" style="width:78px" />
+              <span class="info-label" style="color:var(--ink-3)">minutes talked</span>
+            </label>
+          </div>
+          ${p.legacy_notes ? `
+          <details class="history" style="border-top:1px solid var(--line);padding-top:var(--s4)">
+            <summary class="info-label" style="cursor:pointer;margin-bottom:6px">Notes from intake</summary>
+            <div class="hist-note" style="margin-top:6px">${p.legacy_notes}</div>
+          </details>` : ''}
+          ${renderFullHistory(history)}
+        </div>
+        ${renderGapsPanel(p)}
+      </div>
+      <div class="col-right">${renderLogForm(p)}</div>
+    </div>`;
+  wireActive(p);
+  wireGapsPanel(p);
+}
+
+// Every previous conversation (everyone's notes, newest first) so the
+// caller has full context before they dial.
+function renderFullHistory(history) {
+  if (!history.length) return `<div class="history"><div class="info-label">First contact: no calls yet. You're opening this relationship.</div></div>`;
+  return `
+    <div class="history">
+      <div class="info-label" style="margin-bottom:8px">The story so far · ${history.length} call${history.length === 1 ? '' : 's'}</div>
+      <div style="max-height:340px;overflow-y:auto;padding-right:6px">
+        ${history.map(h => {
+          const ds = DIAL_STATUSES.find(d => d.key === h.dial_status) || { label: capitalize(h.dial_status || 'N/A'), tone: 'neutral' };
+          const reqs = h.structured?.requirements || [];
+          const cond = CONDITIONS.find(c => c.key === h.patient_condition);
+          return `<div class="hist-row" style="flex-direction:column;gap:5px;align-items:stretch">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              ${badge(ds.tone, ds.label)}
+              ${h.receptiveness_bucket ? `<span class="badge badge-primary">${capitalize(h.receptiveness_bucket)}</span>` : ''}
+              ${cond ? `<span class="badge badge-${cond.tone === 'ok' ? 'ok' : cond.tone === 'danger' ? 'danger' : cond.tone === 'warn' ? 'warn' : 'neutral'}">${cond.label}</span>` : ''}
+              <span class="hist-meta">${h.is_mine ? 'You' : capitalize((h.caller_name || 'N/A').toLowerCase())} · ${formatRelativeTime(h.call_date)}${h.call_duration_mins ? ` · ${h.call_duration_mins} min` : ''}</span>
+            </div>
+            ${h.caller_notes ? `<div class="hist-note">${h.caller_notes}</div>` : ''}
+            ${h.feedback_patient ? `<div class="hist-note" style="font-style:italic">“${h.feedback_patient}” · patient</div>` : ''}
+            ${h.followup_strategy_notes ? `<div class="hist-note" style="color:var(--clay)">↪ for the next caregiver mentor: ${h.followup_strategy_notes}</div>` : ''}
+            ${reqs.length ? `<div style="display:flex;gap:5px;flex-wrap:wrap">${reqs.map(r => `<span class="badge badge-gold" style="font-size:11px;padding:2px 8px">${r}</span>`).join('')}</div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
+// ---- "Ask today": the data-gap radar for this patient ----
+function renderGapsPanel(p) {
+  const callNum = callNumberOf(p);
+  const gaps = dataGaps(p, callNum);
+  if (!gaps.length) {
+    return `<div class="card" style="padding:14px 18px;display:flex;align-items:center;gap:10px">
+      <span class="stat-ico ok">${icon('checkCircle')}</span>
+      <div><div class="info-value">Record complete</div><div class="due-meta">Nothing missing for ${(p.full_name || '').split(' ')[0]}: just be there for them.</div></div>
+    </div>`;
+  }
+  const unlocked = gaps.filter(g => g.unlocked);
+  if (callNum === 1) {
+    return `<div class="card" style="padding:14px 18px;display:flex;align-items:center;gap:10px">
+      <span class="stat-ico warn">${icon('search')}</span>
+      <div><div class="info-value">${gaps.length} detail${gaps.length === 1 ? '' : 's'} missing, but not today</div>
+      <div class="due-meta">First call is for trust. All the asks appear here from the next call.</div></div>
+    </div>`;
+  }
+  // From call 2 EVERY missing question is visible (gentler asks listed first).
+  // The caller judges what flows; nothing is hidden behind later calls.
+  return `
+    <div class="card card-flush" id="gaps-panel">
+      <div class="card-head" style="padding:14px 18px">
+        <h3 style="font-size:15.5px;display:flex;align-items:center;gap:8px"><span style="width:17px;height:17px;display:inline-flex;flex:none">${icon('search')}</span>Ask today, if it flows</h3>
+        <span class="badge badge-warn">${unlocked.length} missing</span>
+      </div>
+      <div style="padding:6px 12px 12px;max-height:420px;overflow-y:auto">
+        ${unlocked.map(g => `
+          <div class="lever-row" data-gap="${g.key}" style="cursor:pointer">
+            <span class="stat-ico warn" style="width:30px;height:30px;border-radius:8px">${icon('plus')}</span>
+            <div style="flex:1;min-width:160px">
+              <div class="lever-label">${g.label}</div>
+              <div class="due-meta" style="font-style:italic">${g.ask}</div>
+            </div>
+            <div class="lever-extra" data-gap-input style="display:none"></div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function wireGapsPanel(p) {
+  const panel = document.getElementById('gaps-panel');
+  if (!panel) return;
+  const callNum = callNumberOf(p);
+  panel.querySelectorAll('[data-gap]').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('[data-gap-input]')) return; // typing, not toggling
+      const gap = dataGaps(p, callNum).find(g => g.key === row.dataset.gap);
+      if (!gap) return;
+      const mount = row.querySelector('[data-gap-input]');
+      const open = mount.style.display !== 'none';
+      // close all others
+      panel.querySelectorAll('[data-gap-input]').forEach(m => { m.style.display = 'none'; m.innerHTML = ''; });
+      if (open) return;
+      mount.style.display = '';
+      const i = gap.input;
+      mount.innerHTML = i.kind === 'select'
+        ? `<select class="select" data-v>${'<option value="">Choose…</option>'}${i.options.map(o => `<option value="${o.key}">${o.label}</option>`).join('')}</select>
+           <button class="btn btn-primary btn-sm" data-save>${icon('check')}</button>`
+        : `<input class="input" data-v type="${i.kind === 'tel' ? 'tel' : i.kind}" placeholder="${i.placeholder || ''}" ${i.min != null ? `min="${i.min}"` : ''} ${i.max != null ? `max="${i.max}"` : ''} style="width:${i.kind === 'number' ? '90px' : '170px'}" />
+           <button class="btn btn-primary btn-sm" data-save>${icon('check')}</button>`;
+      mount.querySelector('[data-v]').focus();
+      mount.querySelector('[data-save]').addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const raw = mount.querySelector('[data-v]').value.trim();
+        if (!raw) { showToast('Nothing entered yet', 'warning'); return; }
+        const btn = mount.querySelector('[data-save]');
+        btn.disabled = true;
+        try {
+          const fields = gap.patch(raw);
+          const { error } = await getSupabase().rpc('update_patient_from_call', { p_patient_id: p.patient_id, p_fields: fields });
+          if (error) throw error;
+          Object.assign(p, fields);
+          row.classList.add('on');
+          row.style.pointerEvents = 'none';
+          row.querySelector('.stat-ico').className = 'stat-ico ok';
+          row.querySelector('.stat-ico').innerHTML = icon('check');
+          row.querySelector('.due-meta').textContent = 'Saved. Thank you for asking';
+          mount.remove();
+          showToast(`${gap.label} recorded`, 'success');
+        } catch (err) {
+          showToast('Could not save: ' + err.message, 'error');
+          btn.disabled = false;
+        }
+      });
+    });
+  });
+}
+
+// Which call in the journey is this? Drives the guide + which
+// questions even appear: call 1 is relationship-only, by design.
+// call_stage is unreliable (sticks low), so trust the real call history
+// when it says the relationship is further along.
+function callNumberOf(p) { return Math.min(Math.max(p.call_stage || 0, (currentHistory || []).length) + 1, 99); }
+
+// Every patient used to be handed over identically, so a mentor met a family
+// with an open urgent concern the same way she met a calm one she had spoken to
+// last week. This says which band they are in, what put them there, and the one
+// thing to lead with. The band and reason come from the database, so this card,
+// the patients list and any export agree.
+const BAND_LEAD = {
+  urgent: {
+    tone: 'danger', icon: 'alertCircle', label: 'Urgent',
+    lead: 'Something serious was flagged and is still open. Open on it gently before anything else, and do not run the usual script.',
+  },
+  high: {
+    tone: 'warn', icon: 'clock', label: 'Needs attention',
+    lead: 'They have waited longer than they should have. Acknowledge the gap early, without apologising into a corner.',
+  },
+  watch: {
+    tone: 'info', icon: 'search', label: 'Worth learning about',
+    lead: 'We know very little about this family yet. The Ask today panel below is the priority on this call.',
+  },
+  steady: {
+    tone: 'neutral', icon: 'heart', label: 'Steady',
+    lead: 'Nothing is flagged. This is a relationship call: how are they really doing, and what has changed.',
+  },
+};
+
+function renderPriorityBanner() {
+  const pr = currentPatientPriority;
+  if (!pr || !pr.band) return '';
+  const b = BAND_LEAD[pr.band] || BAND_LEAD.steady;
+  const known = (pr.fields_known != null && pr.fields_total)
+    ? `${pr.fields_known} of ${pr.fields_total} details on file` : '';
+  return `
+    <div class="strategy" style="border-left-color:var(--${b.tone === 'neutral' ? 'line-strong' : b.tone})">
+      <div class="strategy-head">
+        <span class="strategy-ico">${icon(b.icon)}</span>
+        <div><div class="strategy-title">${b.label}</div>
+        <div class="faint" style="font-size:12.5px;color:var(--ink-3)">${sanitizeText(pr.reason || '')}${known ? ' · ' + known : ''}</div></div>
+      </div>
+      <p class="strategy-body">${b.lead}</p>
+    </div>`;
+}
+
+// The portal builds most of its HTML from database text, so anything that
+// reaches innerHTML from a row needs escaping.
+function sanitizeText(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderStageGuide(p) {
+  const n = callNumberOf(p);
+  const g = stageGuide(n);
+  const toneColor = g.tone === 'clay' ? 'var(--clay)' : g.tone === 'info' ? 'var(--info)' : 'var(--ok)';
+  return `
+    <div class="card-flush" style="border:1px solid var(--line);border-left:3px solid ${toneColor};border-radius:var(--r-md);padding:14px 16px;background:var(--surface-2)">
+      <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+        <span class="badge badge-${g.tone === 'clay' ? 'danger' : g.tone}" style="background:transparent;border:1px solid ${toneColor};color:${toneColor}">Call ${n >= 3 ? '3+' : n} focus</span>
+        <strong style="font:var(--t-body-strong);font-size:14px">${g.title.split(':')[1]?.trim() || g.title}</strong>
+      </div>
+      <p style="font:var(--t-sm);color:var(--ink-2);margin:7px 0 0">${g.what}</p>
+      <details style="margin-top:7px">
+        <summary style="font:var(--t-xs);font-weight:700;color:var(--primary);cursor:pointer">Things you can say</summary>
+        ${g.openers.map(o => `<p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 0;padding-left:10px;border-left:2px solid var(--line-2);font-style:italic">${o}</p>`).join('')}
+      </details>
+    </div>`;
+}
+
+function renderLogForm(p) {
+  const pitches = currentPatientPitches || {};
+  const callNum = callNumberOf(p);
+  const showDeeper = callNum >= 2;   // services, WhatsApp, consent, details
+  return `
+    <div class="card card-flush logform">
+      <div class="lf-head"><h3>How did it go?</h3>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="faint" style="font-size:13px;color:var(--ink-3)">${(p.full_name || '').split(' ')[0]}</span>
+          <button type="button" class="btn btn-ghost btn-sm" id="f-concern" title="Flag something a supervisor must see" style="color:var(--danger);gap:6px">${icon('alertTriangle')}Raise a concern</button>
+        </div>
+      </div>
+      <div class="lf-body">
+        <div class="field"><label>Call outcome <span class="req">*</span></label>
+          <div class="seg seg-wrap" id="seg-outcome">
+            ${DIAL_STATUSES.map(o => `<button type="button" class="seg-btn" data-status="${o.key}" data-tone="${o.tone}">${icon(o.icon)}<span>${o.label}</span></button>`).join('')}
+          </div>
+        </div>
+        <div class="reveal" id="reveal-connected"><div class="reveal-inner">
+          <div class="field"><label>How were they doing? <span class="req">*</span></label>
+            <div class="recep" id="recep">${RECEPTIVENESS.map(r => `<button type="button" class="recep-btn" data-recep="${r.key}"><div class="recep-label">${r.label}</div><div class="recep-hint">${r.hint}</div></button>`).join('')}</div>
+          </div>
+          <div class="field"><label>How is the patient doing?</label>
+            <div class="seg" style="grid-template-columns:repeat(5,1fr)" id="seg-condition">
+              ${CONDITIONS.map(c => `<button type="button" class="seg-btn" data-cond="${c.key}" data-tone="${c.tone}"><span>${c.label}</span></button>`).join('')}
+            </div>
+          </div>
+          <div class="field"><label>What did they ask for?</label>
+            <div class="chips" id="reqs" style="display:flex;flex-wrap:wrap;gap:8px">
+              ${REQUIREMENTS.map(r => `<button type="button" class="chip seg-btn" data-req="${r.key}" data-tone="primary" style="padding:8px 12px">${icon(r.icon)}<span>${r.key}</span></button>`).join('')}
+            </div>
+            <input class="input" id="f-customreq" placeholder="Anything else they asked for…" style="margin-top:8px" />
+          </div>
+          ${showDeeper ? '<div id="invite-moment"></div>' : ''}
+          ${showDeeper && !p.consent_given ? `
+          <div class="followup" style="background:var(--gold-soft);border-color:var(--gold)">
+            <div class="fu-head" style="color:var(--gold-deep)">${icon('shieldCheck')}<span>Consent moment</span></div>
+            <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 10px">“May I note down a few details about the diagnosis? It stays private and helps our team guide you better.”</p>
+            <div class="yesno" data-yn="consent"><button type="button" class="yn" data-v="yes">They consented</button><button type="button" class="yn" data-v="no">Not today</button></div>
+          </div>` : ''}
+          ${showDeeper ? `
+          <button type="button" class="btn btn-secondary" id="f-details-btn">${icon('stethoscope')}Add clinical details they shared</button>
+          <div class="field"><label>Services offered today</label>
+            <div class="services" id="services">
+              ${SERVICES.map(s => { const already = !!pitches[s.column];
+                return `<label class="svc${already ? ' on locked' : ''}" data-svc="${s.key}"><input type="checkbox" ${already ? 'checked disabled' : ''} />${icon(s.icon)}<span class="svc-label">${s.label}</span>${already ? '<span class="svc-note">offered earlier</span>' : ''}</label>`; }).join('')}
+            </div>
+          </div>
+          <div class="row gap5 wrap" style="display:flex;gap:20px;flex-wrap:wrap">
+            <div class="field grow" style="flex:1;min-width:140px"><label>WhatsApp link sent?</label>
+              <div class="yesno" data-yn="waLink"><button type="button" class="yn" data-v="yes">Yes</button><button type="button" class="yn" data-v="no">No</button></div></div>
+            <div class="field grow" style="flex:1;min-width:140px"><label>Joined the WhatsApp group?</label>
+              <div class="yesno" data-yn="whatsapp"><button type="button" class="yn" data-v="yes">Yes</button><button type="button" class="yn" data-v="no">No</button></div></div>
+            <div class="field grow" style="flex:1;min-width:140px"><label>Following our channels?</label>
+              <div class="yesno" data-yn="social"><button type="button" class="yn" data-v="yes">Yes</button><button type="button" class="yn" data-v="no">No</button></div></div>
+          </div>` : `
+          <p style="font:var(--t-xs);color:var(--ink-3);margin:0;padding:10px 12px;background:var(--surface-3);border-radius:var(--r-sm)">
+            ${icon('info')} First call. Services, WhatsApp and medical details unlock from the second call. Today is about trust.
+          </p>`}
+          <button type="button" class="btn btn-ghost btn-sm" id="f-wellbeing-btn" style="align-self:flex-start">${icon('activity')}Record well-being scores (PHQ-4, QoL…)</button>
+          <div class="row gap5 wrap" style="display:flex;gap:20px;flex-wrap:wrap">
+            <div class="field grow" style="flex:1;min-width:170px"><label>Feedback from patient</label>
+              <input class="input" id="f-fb-patient" placeholder="In their words…" /></div>
+            <div class="field grow" style="flex:1;min-width:170px"><label>Feedback from caregiver</label>
+              <input class="input" id="f-fb-caregiver" placeholder="In their words…" /></div>
+          </div>
+        </div></div>
+        <div class="field"><label>General notes</label>
+          <textarea class="textarea" id="f-notes" placeholder="Anything worth remembering about this conversation…"></textarea></div>
+        <div class="followup">
+          <div class="fu-head">${icon('calendar')}<span>Next check-in</span><span class="fu-auto" id="fu-auto" style="display:none">suggested for you</span></div>
+          <div class="field"><label>Date</label><input class="input" type="date" id="f-followup" min="${addDays(3)}" /></div>
+          <div class="field" style="margin-top:12px"><label>A note to hand the next caregiver mentor</label>
+            <textarea class="textarea" id="f-strategy" placeholder="What helped, what to lead with, the best time to reach them…"></textarea></div>
+        </div>
+        <label class="upload">${icon('mic')}<div class="grow" style="flex:1"><div class="up-title" id="up-title">Attach call recording</div><div class="up-sub">Optional · auto-captured on the mobile app</div></div>${icon('upload')}
+          <input type="file" accept="audio/*,.m4a,.mp3,.wav,.ogg,.aac" hidden id="f-recording" /></label>
+      </div>
+      <div class="lf-actions">
+        <button class="btn btn-ghost" id="f-skip">${icon('skip')}Skip for now</button>
+        <button class="btn btn-primary grow" id="f-submit" style="flex:1" disabled>${icon('check')}Submit &amp; next call</button>
+      </div>
+    </div>`;
+}
+
+// ---- "Session coming up" banner: with no WhatsApp yet, the mentor IS the
+// reminder system: remind them warmly on this very call.
+function renderSessionBanner() {
+  const live = currentPatientSessions || [];
+  const sched = live.filter(s => s.status === 'scheduled' && s.scheduled_at)
+    .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at))[0];
+  const agreed = live.find(s => s.status === 'agreed');
+  if (sched) {
+    const when = new Date(sched.scheduled_at).toLocaleString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    return `
+      <div class="strategy" style="background:var(--ok-soft);border-color:var(--ok)">
+        <div class="strategy-head"><span class="strategy-ico" style="color:var(--ok)">${icon('calendar')}</span>
+          <div><div class="strategy-title">${sessionKind(sched.kind).label} session · ${when}</div>
+          <div class="faint" style="font-size:12.5px;color:var(--ink-3)">Remind them on this call. A personal reminder is what gets people there.</div></div>
+        </div>
+      </div>`;
+  }
+  if (agreed) {
+    return `
+      <div class="strategy">
+        <div class="strategy-head"><span class="strategy-ico">${icon('heart')}</span>
+          <div><div class="strategy-title">Said yes to a ${sessionKind(agreed.kind).label.toLowerCase()} session</div>
+          <div class="faint" style="font-size:12.5px;color:var(--ink-3)">The team is fixing a date, reassure them it's coming.</div></div>
+        </div>
+      </div>`;
+  }
+  return '';
+}
+
+// ---- Invitation moments: the right time to ask for a 1:1 session.
+// Fires from call 2+, only when a signal is live (what they asked for, or
+// clear warmth), and never while another invitation is already open.
+const INVITE_SCRIPTS = {
+  wellbeing: {
+    title: 'They could use someone to talk to',
+    en: '“Would it help to talk one-on-one with someone from our psychology team? It’s free and completely private, just for you.”',
+    hi: '“Agar aap chahein, to hamari team ke saath ek personal baat-cheet ka session rakh sakte hain, bilkul free aur private. Kaisa lagega?”',
+  },
+  nutrition: {
+    title: 'A personal diet plan would land well',
+    en: '“Our nutrition team can sit with you one-on-one and make a diet plan for exactly this. Shall I set it up?”',
+    hi: '“Hamari nutrition team aapke liye personal diet plan bana sakti hai, ek chhota session rakh doon?”',
+  },
+  caregiver: {
+    title: 'The caregiver needs care too',
+    en: '“And for YOU: we have someone caregivers talk to, just for them. Shall I arrange a session?”',
+    hi: '“Jo aapki dekhbhal karte hain, unke liye bhi hum ek alag session rakhte hain. Unse baat karaun?”',
+  },
+};
+function inviteKindFromSignals() {
+  const asked = (k) => form.requirements.includes(k);
+  if (asked('Emotional support')) return 'wellbeing';
+  if (asked('Nutrition / diet')) return 'nutrition';
+  if (asked('Caregiver support')) return 'caregiver';
+  if (form.receptiveness === 'highly_receptive') return 'wellbeing';
+  return null;
+}
+function updateInviteMoment(p) {
+  const mount = document.getElementById('invite-moment');
+  if (!mount || mount.dataset.done) return;
+  const liveKinds = new Set((currentPatientSessions || []).map(s => s.kind));
+  const kind = inviteKindFromSignals();
+  if (!kind || form.dialStatus !== 'connected' || liveKinds.has(kind)) { mount.innerHTML = ''; return; }
+  if (mount.dataset.kind === kind && mount.innerHTML) return;   // already showing this one
+  mount.dataset.kind = kind;
+  const s = INVITE_SCRIPTS[kind];
+  // Nutrition 1:1s are the nutrition team's; well-being and caregiver
+  // sessions the mentor can also hold herself: continuity beats handoff.
+  const canHoldMyself = kind !== 'nutrition';
+  mount.innerHTML = `
+    <div class="followup">
+      <div class="fu-head">${icon('heart')}<span>Invitation moment · ${s.title}</span></div>
+      <p style="font:var(--t-sm);color:var(--ink-2);margin:0 0 4px;font-style:italic">${s.en}</p>
+      <p style="font:var(--t-xs);color:var(--ink-3);margin:0 0 10px;font-style:italic">${s.hi}</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${canHoldMyself ? `<button type="button" class="btn btn-primary btn-sm" data-inv="agreed-self">${icon('check')}Yes, I’ll hold it myself</button>` : ''}
+        <button type="button" class="btn ${canHoldMyself ? 'btn-secondary' : 'btn-primary'} btn-sm" data-inv="agreed">${icon('check')}${canHoldMyself ? 'Yes, team schedules it' : 'They said yes'}</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-inv="invited">They’ll think about it</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-inv="skip">Not today</button>
+      </div>
+    </div>`;
+  mount.querySelectorAll('[data-inv]').forEach(btn => btn.addEventListener('click', async () => {
+    const choice = btn.dataset.inv;
+    if (choice === 'skip') { mount.dataset.done = '1'; mount.innerHTML = ''; return; }
+    btn.disabled = true;
+    try {
+      const sb = getSupabase();
+      const status = choice === 'invited' ? 'invited' : 'agreed';
+      let assignee = null, continuityName = null;
+      if (choice === 'agreed-self') {
+        assignee = me.id;
+      } else if (status === 'agreed') {
+        // Continuity: whoever last worked a session of this kind with this
+        // patient gets the follow-up, so the same person carries the plan.
+        try {
+          const { data: prev } = await sb.from('care_sessions')
+            .select('assigned_to, assignee:profiles!care_sessions_assigned_to_fkey(full_name)')
+            .eq('patient_id', p.patient_id).eq('kind', kind)
+            .in('status', ['held', 'scheduled'])
+            .not('assigned_to', 'is', null)
+            .order('created_at', { ascending: false }).limit(1);
+          if (prev?.[0]) { assignee = prev[0].assigned_to; continuityName = prev[0].assignee?.full_name || null; }
+        } catch {}
+      }
+      const row = { patient_id: p.patient_id, kind, status, invited_by: me.id };
+      if (status === 'agreed') row.agreed_at = new Date().toISOString();
+      if (assignee) row.assigned_to = assignee;
+      const { data, error } = await sb.from('care_sessions').insert(row).select().single();
+      if (error) throw error;
+      currentPatientSessions = [...(currentPatientSessions || []), data];
+      mount.dataset.done = '1';
+      const doneMsg = status !== 'agreed'
+        ? 'Noted. We’ll ask again gently on a later call.'
+        : choice === 'agreed-self'
+          ? 'Lovely. It’s yours. Give it a date on the 1:1 Sessions page.'
+          : continuityName
+            ? `Lovely. Going back to ${continuityName}, who has worked with them before.`
+            : `Lovely. The ${sessionKind(kind).label.toLowerCase()} team takes it from here.`;
+      mount.innerHTML = `
+        <div class="followup" style="display:flex;align-items:center;gap:9px">
+          <span style="width:17px;height:17px;display:inline-flex;flex:none;color:var(--ok)">${icon('checkCircle')}</span>
+          <span style="font:var(--t-sm);color:var(--ink-2)">${doneMsg}</span>
+        </div>`;
+      showToast(status === 'agreed'
+        ? (choice === 'agreed-self' ? 'Session is yours, schedule it when ready' : continuityName ? `Sent back to ${continuityName} for continuity` : 'Session request sent to the team')
+        : 'Invitation noted', 'success');
+    } catch (e) {
+      showToast('Could not record it: ' + e.message, 'error');
+      btn.disabled = false;
+    }
+  }));
+}
+
+function wireActive(p) {
+  document.getElementById('t-toggle')?.addEventListener('click', toggleTimer);
+  // Typing the minutes is as authoritative as the timer. It stops the clock
+  // and becomes the duration that gets logged.
+  document.getElementById('t-mins')?.addEventListener('input', (e) => {
+    const mins = Math.max(0, Math.min(600, Number(e.target.value) || 0));
+    if (timerRunning) stopTimer();
+    timerSeconds = mins * 60;
+    const t = document.getElementById('t-time'); if (t) t.textContent = fmtTimer(timerSeconds);
+    saveActive();
+  });
+  // Tapping ANY number to dial auto-starts the duration timer, so a caller
+  // never loses a call's length just because they forgot to hit "Start".
+  // Covers the main "Tap to call" button, every dial-order number, and the
+  // caregiver number - multi-phone patients dial from the list, not the main
+  // button, which is why their duration was not being tracked.
+  document.querySelectorAll('.callbtn, .cg-call').forEach(a =>
+    a.addEventListener('click', () => { if (!timerRunning) startTimer(); }));
+  // Copy number: tap-to-call fails on some phones, so offer a paste-able number.
+  document.getElementById('copy-num')?.addEventListener('click', async (e) => {
+    const num = e.currentTarget.dataset.num || '';
+    let done = false;
+    try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(num); done = true; } } catch {}
+    if (!done) { try { const t = document.createElement('textarea'); t.value = num; t.style.position = 'fixed'; t.style.opacity = '0'; document.body.appendChild(t); t.focus(); t.select(); done = document.execCommand('copy'); t.remove(); } catch {} }
+    if (!timerRunning) startTimer();   // copying means they're about to dial
+    showToast(done ? `Copied ${num}: paste it into your dialler` : 'Could not copy: long-press the number to copy it', done ? 'success' : 'warning');
+  });
+  // No number to dial: the only useful move is adding one. The active call
+  // (including this form's draft) is saved, so coming back resumes it.
+  document.getElementById('open-profile-num')?.addEventListener('click', () => {
+    saveActive();
+    navigate('patients/' + p.patient_id);
+  });
+  // Send resources on WhatsApp: curate + send from the business number, mid-call.
+  document.getElementById('wa-share-btn')?.addEventListener('click', () => openWhatsappShare({
+    patient: { patient_id: p.patient_id, full_name: p.full_name, state: p.state, city: p.city, primary_language: p.primary_language },
+    recipients: recipientsFromPatient(p),
+  }));
+  document.querySelectorAll('#seg-outcome .seg-btn').forEach(btn => btn.addEventListener('click', () => {
+    form.dialStatus = btn.dataset.status;
+    document.querySelectorAll('#seg-outcome .seg-btn').forEach(b => b.className = 'seg-btn');
+    btn.className = `seg-btn on tone-${btn.dataset.tone}`;
+    const connected = form.dialStatus === 'connected';
+    document.getElementById('reveal-connected')?.classList.toggle('open', connected);
+    if (!connected) form.receptiveness = '';
+    suggestFollowup(); updateSubmit(); updateInviteMoment(p); saveActive();
+  }));
+  document.querySelectorAll('#recep .recep-btn').forEach(btn => btn.addEventListener('click', () => {
+    form.receptiveness = btn.dataset.recep;
+    document.querySelectorAll('#recep .recep-btn').forEach(b => b.classList.remove('on'));
+    btn.classList.add('on'); suggestFollowup(); updateSubmit(); updateInviteMoment(p); saveActive();
+  }));
+  document.querySelectorAll('#seg-condition .seg-btn').forEach(btn => btn.addEventListener('click', () => {
+    form.condition = form.condition === btn.dataset.cond ? '' : btn.dataset.cond;
+    document.querySelectorAll('#seg-condition .seg-btn').forEach(b => b.className = 'seg-btn');
+    if (form.condition) btn.className = `seg-btn on tone-${btn.dataset.tone}`;
+    saveActive();
+  }));
+  document.querySelectorAll('#reqs .chip').forEach(btn => btn.addEventListener('click', () => {
+    const k = btn.dataset.req;
+    if (form.requirements.includes(k)) { form.requirements = form.requirements.filter(x => x !== k); btn.className = 'chip seg-btn'; btn.style.padding = '8px 12px'; }
+    else { form.requirements.push(k); btn.className = 'chip seg-btn on tone-primary'; btn.style.padding = '8px 12px'; }
+    updateInviteMoment(p); saveActive();
+  }));
+  document.querySelectorAll('#services .svc').forEach(label => {
+    const input = label.querySelector('input'); if (input.disabled) return;
+    input.addEventListener('change', () => { label.classList.toggle('on', input.checked); const k = label.dataset.svc;
+      if (input.checked) form.services.push(k); else form.services = form.services.filter(x => x !== k);
+      saveActive(); });
+  });
+  document.querySelectorAll('.yesno').forEach(group => { const field = group.dataset.yn;
+    group.querySelectorAll('.yn').forEach(btn => btn.addEventListener('click', () => { const val = btn.dataset.v === 'yes'; form[field] = val;
+      group.querySelectorAll('.yn').forEach(b => b.classList.remove('yes', 'no')); btn.classList.add(val ? 'yes' : 'no'); saveActive(); })); });
+  const textField = (id, field) => document.getElementById(id)?.addEventListener('input', e => { form[field] = e.target.value; saveActiveSoon(); });
+  textField('f-customreq', 'customReq');
+  textField('f-fb-patient', 'fbPatient');
+  textField('f-fb-caregiver', 'fbCaregiver');
+  textField('f-notes', 'notes');
+  textField('f-strategy', 'strategy');
+  document.getElementById('f-followup')?.addEventListener('input', e => { form.followupDate = e.target.value; form.dateManual = true; document.getElementById('fu-auto').style.display = 'none'; saveActive(); });
+  document.getElementById('f-recording')?.addEventListener('change', e => { const f = e.target.files[0]; if (f) document.getElementById('up-title').textContent = f.name; });
+  document.getElementById('f-details-btn')?.addEventListener('click', () => openClinicalDetailsModal(p));
+  document.getElementById('f-wellbeing-btn')?.addEventListener('click', () => openAssessmentFlow({
+    patient: { id: p.patient_id, full_name: p.full_name },
+    role: getUserRole(),
+    onSaved: () => {},
+  }));
+  document.getElementById('f-concern')?.addEventListener('click', () => openConcernModal(p));
+  document.getElementById('f-skip')?.addEventListener('click', skipPatient);
+  document.getElementById('f-submit')?.addEventListener('click', submitCallLog);
+}
+
+// ---- Raise a concern: saves IMMEDIATELY, independent of the call log.
+// A red flag must never wait for the rest of the form to be filled in.
+function openConcernModal(p) {
+  const state = { reason: '', severity: 'high', sevTouched: false };
+  const el = document.createElement('div');
+  el.innerHTML = `
+    <p style="font:var(--t-sm);color:var(--ink-2);margin:0 0 var(--s4)">
+      This goes straight to the supervisors' queue. You are never expected to carry it alone.
+      Flagging it <em>is</em> handling it.</p>
+    <div class="field"><label>What did you hear? <span class="req">*</span></label>
+      <div class="chips" id="cn-reasons" style="display:flex;flex-wrap:wrap;gap:8px">
+        ${CONCERN_REASONS.map(r => `<button type="button" class="chip seg-btn" data-reason="${r.key}" data-tone="danger" title="${r.hint}" style="padding:8px 12px"><span>${r.label}</span></button>`).join('')}
+      </div>
+    </div>
+    <div class="field" style="margin-top:var(--s4)"><label>How urgent?</label>
+      <div class="seg" style="grid-template-columns:repeat(3,1fr)" id="cn-sev">
+        ${CONCERN_SEVERITIES.map(s => `<button type="button" class="seg-btn ${s.key === 'high' ? 'on tone-warn' : ''}" data-sev="${s.key}" data-tone="${s.tone}"><span>${s.label}</span></button>`).join('')}
+      </div>
+    </div>
+    <div class="field" style="margin-top:var(--s4)"><label>What happened, in your words</label>
+      <textarea class="textarea" id="cn-note" placeholder="What they said, what you noticed, anything the supervisor should know first…"></textarea></div>
+    <div class="form-actions" style="margin-top:var(--s4)">
+      <button class="btn btn-secondary" id="cn-cancel">Cancel</button>
+      <button class="btn btn-danger" id="cn-save">${icon('alertTriangle')}Raise it now</button>
+    </div>`;
+  showModal({ title: `Raise a concern · ${p.full_name || ''}`, content: el, size: 'lg' });
+
+  el.querySelectorAll('#cn-reasons .chip').forEach(btn => btn.addEventListener('click', () => {
+    state.reason = btn.dataset.reason;
+    el.querySelectorAll('#cn-reasons .chip').forEach(b => { b.className = 'chip seg-btn'; b.style.padding = '8px 12px'; });
+    btn.className = 'chip seg-btn on tone-danger'; btn.style.padding = '8px 12px';
+    // Life-threatening reasons default to urgent unless they chose otherwise.
+    if (!state.sevTouched && ['self_harm', 'condition_critical'].includes(state.reason)) {
+      state.severity = 'urgent';
+      el.querySelectorAll('#cn-sev .seg-btn').forEach(b => b.className = 'seg-btn' + (b.dataset.sev === 'urgent' ? ' on tone-danger' : ''));
+    }
+  }));
+  el.querySelectorAll('#cn-sev .seg-btn').forEach(btn => btn.addEventListener('click', () => {
+    state.severity = btn.dataset.sev; state.sevTouched = true;
+    el.querySelectorAll('#cn-sev .seg-btn').forEach(b => b.className = 'seg-btn');
+    btn.className = `seg-btn on tone-${btn.dataset.tone}`;
+  }));
+  el.querySelector('#cn-cancel').addEventListener('click', () => closeModal());
+  el.querySelector('#cn-save').addEventListener('click', async () => {
+    if (!state.reason) { showToast('Pick what you heard. That routes the help', 'warning'); return; }
+    const btn = el.querySelector('#cn-save');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>Raising…';
+    try {
+      const { error } = await getSupabase().from('patient_concerns').insert({
+        patient_id: p.patient_id, raised_by: me.id, source: 'manual',
+        reason: state.reason, severity: state.severity,
+        note: el.querySelector('#cn-note').value.trim() || null,
+      });
+      if (error) throw error;
+      closeModal();
+      showToast('Concern raised. A supervisor will see it. Well done for flagging it.', 'success');
+    } catch (e) {
+      showToast('Could not raise it: ' + e.message, 'error');
+      btn.disabled = false; btn.innerHTML = `${icon('alertTriangle')}Raise it now`;
+    }
+  });
+}
+
+// Quick capture for what the patient shared verbally on the call:
+// the four details that unlock real help. Saves straight to the patient.
+function openClinicalDetailsModal(p) {
+  const el = document.createElement('div');
+  el.innerHTML = `
+    <p style="font:var(--t-sm);color:var(--ink-2);margin:0 0 var(--s4)">Only fill what they actually told you. Everything is optional.</p>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">GI cancer subtype</label>
+        <select class="select" id="cd-gi"><option value="">Not sure</option>
+          ${GI_SUBTYPES.map(g => `<option value="${g.key}" ${p.gi_subtype === g.key ? 'selected' : ''}>${g.label}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">Stage</label>
+        <select class="select" id="cd-stage">
+          ${['unknown', 'stage_i', 'stage_ii', 'stage_iii', 'stage_iv'].map(s => `<option value="${s}" ${(p.cancer_stage || 'unknown') === s ? 'selected' : ''}>${capitalize(s)}</option>`).join('')}
+        </select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Hospital</label>
+        <input class="input" id="cd-hospital" value="${p.treating_hospital || ''}" /></div>
+      <div class="form-group"><label class="form-label">Current treatment</label>
+        <input class="input" id="cd-treatment" value="${p.current_treatment || ''}" placeholder="e.g., chemo cycle 3" /></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Paying via</label>
+        <input class="input" id="cd-payment" value="${p.payment_method || ''}" placeholder="e.g., Ayushman Bharat, savings" /></div>
+      <div class="form-group"><label class="form-label">Primary language</label>
+        <input class="input" id="cd-language" value="${p.primary_language || ''}" /></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="cd-cancel">Cancel</button>
+      <button class="btn btn-primary" id="cd-save">${icon('check')}Save details</button>
+    </div>`;
+  showModal({ title: 'Clinical details · ' + (p.full_name || ''), content: el, size: 'lg' });
+  el.querySelector('#cd-cancel').addEventListener('click', () => closeModal());
+  el.querySelector('#cd-save').addEventListener('click', async () => {
+    const btn = el.querySelector('#cd-save');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>';
+    const v = (id) => el.querySelector('#' + id)?.value.trim() || null;
+    const patch = {
+      gi_subtype: v('cd-gi'), cancer_stage: v('cd-stage') || 'unknown',
+      treating_hospital: v('cd-hospital'), current_treatment: v('cd-treatment'),
+      payment_method: v('cd-payment'), primary_language: v('cd-language'),
+    };
+    if (patch.gi_subtype) patch.cancer_type = giLabel(patch.gi_subtype);
+    Object.keys(patch).forEach(k => { if (patch[k] == null) delete patch[k]; });
+    try {
+      const { error } = await getSupabase().rpc('update_patient_from_call', { p_patient_id: p.patient_id, p_fields: patch });
+      if (error) throw error;
+      Object.assign(p, patch);
+      closeModal(); showToast('Details saved to the patient record', 'success');
+    } catch (e) { showToast('Could not save: ' + e.message, 'error'); btn.disabled = false; btn.innerHTML = `${icon('check')}Save details`; }
+  });
+}
+
+// A connected call rests the family for 7 days (the queue's connected
+// cooldown), so a connected outcome floors both the date-picker min and the
+// suggestion at 7 days. Anything earlier would sit in the queue unservable.
+function suggestFollowup() {
+  const input = document.getElementById('f-followup'); const autoEl = document.getElementById('fu-auto');
+  const connected = form.dialStatus === 'connected';
+  const minDate = addDays(connected ? 7 : 3);
+  if (input) input.min = minDate;
+  if (connected && form.dateManual && form.followupDate && form.followupDate < minDate) {
+    form.followupDate = minDate;
+    if (input) input.value = minDate;
+    showToast(`Connected calls rest for 7 days, check-in moved to ${new Date(minDate).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}`, 'info');
+  }
+  if (form.dateManual) return;
+  let days = null;
+  if (connected) { const r = RECEPTIVENESS.find(x => x.key === form.receptiveness); days = r ? Math.max(r.days, 7) : null; }
+  else if (form.dialStatus) days = STATUS_DAYS[form.dialStatus];
+  if (days != null) { form.followupDate = addDays(days); if (input) input.value = form.followupDate; if (autoEl) autoEl.style.display = ''; }
+  else { form.followupDate = ''; if (input) input.value = ''; if (autoEl) autoEl.style.display = 'none'; }
+}
+function updateSubmit() { const btn = document.getElementById('f-submit'); if (!btn) return; const connected = form.dialStatus === 'connected'; btn.disabled = !form.dialStatus || (connected && !form.receptiveness); }
+
+// Duration is derived from a wall-clock anchor (timerStartEpoch), never from
+// counting ticks, so it stays correct even if the WebView reloads or sleeps
+// mid-call (which is exactly what the tel: link does on Android).
+function tickTimer() {
+  if (timerStartEpoch) timerSeconds = Math.floor((Date.now() - timerStartEpoch) / 1000);
+  const t = document.getElementById('t-time'); if (t) t.textContent = fmtTimer(timerSeconds);
+}
+function paintTimerRunning() {
+  const dot = document.getElementById('t-dot'); const toggle = document.getElementById('t-toggle');
+  dot?.classList.add('live');
+  if (toggle) { toggle.className = 'btn btn-danger'; toggle.innerHTML = `${icon('square')}End call`; }
+  clearInterval(timerInterval); timerInterval = setInterval(tickTimer, 1000); tickTimer();
+}
+function startTimer() {
+  if (timerRunning) return;
+  timerRunning = true;
+  timerStartEpoch = Date.now() - timerSeconds * 1000;   // resume-safe anchor
+  paintTimerRunning();
+  saveActive();
+}
+function stopTimer() {
+  if (!timerRunning) return;
+  if (timerStartEpoch) timerSeconds = Math.floor((Date.now() - timerStartEpoch) / 1000);
+  timerRunning = false; timerStartEpoch = null;
+  clearInterval(timerInterval); timerInterval = null;
+  // Mirror what was timed into the minutes box, so the number about to be
+  // logged is visible and correctable before submit.
+  const mins = document.getElementById('t-mins');
+  if (mins && timerSeconds) mins.value = Math.ceil(timerSeconds / 60);
+  const dot = document.getElementById('t-dot'); const toggle = document.getElementById('t-toggle');
+  dot?.classList.remove('live');
+  if (toggle) { toggle.className = 'btn btn-primary'; toggle.innerHTML = `${icon('play')}Start call`; }
+  saveActive();
+}
+function toggleTimer() { if (timerRunning) stopTimer(); else startTimer(); }
+// Page reloaded mid-call: re-attach the live UI + ticking without resetting.
+function resumeRunningTimer() { paintTimerRunning(); }
+
+// "Skip for now" keeps the patient in the queue. They sink to the back of
+// today's list and come back after the rest. Only a submitted outcome
+// (connected / not-picked-up) actually removes them from today.
+async function skipPatient() {
+  if (!currentQueueId) return;
+  const sb = getSupabase();
+  const name = (currentPatient?.full_name || 'They').split(' ')[0];
+  const btn = document.getElementById('f-skip');
+  if (btn) btn.disabled = true;
+  // skip_call used to return void, so a skip RLS or the queue trigger had
+  // already discarded looked exactly like a skip that worked: the toast said
+  // "moved down", the draft was wiped, and the patient had not moved at all.
+  // It now returns an outcome, so we only clear the call when something
+  // really happened, and a refusal keeps every note the caller typed.
+  const { data, error } = await sb.rpc('skip_call', { p_queue_id: currentQueueId });
+  if (error) {
+    if (btn) btn.disabled = false;
+    showToast(error.message + ' Your notes are safe. Submit still records this call.', 'error', 7000);
+    return;
+  }
+  const outcome = data?.outcome || 'skipped';
+  if (outcome === 'already_handled') {
+    if (btn) btn.disabled = false;
+    showToast(data.message, 'info');
+    return;   // the row stays put, so keep the caller where they are
+  }
+  showToast(outcome === 'skipped'
+    ? `${name} moved down, still on your list. We'll circle back`
+    : data.message, 'info', outcome === 'skipped' ? 4000 : 7000);
+  stopTimer(); clearActive(); getNextCall();
+}
+
+async function submitCallLog() {
+  if (!currentPatient || !currentQueueId) return;
+  const sb = getSupabase();
+  const btn = document.getElementById('f-submit');
+  const connected = form.dialStatus === 'connected';
+  if (!form.dialStatus) { showToast('Please choose how the call went', 'warning'); return; }
+  if (connected && !form.receptiveness) { showToast('Please note how they were doing', 'warning'); return; }
+  // A connected call with no minutes on it used to save as a blank duration and
+  // quietly drag every talk-time average down. Ask once, right here, instead of
+  // making someone correct the log afterwards.
+  if (connected && !timerSeconds) {
+    const mins = document.getElementById('t-mins');
+    if (mins) { mins.focus(); mins.select?.(); }
+    showToast('How many minutes did you talk? Type it next to the timer, then submit.', 'warning', 6000);
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:17px;height:17px;border-width:2.5px"></span>Saving…'; }
+  stopTimer();
+  try {
+    // Duplicate guard: if this caregiver mentor already logged a call for
+    // this patient in the last few minutes (double-tap, or a second device),
+    // don't create a second row, just advance the queue. This is what was
+    // inflating "completed" counts (5 → 7).
+    try {
+      const since = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+      const { data: dup } = await sb.from('call_logs').select('id')
+        .eq('patient_id', currentPatient.patient_id).eq('caller_id', me.id)
+        .gte('call_date', since).limit(1);
+      if (dup && dup.length) {
+        showToast('Already logged for this person a moment ago, not duplicating', 'info');
+        await sb.rpc('complete_queue_call', { p_queue_id: currentQueueId, p_status: 'completed' });
+        clearActive();
+        setTimeout(() => getNextCall(), 300);
+        return;
+      }
+    } catch (_) { /* guard is best-effort; never block a real log */ }
+
+    const callerName = me.full_name ? me.full_name.toUpperCase() : null;
+    const followUp = form.followupDate || null;
+    const reqList = [...form.requirements]; if (form.customReq.trim()) reqList.push(form.customReq.trim());
+    const structured = { requirements: form.requirements, custom_requirement: form.customReq.trim() || null,
+      condition: form.condition || null, services: form.services, whatsapp: form.whatsapp, social: form.social,
+      whatsapp_link_sent: form.waLink, consent_taken: form.consent };
+    const { data: callLog, error } = await sb.from('call_logs').insert({
+      patient_id: currentPatient.patient_id, caller_id: me.id, contacted_by_name: callerName,
+      call_date: new Date().toISOString(), dial_status: form.dialStatus,
+      call_duration_mins: Math.ceil(timerSeconds / 60) || null,
+      receptiveness_bucket: connected ? form.receptiveness : null,
+      patient_condition: form.condition || null, structured,
+      value_pitch_executed: form.services.length > 0,
+      whatsapp_link_sent: form.waLink === true,
+      whatsapp_group_joined: form.whatsapp === true, social_media_follow: form.social === true,
+      feedback_patient: form.fbPatient.trim() || null,
+      feedback_caregiver: form.fbCaregiver.trim() || null,
+      caller_notes: form.notes.trim() || null,
+      requirements_noted: reqList.length ? reqList.join(', ') : null,
+      follow_up_date: followUp,
+      // build_daily_assignments schedules from next_followup_date, keep both in sync
+      next_followup_date: followUp ? followUp + 'T00:00:00Z' : null,
+      followup_strategy_notes: form.strategy.trim() || null, lead_source: 'other',
+    }).select().single();
+    if (error) throw error;
+
+    if (form.services.length > 0 || form.consent === true) {
+      const now = new Date().toISOString(); const patch = {};
+      form.services.forEach(key => { const svc = SERVICES.find(s => s.key === key); if (svc) patch[svc.column] = now; });
+      if (form.consent === true) {
+        patch.consent_given = true; patch.consent_date = now; patch.consent_method = 'verbal_during_call';
+      }
+      // RPC instead of a direct update: plain RLS blocks coverage callers
+      // and unassigned new leads. The queue claim is the authorisation.
+      const { error: pErr } = await sb.rpc('update_patient_from_call', { p_patient_id: currentPatient.patient_id, p_fields: patch });
+      if (pErr) console.warn('Patient update failed:', pErr.message);
+    }
+    const file = document.getElementById('f-recording')?.files?.[0];
+    if (file && callLog) { try {
+      const fileName = `${currentPatient.patient_id}_${Date.now()}_${file.name}`;
+      const { error: upErr } = await sb.storage.from('call-recordings').upload(fileName, file);
+      if (!upErr) { const { data: urlData } = sb.storage.from('call-recordings').getPublicUrl(fileName);
+        await sb.from('call_recordings').insert({ call_log_id: callLog.id, patient_id: currentPatient.patient_id,
+          file_url: urlData?.publicUrl || fileName, file_name: file.name, file_size_bytes: file.size, duration_seconds: timerSeconds, uploaded_by: me.id }); }
+    } catch (e) { console.warn('Recording upload failed:', e); } }
+
+    const queueStatus = (form.dialStatus === 'callback_requested') ? 'callback' : 'completed';
+    await sb.rpc('complete_queue_call', { p_queue_id: currentQueueId, p_status: queueStatus,
+      p_next_followup_date: followUp ? followUp + 'T00:00:00Z' : null, p_strategy_notes: form.strategy.trim() || null,
+      p_receptiveness: connected ? form.receptiveness : null });
+
+    clearActive();
+    const fName = (currentPatient.full_name || '').split(' ')[0];
+    const niceDate = followUp ? new Date(followUp).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }) : null;
+    showToast(niceDate ? `Logged. ${fName}'s next check-in is set for ${niceDate}` : `Logged for ${fName}`, 'success');
+    setTimeout(() => getNextCall(), 400);
+  } catch (err) {
+    showToast('Could not save: ' + err.message, 'error');
+    if (btn) { btn.disabled = false; btn.innerHTML = `${icon('check')}Submit &amp; next call`; }
+  }
+}
+
+async function mountQueueEmpty() {
+  clearActive();
+  const el = root(); if (!el) return;
+
+  // Re-read the counter before claiming the day is over. Someone may have been
+  // assigned to this mentor since the page loaded, which is exactly the case that
+  // got reported: three patients assigned, and this screen still said "done".
+  let summary = { pending: 0, done_today: 0 };
+  try {
+    const { data } = await getSupabase().rpc('get_worklist_summary', { p_caller_id: me.id });
+    if (data) summary = data;
+  } catch { /* fall through to the empty screen */ }
+  if (summary.pending > 0) { await mountReady(); return; }
+
+  const finished = summary.done_today > 0;
+  el.innerHTML = `
+    <div class="ready"><div class="ready-card">
+      <div class="ready-ico" style="background:var(--ok-soft);color:var(--ok)">${icon(finished ? 'checkCircle' : 'inbox')}</div>
+      <h2>${finished ? "That's everyone for now." : 'Nothing queued to you.'}</h2>
+      <p>${finished
+        ? `You have worked through your list: ${summary.done_today} ${summary.done_today === 1 ? 'call' : 'calls'} today. Every one mattered, take a breath.`
+        : emptyReason(summary)}</p>
+      ${supervises() ? teamPointerHTML() : ''}
+      <button class="btn btn-secondary btn-lg" id="back-ready" style="margin-top:8px">${icon('refresh')}Check again</button>
+    </div></div>`;
+  document.getElementById('back-ready')?.addEventListener('click', mountReady);
+  document.getElementById('goto-team')?.addEventListener('click', () => navigate('team'));
+}
+
+function resetState() {
+  currentQueueId = null; currentPatient = null; currentPatientPitches = null; currentPatientPriority = null; currentHistory = []; currentPatientSessions = [];
+  Object.assign(form, blankForm()); timerSeconds = 0; timerRunning = false; timerStartEpoch = null;
+  clearInterval(timerInterval); timerInterval = null;
+}

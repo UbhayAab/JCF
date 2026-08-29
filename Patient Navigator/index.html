@@ -1,0 +1,174 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="Jarurat Care Patient Navigator: Secure, DPDPA-compliant patient data management system for cancer care navigation." />
+  <meta name="theme-color" content="#F6F2EA" />
+  <meta name="robots" content="noindex, nofollow" />
+
+  <!-- PWA: installable, launches standalone (looks like a native app) -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Jarurat Care" />
+  <meta name="application-name" content="Jarurat Care" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+
+  <!-- Apply the saved theme (light · dark · colorful) BEFORE first paint,
+       so there's no flash of the wrong palette on load. -->
+  <script>
+    (function(){
+      try {
+        var q = new URLSearchParams(location.search).get('theme');
+        var t = (q === 'light' || q === 'dark' || q === 'colorful') ? q : localStorage.getItem('jcf_theme');
+        if (t !== 'light' && t !== 'dark' && t !== 'colorful') t = 'light';
+        document.documentElement.setAttribute('data-theme', t);
+        var m = { light:'#F6F2EA', dark:'#0A1516', colorful:'#EEEAFF' }[t];
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta && m) meta.setAttribute('content', m);
+      } catch (e) {}
+    })();
+  </script>
+  <meta name="format-detection" content="telephone=no" />
+
+  <!-- Force GitHub Pages / browser to NEVER serve a stale copy of this HTML.
+       Without this, GH Pages caches HTML for 10 min, so users keep seeing
+       last week's broken JS even after a deploy. -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="Patient Navigator · Jarurat Care" />
+  <meta property="og:description" content="Secure, DPDPA-compliant patient data management for cancer care navigation." />
+  <meta property="og:type" content="website" />
+
+  <title>Patient Navigator · Jarurat Care</title>
+
+  <!-- Connection hints (don't block render, just speed up subsequent fetches) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+
+  <!-- Critical inline CSS for the boot screen, which guarantees something paints
+       even if every external resource (CDN/font/CSS) is blocked or slow.
+       The boot screen is a self-contained night panel (system fonts only,
+       styled hard: tracked uppercase wordmark + self-drawing pulse line). -->
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    /* Paint the right ground BEFORE the stylesheets land, then get out of the way.
+       Two things were wrong here and both only bit the dark theme:
+       `html[data-theme="dark"] body` is specificity (0,1,2) and beat base.css's
+       `body { background-color: var(--bg) }` at (0,0,1), so dark's ground was
+       pinned to this hardcoded hex forever; and the `background` SHORTHAND also
+       reset background-image, which deleted dark's ambient wash entirely.
+       :where() drops these to zero specificity so the real stylesheet always
+       wins once loaded, and background-color cannot touch the image. */
+    :where(html),:where(body){background-color:#F6F2EA;color:#201B12;font-family:'Archivo',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased}
+    :where(html[data-theme="dark"]),:where(html[data-theme="dark"] body){background-color:#0A1516;color:#E2F1F1}
+    :where(html[data-theme="colorful"]),:where(html[data-theme="colorful"] body){background-color:#EEEAFF;color:#1D192B}
+    .boot-screen{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;padding:24px;text-align:center;
+      background:radial-gradient(90% 60% at 80% -10%,rgba(0,170,177,.26),transparent 55%),radial-gradient(70% 50% at -10% 110%,rgba(199,134,47,.10),transparent 60%),linear-gradient(160deg,#1F3031 0%,#111F1F 46%,#0A1516 100%)}
+    .boot-logo{width:52px;height:52px;border-radius:15px;display:grid;place-items:center;color:#fff;background:linear-gradient(180deg,#00979E,#006469 58%,#005255);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 8px 24px rgba(0,100,105,.5);animation:bootfloat 5s ease-in-out infinite}
+    @keyframes bootfloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+    .boot-word{font-weight:800;font-size:clamp(20px,5.4vw,28px);line-height:1;letter-spacing:.26em;padding-left:.26em;text-transform:uppercase;color:#EAF5F5}
+    .boot-tag{font-size:10px;font-weight:600;letter-spacing:.4em;padding-left:.4em;text-transform:uppercase;color:#9CB6B6;margin-top:10px}
+    .boot-ecg{width:min(280px,70vw);height:36px;color:#00AAB1;filter:drop-shadow(0 0 7px rgba(0,170,177,.6))}
+    .boot-ecg path{stroke-dasharray:430;stroke-dashoffset:430;animation:bootecg 2.6s cubic-bezier(.22,.68,.16,1) infinite}
+    @keyframes bootecg{0%{stroke-dashoffset:430;opacity:0}10%{opacity:1}60%{stroke-dashoffset:0;opacity:1}82%{opacity:0}100%{stroke-dashoffset:0;opacity:0}}
+    .boot-msg{color:#BFD7D8;font-size:13.5px;line-height:1.5;max-width:340px}
+    .boot-link{color:#94C0E8;font-size:13px;text-decoration:underline;cursor:pointer;background:none;border:none;font-family:inherit;padding:8px 16px}
+    .boot-link:hover{color:#CAE0F5}
+    .boot-error{color:#FC9D91}
+  </style>
+
+  <!-- Non-blocking font load: preload-as-style trick + noscript fallback -->
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&family=Spline+Sans+Mono:ital,wght@0,400..700;1,400..700&display=swap" onload="this.onload=null;this.rel='stylesheet'" />
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&family=Spline+Sans+Mono:ital,wght@0,400..700;1,400..700&display=swap" /></noscript>
+
+  <!-- App stylesheets: the query string busts the cache when CSS changes -->
+  <link rel="stylesheet" href="css/variables.css?v=20260829a" />
+  <link rel="stylesheet" href="css/base.css?v=20260829a" />
+  <link rel="stylesheet" href="css/components.css?v=20260829a" />
+  <link rel="stylesheet" href="css/layout.css?v=20260829a" />
+
+  <!-- Favicon (inline SVG data URI) -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23006469' stroke-width='2'><path d='M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z'/></svg>" />
+</head>
+<body>
+  <!-- Boot screen: paints immediately, no external dependencies. -->
+  <div id="app">
+    <div class="boot-screen" id="boot-screen">
+      <div class="boot-logo">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+      </div>
+      <div>
+        <div class="boot-word">Jarurat Care</div>
+        <div class="boot-tag">Patient Navigator</div>
+      </div>
+      <svg class="boot-ecg" viewBox="0 0 280 36" fill="none" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M0 18 H92 L104 18 112 6 122 30 130 18 H188 L196 18 202 11 208 25 214 18 H280" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <p class="boot-msg" id="boot-msg">Preparing your day…</p>
+      <button class="boot-link" id="boot-retry" style="display:none" onclick="location.reload()">Retry</button>
+    </div>
+  </div>
+
+  <!-- CDN scripts: deferred so they NEVER block the boot screen.
+       defer scripts download in parallel and execute after DOM parse,
+       but BEFORE the type=module app.js (which is naturally deferred). -->
+  <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7"></script>
+  <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1"></script>
+
+  <!-- App entry point: the query string busts the browser cache when JS changes -->
+  <script type="module" src="js/app.js?v=20260829a"></script>
+
+  <!-- Boot watchdog: surfaces a clear error if external scripts fail to load
+       (network blocked, CDN down, captive portal, etc.) instead of leaving
+       the user staring at a spinner forever. -->
+  <script>
+    (function(){
+      var STAGES = {
+        SLOW:   5000,   // 5s: "taking too long"
+        SCRIPT: 10000,  // 10s: Supabase JS still not loaded, so the CDN is blocked
+        TOTAL:  15000   // 15s: app still has not booted, so give up cleanly
+      };
+      var bootScreen = document.getElementById('boot-screen');
+      var msg = document.getElementById('boot-msg');
+      var retry = document.getElementById('boot-retry');
+
+      // Stage 1: gentle nudge
+      setTimeout(function(){
+        if (!bootScreen.isConnected) return;
+        if (msg) msg.textContent = 'Still loading… your network may be slow.';
+        if (retry) retry.style.display = 'inline-block';
+      }, STAGES.SLOW);
+
+      // Stage 2: CDN diagnostic
+      setTimeout(function(){
+        if (!bootScreen.isConnected) return;
+        if (!window.supabase) {
+          if (msg) {
+            msg.classList.add('boot-error');
+            msg.innerHTML = 'Could not load required scripts.<br>Your network may be blocking jsdelivr.net.<br>Try a different network or VPN.';
+          }
+          if (retry) retry.style.display = 'inline-block';
+        }
+      }, STAGES.SCRIPT);
+
+      // Stage 3: final timeout. If app.js never replaced the boot screen,
+      // the SPA is stuck. Show a hard fail message.
+      setTimeout(function(){
+        if (!bootScreen.isConnected) return;
+        if (msg) {
+          msg.classList.add('boot-error');
+          msg.innerHTML = 'Patient Navigator failed to start.<br>Please refresh the page.<br>If this keeps happening, contact admin.';
+        }
+        if (retry) retry.style.display = 'inline-block';
+      }, STAGES.TOTAL);
+    })();
+  </script>
+</body>
+</html>
