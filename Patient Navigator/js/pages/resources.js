@@ -22,13 +22,26 @@ const CAT_TONE = {
 };
 
 let rows = [];
+// One saved shelf, because it is the pair interns ask for by name: "financial
+// and accommodation resources should be attached in dashboard itself for easy
+// and quick access" (field feedback, 2026-09-03). Reachable as
+// #resources/money_stay from the dashboard quick action and the calling portal.
+const COMBO_SHELVES = { money_stay: { label: 'Money & stay', cats: ['financial_aid', 'accommodation'] } };
+const inShelf = (r, key) => COMBO_SHELVES[key]
+  ? COMBO_SHELVES[key].cats.includes(r.category)
+  : r.category === key;
+
 let catFilter = 'all';
 let stateFilter = 'all';
 let query = '';
 let containerEl = null;
 
-export async function renderResources(container) {
+export async function renderResources(container, params = {}) {
   containerEl = container;
+  // Deep link: #resources/money_stay, or any single category key. Anything
+  // else is ignored rather than silently showing an empty shelf.
+  const want = params?.id;
+  if (want && (COMBO_SHELVES[want] || RESOURCE_CATEGORIES.some(c => c.key === want))) catFilter = want;
   container.innerHTML = `
     <div class="page-header">
       <div>
@@ -68,7 +81,7 @@ function paint() {
 
   const q = query.toLowerCase();
   const filtered = rows.filter(r =>
-    (catFilter === 'all' || r.category === catFilter) &&
+    (catFilter === 'all' || inShelf(r, catFilter)) &&
     (stateFilter === 'all' || r.state === stateFilter) &&
     (!q || [r.title, r.summary, r.city, r.state, r.eligibility].filter(Boolean).join(' ').toLowerCase().includes(q)));
 
@@ -92,6 +105,10 @@ function paint() {
 
     <div class="chip-row" id="rs-cats" style="margin-bottom:var(--s5)">
       <button class="fchip ${catFilter === 'all' ? 'on' : ''}" data-cat="all">All · ${rows.length}</button>
+      ${Object.entries(COMBO_SHELVES).map(([key, sh]) => {
+        const n = rows.filter(r => sh.cats.includes(r.category)).length;
+        return n ? `<button class="fchip ${catFilter === key ? 'on' : ''}" data-cat="${key}">${sh.label} · ${n}</button>` : '';
+      }).join('')}
       ${RESOURCE_CATEGORIES.map(c => {
         const n = rows.filter(r => r.category === c.key).length;
         return n ? `<button class="fchip ${catFilter === c.key ? 'on' : ''}" data-cat="${c.key}">${c.label} · ${n}</button>` : '';

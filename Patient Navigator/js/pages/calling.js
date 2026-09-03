@@ -10,7 +10,7 @@ import { showToast } from '../components/toast.js';
 import { openAssessmentFlow } from '../components/assessmentFlow.js';
 import { formatRelativeTime, capitalize } from '../utils/formatters.js';
 import { icon } from '../components/icons.js';
-import { DIAL_STATUSES, RECEPTIVENESS, REQUIREMENTS, CONDITIONS, giLabel, statusBadge, vulnerabilityBadge, stageGuide, GI_SUBTYPES, dataGaps, CONCERN_REASONS, CONCERN_SEVERITIES, sessionKind, sessionStatus } from '../utils/catalog.js';
+import { DIAL_STATUSES, RECEPTIVENESS, REQUIREMENTS, CONDITIONS, giLabel, statusBadge, vulnerabilityBadge, stageGuide, GI_SUBTYPES, dataGaps, CONCERN_REASONS, CALLER_CONCERNS, CONCERN_SEVERITIES, sessionKind, sessionStatus, LEVER_GROUPS } from '../utils/catalog.js';
 import { showModal, closeModal } from '../components/modal.js';
 import { navigate } from '../router.js';
 import { openWhatsappShare, recipientsFromPatient } from '../components/whatsappShare.js';
@@ -28,6 +28,9 @@ let timerSeconds = 0;
 let timerRunning = false;
 let timerStartEpoch = null;     // wall-clock anchor so duration survives a reload
 let currentHistory = [];
+let currentServices = {};       // patient_services rows by lever, for the in-call toggles
+let currentOpenLoops = [];      // "still to ask", read through the call claim
+let lastLoggedCall = null;      // { id, name, at } - powers "Fix that log" after submit
 let availableToday = true;
 const form = blankForm();
 
@@ -117,7 +120,12 @@ function applySavedForm(saved) {
 function blankForm() {
   return { dialStatus: '', receptiveness: '', services: [], whatsapp: null, social: null, waLink: null,
     requirements: [], customReq: '', condition: '', notes: '', followupDate: '', strategy: '',
-    fbPatient: '', fbCaregiver: '', consent: null, dateManual: false };
+    fbPatient: '', fbCaregiver: '', consent: null, dateManual: false,
+    // Set by recordConsentNow(). MUST live here: Object.assign(form,
+    // blankForm()) is how a new call resets the form, and a key that is
+    // absent from blankForm is never cleared - so a leftover true would
+    // make the NEXT patient's consent silently not get written.
+    consentSaved: false };
 }
 
 // services the caller can OFFER on this call (pitched_* columns on patients)
@@ -412,7 +420,10 @@ async function toggleAvailability() {
 }
 
 // ============================================================ Get next
-async function getNextCall() {
+// justSkippedId: the row a Skip just sank. If it comes straight back, the
+// caller is on the last one and needs to be told that, not shown the same
+// screen twice with no explanation.
+async function getNextCall(justSkippedId = null) {
   const sb = getSupabase();
   const btn = document.getElementById('start');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:20px;height:20px;border-width:2.5px"></span>Finding the next person…'; }
@@ -420,6 +431,9 @@ async function getNextCall() {
     const { data, error } = await sb.rpc('get_next_call', { p_team_member_id: me.id });
     if (error) throw error;
     if (!data || !data.found) { await mountQueueEmpty(); return; }
+    if (justSkippedId && data.queue_id === justSkippedId) {
+      showToast(`${(data.full_name || 'They').split(' ')[0]} is the only person left on your list today, so they come straight back.`, 'info', 9000);
+    }
     await startCallSession(data);
   } catch (err) {
     showToast('Something went wrong: ' + err.message, 'error');
@@ -435,10 +449,40 @@ async function startCallSession(data) {
   Object.assign(form, blankForm());
   timerSeconds = 0; timerRunning = false; timerStartEpoch = null;
   clearInterval(timerInterval); timerInterval = null;
-  await Promise.all([loadPatientPitches(data.patient_id), loadPatientSessions(data.patient_id), loadPatientPriority(data.patient_id)]);
+  await Promise.all([loadPatientPitches(data.patient_id), loadPatientSessions(data.patient_id), loadPatientPriority(data.patient_id),
+                     loadPatientServices(data.patient_id), loadOpenLoopsForCall(data.patient_id)]);
   currentHistory = await loadPatientHistory(data.patient_id);
   saveActive();
   mountActive(data, currentHistory);
+}
+
+// ---- Support levers and open loops, for the call itself ----
+// Reported: interns had to go back to the patient section after the call to
+// tick what they had given, and the "still to ask" list was not visible while
+// logging. Both used to be patient-page-only, and neither could simply be
+// moved: patient_services goes through a policy whose inner EXISTS runs under
+// the caller's own patients RLS, and v_open_loops is security_invoker. A
+// coverage caller or an unassigned new lead - exactly the cases the portal
+// exists for - would have got an empty list and a toggle that failed to save.
+// So both read through the call claim instead. sql/116.
+async function loadPatientServices(patientId) {
+  const sb = getSupabase();
+  try {
+    const { data, error } = await sb.from('patient_services')
+      .select('lever, done, amount, sessions, outcome, detail, updated_at')
+      .eq('patient_id', patientId);
+    if (error) throw error;
+    currentServices = Object.fromEntries((data || []).map(r => [r.lever, r]));
+  } catch { currentServices = {}; }
+}
+
+async function loadOpenLoopsForCall(patientId) {
+  const sb = getSupabase();
+  try {
+    const { data, error } = await sb.rpc('get_open_loops_for_call', { p_patient_id: patientId });
+    if (error) throw error;
+    currentOpenLoops = data || [];
+  } catch { currentOpenLoops = []; }   // an older deploy just shows nothing
 }
 
 async function loadPatientPitches(patientId) {
@@ -496,6 +540,56 @@ async function loadPatientHistory(patientId) {
   }
 }
 
+// ---- "Fix that log" ----
+// Reported: "On the calling portal once you enter a log call you cannot go
+// back, so maybe adding that feature might help."
+//
+// Submit moves to the next patient 400 ms later, which is right - the whole
+// portal is built to keep someone dialling. What was missing was any way back
+// to the thing just written. This is a two-minute window on the next screen,
+// opening the correction form that already exists (openEditCall, backed by
+// correct_call_log in sql/68), rather than a new edit path that could disagree
+// with it.
+const UNDO_WINDOW_MS = 120000;
+
+function undoBarHTML() {
+  if (!lastLoggedCall || Date.now() - lastLoggedCall.at > UNDO_WINDOW_MS) return '';
+  return `
+    <div class="card" id="undo-bar" style="padding:11px 15px;margin-bottom:var(--s4);display:flex;align-items:center;gap:11px;flex-wrap:wrap;border-left:4px solid var(--ok)">
+      <span class="stat-ico ok" style="width:30px;height:30px;border-radius:8px">${icon('checkCircle')}</span>
+      <div style="flex:1;min-width:180px">
+        <div class="info-value">Logged for ${sanitizeText(lastLoggedCall.name)}</div>
+        <div class="due-meta">Got something wrong? You can still fix it.</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" id="undo-open">${icon('edit')}Fix that log</button>
+      <button class="btn btn-ghost btn-sm" id="undo-dismiss">Dismiss</button>
+    </div>`;
+}
+
+function wireUndoBar() {
+  const bar = document.getElementById('undo-bar');
+  if (!bar) return;
+  bar.querySelector('#undo-dismiss')?.addEventListener('click', () => { lastLoggedCall = null; bar.remove(); });
+  bar.querySelector('#undo-open')?.addEventListener('click', async () => {
+    const btn = bar.querySelector('#undo-open');
+    btn.disabled = true;
+    try {
+      // Read the row back with the joins openEditCall expects. It is a fresh
+      // read rather than the insert's return value so a correction is always
+      // made against what is actually stored.
+      const { data, error } = await getSupabase().from('call_logs')
+        .select('*, patients(id, full_name, assigned_to), profiles:caller_id(full_name)')
+        .eq('id', lastLoggedCall.id).maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('that log could not be found any more');
+      const { openEditCall } = await import('./calls.js');
+      openEditCall(data);
+    } catch (e) {
+      showToast('Could not open that log: ' + e.message, 'error');
+    } finally { btn.disabled = false; }
+  });
+}
+
 // ============================================================ Active view
 function mountActive(p, history) {
   currentHistory = history || [];
@@ -525,6 +619,7 @@ function mountActive(p, history) {
     ? `${PHONE_LABELS[dialPrimary.label] || 'Contact'}${dialPrimary.contact_name ? ' · ' + dialPrimary.contact_name : ''}`
     : '';
   el.innerHTML = `
+    ${undoBarHTML()}
     <div class="portal-grid">
       <div class="col-left">
         <div class="card pcard">
@@ -536,6 +631,7 @@ function mountActive(p, history) {
                 <span class="faint tnum" style="font-size:12.5px;color:var(--ink-3)">${p.patient_code || ''}</span>
                 ${srcBadge}${overdueBadge(p.days_overdue)}<span class="badge badge-${attemptTone}">Attempt ${p.attempt || 1}</span>
                 ${p.patient_status ? statusBadge(p.patient_status) : ''}${vulnerabilityBadge(p.vulnerability_score)}
+                ${consentBadge(p)}
               </div>
             </div>
           </div>
@@ -554,7 +650,13 @@ function mountActive(p, history) {
             <p class="strategy-body">There is nothing to dial for this family yet. Add a number on their profile and they come back into the call order. Your notes here are kept while you go.</p>
           </div>
           <button class="btn btn-secondary" id="open-profile-num" style="width:100%;justify-content:center;gap:8px;margin-top:8px">${icon('user')}Open profile to add a number</button>`}
-          <button class="btn btn-gold" id="wa-share-btn" style="width:100%;justify-content:center;gap:8px;margin-top:8px">${icon('phone')}Send resources on WhatsApp</button>
+          <!-- Was "Send resources on WhatsApp". Renamed because interns reported
+               they could not get at financial and accommodation help quickly:
+               match_resources() was already running behind this button, but a
+               button that says "send" does not read as somewhere to LOOK
+               something up while you are talking. -->
+          <button class="btn btn-gold" id="wa-share-btn" style="width:100%;justify-content:center;gap:8px;margin-top:8px">${icon('handHeart')}Find help for them · money, stay, food</button>
+          <button class="btn btn-secondary" id="open-shelf-btn" style="width:100%;justify-content:center;gap:8px;margin-top:8px">${icon('search')}Open the full resource shelf</button>
           ${renderDialOrder(p)}
           ${renderPriorityBanner()}
           ${renderStageGuide(p)}
@@ -597,12 +699,15 @@ function mountActive(p, history) {
           </details>` : ''}
           ${renderFullHistory(history)}
         </div>
+        ${renderOpenLoopsPanel(p)}
         ${renderGapsPanel(p)}
       </div>
-      <div class="col-right">${renderLogForm(p)}</div>
+      <div class="col-right">${renderLogForm(p)}${renderLeversPanel(p)}</div>
     </div>`;
   wireActive(p);
   wireGapsPanel(p);
+  wireLeversPanel(p);
+  wireUndoBar();
 }
 
 // Every previous conversation (everyone's notes, newest first) so the
@@ -634,10 +739,158 @@ function renderFullHistory(history) {
     </div>`;
 }
 
+// ---- Consent, visible before anything else ----
+// Reported: "the consent box is in the completed form and people have to open
+// the call logs and then go click on the consent ... should be the first thing
+// that they check". Until now the ONLY read of p.consent_given anywhere in the
+// portal was the one that HID the consent block once it was given, so a caller
+// could not tell whether a family had consented at all.
+function consentBadge(p) {
+  return p.consent_given
+    ? `<span class="badge badge-ok" title="Consent on file. Details from this call can be saved.">Consent given</span>`
+    : `<span class="badge badge-warn" title="No consent on file yet. Ask first: nothing about them can be saved until they say yes.">Consent needed</span>`;
+}
+
+// ---- "Still to ask": offers that are waiting on an answer ----
+// The patient page has had this since sql/85 (loadOpenLoops). It was never in
+// the portal, which is the one place it is actually useful, because it is a
+// list of sentences to say out loud.
+function renderOpenLoopsPanel(p) {
+  const loops = currentOpenLoops || [];
+  if (!loops.length) return '';
+  const first = (p.full_name || '').split(' ')[0] || 'them';
+  return `
+    <div class="card card-flush" id="loops-panel" style="margin-top:var(--s4)">
+      <div class="card-head" style="padding:14px 18px">
+        <h3 style="font-size:15.5px;display:flex;align-items:center;gap:8px"><span style="width:17px;height:17px;display:inline-flex;flex:none">${icon('clock')}</span>Still to ask ${sanitizeText(first)}</h3>
+        <span class="badge badge-warn">${loops.length} waiting</span>
+      </div>
+      <div style="padding:6px 12px 12px;max-height:300px;overflow-y:auto">
+        ${loops.map(l => `
+          <div class="lever-row" style="align-items:flex-start">
+            <span class="stat-ico warn" style="width:30px;height:30px;border-radius:8px;flex:none">${icon('clock')}</span>
+            <div style="flex:1;min-width:0">
+              <div class="lever-label">${sanitizeText(l.question_en || '')}</div>
+              ${l.question_hi ? `<div class="due-meta" style="margin-top:2px">${sanitizeText(l.question_hi)}</div>` : ''}
+              <div class="due-meta" style="margin-top:3px">Sent ${l.days_since_offer} day${l.days_since_offer === 1 ? '' : 's'} ago${l.offered_by_name ? ' by ' + sanitizeText(l.offered_by_name) : ''}. Ask today, then tick it under Support given.</div>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+// ---- Support levers, on the call ----
+// Reported: "Support toggles were reported to be inconsistently available
+// during live calls. At times, interns have to return to the patient section
+// after the call to update support."
+//
+// Saves immediately through set_service_lever (sql/116), the same way the gap
+// panel saves, rather than waiting for Submit. A lever is a fact about what we
+// gave a family; it should not be lost because a log was abandoned. It also
+// keeps this panel clear of the draft-restore machinery.
+function renderLeversPanel(p) {
+  const svc = currentServices || {};
+  const done = Object.values(svc).filter(x => x.done).length;
+  return `
+    <div class="card card-flush" id="levers-panel" style="margin-top:var(--s4)">
+      <div class="card-head" style="padding:14px 18px">
+        <h3 style="font-size:15.5px;display:flex;align-items:center;gap:8px"><span style="width:17px;height:17px;display:inline-flex;flex:none">${icon('handHeart')}</span>Support given</h3>
+        <span class="badge badge-${done ? 'ok' : 'neutral'}" id="levers-count">${done} on</span>
+      </div>
+      <div style="padding:6px 12px 12px;max-height:420px;overflow-y:auto">
+        <p class="due-meta" style="margin:2px 6px 8px">Tick these as you go. They save on their own, straight away, so there is nothing to come back for after the call.</p>
+        ${LEVER_GROUPS.map(g => `
+          <div class="lever-group">
+            <div class="lever-group-title">${g.group}</div>
+            ${g.levers.map(l => portalLeverRow(l, svc[l.key])).join('')}
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function portalLeverRow(lever, svc) {
+  const on = !!svc?.done;
+  const hide = on ? '' : 'style="display:none"';
+  let extra = '';
+  if (lever.field === 'amount') {
+    extra = `<div class="lever-extra" ${hide}><input class="input" type="number" min="0" data-extra="amount" placeholder="INR" value="${svc?.amount ?? ''}" title="${lever.fieldLabel}" style="width:104px" /></div>`;
+  } else if (lever.field === 'sessions') {
+    extra = `<div class="lever-extra" ${hide}><input class="input" type="number" min="0" max="200" data-extra="sessions" placeholder="#" value="${svc?.sessions ?? ''}" title="${lever.fieldLabel}" style="width:84px" /></div>`;
+  } else if (lever.field === 'outcome') {
+    extra = `<div class="lever-extra" ${hide}><select class="select" data-extra="outcome" title="${lever.fieldLabel}">
+      <option value="">${lever.fieldLabel}...</option>
+      ${lever.options.map(o => `<option value="${o.key}" ${svc?.outcome === o.key ? 'selected' : ''}>${o.label}</option>`).join('')}</select></div>`;
+  } else if (lever.field === 'detail') {
+    extra = `<div class="lever-extra" ${hide}><input class="input" data-extra="detail" placeholder="${lever.fieldLabel}..." value="${sanitizeText(svc?.detail || '')}" style="width:190px" /></div>`;
+  }
+  return `
+    <div class="lever-row ${on ? 'on' : ''}" data-lever="${lever.key}">
+      <label class="switch"><input type="checkbox" data-toggle ${on ? 'checked' : ''} /><span class="knob"></span></label>
+      <span class="lever-label">${lever.label}</span>
+      ${extra}
+    </div>`;
+}
+
+function wireLeversPanel(p) {
+  const panel = document.getElementById('levers-panel');
+  if (!panel) return;
+  const syncCount = () => {
+    const n = Object.values(currentServices || {}).filter(x => x.done).length;
+    const badge = document.getElementById('levers-count');
+    if (badge) { badge.textContent = `${n} on`; badge.className = `badge badge-${n ? 'ok' : 'neutral'}`; }
+  };
+  panel.querySelectorAll('.lever-row[data-lever]').forEach(row => {
+    const lever = row.dataset.lever;
+    const save = async () => {
+      const toggle = row.querySelector('[data-toggle]');
+      const num = (sel) => { const v = row.querySelector(sel)?.value; return v === '' || v == null ? null : Number(v); };
+      const txt = (sel) => row.querySelector(sel)?.value?.trim() || null;
+      toggle.disabled = true;
+      try {
+        const { error } = await getSupabase().rpc('set_service_lever', {
+          p_patient_id: p.patient_id,
+          p_lever: lever,
+          p_done: toggle.checked,
+          p_amount: num('[data-extra="amount"]'),
+          p_sessions: num('[data-extra="sessions"]'),
+          p_outcome: txt('[data-extra="outcome"]'),
+          p_detail: txt('[data-extra="detail"]'),
+        });
+        if (error) throw error;
+        currentServices[lever] = { ...(currentServices[lever] || {}), lever, done: toggle.checked };
+        syncCount();
+      } catch (e) {
+        // Put the switch back. A toggle that looks saved and is not is the
+        // exact failure this panel exists to remove.
+        toggle.checked = !toggle.checked;
+        row.classList.toggle('on', toggle.checked);
+        const extra = row.querySelector('.lever-extra');
+        if (extra) extra.style.display = toggle.checked ? '' : 'none';
+        showToast('Could not save that: ' + e.message, 'error');
+      } finally { toggle.disabled = false; }
+    };
+    row.querySelector('[data-toggle]').addEventListener('change', (e) => {
+      const on = e.target.checked;
+      row.classList.toggle('on', on);
+      const extra = row.querySelector('.lever-extra');
+      if (extra) extra.style.display = on ? '' : 'none';
+      save();
+    });
+    row.querySelectorAll('.lever-extra .input, .lever-extra .select').forEach(inp => inp.addEventListener('change', save));
+  });
+}
+
 // ---- "Ask today": the data-gap radar for this patient ----
 function renderGapsPanel(p) {
   const callNum = callNumberOf(p);
   const gaps = dataGaps(p, callNum);
+  if (!p.consent_given) {
+    return `<div class="card" id="gaps-panel" style="padding:14px 18px;display:flex;align-items:flex-start;gap:10px">
+      <span class="stat-ico warn">${icon('shieldCheck')}</span>
+      <div><div class="info-value">Ask for consent first</div>
+      <div class="due-meta">Nothing about ${sanitizeText((p.full_name || '').split(' ')[0] || 'them')} can be saved until they agree. The consent question is at the top of the form on the right; tick it and these questions open up.</div></div>
+    </div>`;
+  }
   if (!gaps.length) {
     return `<div class="card" style="padding:14px 18px;display:flex;align-items:center;gap:10px">
       <span class="stat-ico ok">${icon('checkCircle')}</span>
@@ -672,6 +925,39 @@ function renderGapsPanel(p) {
           </div>`).join('')}
       </div>
     </div>`;
+}
+
+// ---- Consent, written the moment it is given ----
+// Not at Submit. Consent is a legal record with a 3-year retention clock hung
+// off consent_date; it belongs in the database when the family says yes, not
+// when a write-up happens to be finished. It is also what unlocks the rest of
+// the screen, because sql/116 refuses clinical writes without it - so the gap
+// panel is re-rendered here rather than after Submit.
+async function recordConsentNow(p) {
+  if (!p || p.consent_given) return;
+  const note = document.getElementById('consent-saved');
+  try {
+    const { error } = await getSupabase().rpc('update_patient_from_call', {
+      p_patient_id: p.patient_id,
+      p_fields: {
+        consent_given: true,
+        consent_date: new Date().toISOString(),
+        consent_method: 'verbal_during_call',
+      },
+    });
+    if (error) throw error;
+    p.consent_given = true;
+    if (currentPatient) currentPatient.consent_given = true;
+    form.consentSaved = true;
+    if (note) { note.style.display = ''; note.textContent = 'Consent recorded. You can note their details now.'; }
+    // Open the questions that were locked a second ago.
+    const panel = document.getElementById('gaps-panel');
+    if (panel) { panel.outerHTML = renderGapsPanel(p); wireGapsPanel(p); }
+    const badge = document.querySelector('.pcard-head .badge-warn[title^="No consent"]');
+    if (badge) badge.outerHTML = consentBadge(p);
+  } catch (e) {
+    showToast('Could not record consent: ' + e.message, 'error');
+  }
 }
 
 function wireGapsPanel(p) {
@@ -804,10 +1090,24 @@ function renderLogForm(p) {
       <div class="lf-head"><h3>How did it go?</h3>
         <div style="display:flex;align-items:center;gap:10px">
           <span class="faint" style="font-size:13px;color:var(--ink-3)">${(p.full_name || '').split(' ')[0]}</span>
-          <button type="button" class="btn btn-ghost btn-sm" id="f-concern" title="Flag something a supervisor must see" style="color:var(--danger);gap:6px">${icon('alertTriangle')}Raise a concern</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="f-concern" title="Flag something a supervisor must see, including how this call is going for you" style="color:var(--danger);gap:6px">${icon('alertTriangle')}Raise a concern</button>
         </div>
       </div>
       <div class="lf-body">
+        ${p.consent_given ? `
+        <div class="followup" style="background:var(--ok-soft);border-color:var(--ok);padding:10px 12px">
+          <div class="fu-head" style="color:var(--ok)">${icon('shieldCheck')}<span>Consent on file</span></div>
+          <p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 0">They have already agreed. Anything they tell you today can be saved.</p>
+        </div>` : `
+        <div class="followup" id="consent-block" style="background:var(--gold-soft);border-color:var(--gold)">
+          <div class="fu-head" style="color:var(--gold-deep)">${icon('shieldCheck')}<span>Consent first</span></div>
+          <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 10px">${callNum >= 2
+            ? '“May I note down a few details about the diagnosis? It stays private and helps our team guide you better.”'
+            : '“Is it alright if we stay in touch and keep a few notes about your care? It stays private, and you can ask us to stop any time.”'}</p>
+          <p style="font:var(--t-xs);color:var(--ink-3);margin:0 0 10px">Until they say yes, nothing about them can be saved. Ask this before anything else.</p>
+          <div class="yesno" data-yn="consent"><button type="button" class="yn" data-v="yes">They consented</button><button type="button" class="yn" data-v="no">Not today</button></div>
+          <div class="due-meta" id="consent-saved" style="display:none;margin-top:8px;color:var(--ok)"></div>
+        </div>`}
         <div class="field"><label>Call outcome <span class="req">*</span></label>
           <div class="seg seg-wrap" id="seg-outcome">
             ${DIAL_STATUSES.map(o => `<button type="button" class="seg-btn" data-status="${o.key}" data-tone="${o.tone}">${icon(o.icon)}<span>${o.label}</span></button>`).join('')}
@@ -829,12 +1129,6 @@ function renderLogForm(p) {
             <input class="input" id="f-customreq" placeholder="Anything else they asked for…" style="margin-top:8px" />
           </div>
           ${showDeeper ? '<div id="invite-moment"></div>' : ''}
-          ${showDeeper && !p.consent_given ? `
-          <div class="followup" style="background:var(--gold-soft);border-color:var(--gold)">
-            <div class="fu-head" style="color:var(--gold-deep)">${icon('shieldCheck')}<span>Consent moment</span></div>
-            <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 10px">“May I note down a few details about the diagnosis? It stays private and helps our team guide you better.”</p>
-            <div class="yesno" data-yn="consent"><button type="button" class="yn" data-v="yes">They consented</button><button type="button" class="yn" data-v="no">Not today</button></div>
-          </div>` : ''}
           ${showDeeper ? `
           <button type="button" class="btn btn-secondary" id="f-details-btn">${icon('stethoscope')}Add clinical details they shared</button>
           <div class="field"><label>Services offered today</label>
@@ -852,7 +1146,7 @@ function renderLogForm(p) {
               <div class="yesno" data-yn="social"><button type="button" class="yn" data-v="yes">Yes</button><button type="button" class="yn" data-v="no">No</button></div></div>
           </div>` : `
           <p style="font:var(--t-xs);color:var(--ink-3);margin:0;padding:10px 12px;background:var(--surface-3);border-radius:var(--r-sm)">
-            ${icon('info')} First call. Services, WhatsApp and medical details unlock from the second call. Today is about trust.
+            ${icon('info')} First call. Services, WhatsApp and medical details unlock from the second call. Today is about trust - and consent, if they offer it.
           </p>`}
           <button type="button" class="btn btn-ghost btn-sm" id="f-wellbeing-btn" style="align-self:flex-start">${icon('activity')}Record well-being scores (PHQ-4, QoL…)</button>
           <div class="row gap5 wrap" style="display:flex;gap:20px;flex-wrap:wrap">
@@ -1047,6 +1341,9 @@ function wireActive(p) {
     navigate('patients/' + p.patient_id);
   });
   // Send resources on WhatsApp: curate + send from the business number, mid-call.
+  // Straight to the financial + accommodation shelf, the pair the field team
+  // asked for by name. Opens the library rather than the send flow.
+  document.getElementById('open-shelf-btn')?.addEventListener('click', () => navigate('resources/money_stay'));
   document.getElementById('wa-share-btn')?.addEventListener('click', () => openWhatsappShare({
     patient: { patient_id: p.patient_id, full_name: p.full_name, state: p.state, city: p.city, primary_language: p.primary_language },
     recipients: recipientsFromPatient(p),
@@ -1085,7 +1382,8 @@ function wireActive(p) {
   });
   document.querySelectorAll('.yesno').forEach(group => { const field = group.dataset.yn;
     group.querySelectorAll('.yn').forEach(btn => btn.addEventListener('click', () => { const val = btn.dataset.v === 'yes'; form[field] = val;
-      group.querySelectorAll('.yn').forEach(b => b.classList.remove('yes', 'no')); btn.classList.add(val ? 'yes' : 'no'); saveActive(); })); });
+      group.querySelectorAll('.yn').forEach(b => b.classList.remove('yes', 'no')); btn.classList.add(val ? 'yes' : 'no'); saveActive();
+      if (field === 'consent' && val) recordConsentNow(p); })); });
   const textField = (id, field) => document.getElementById(id)?.addEventListener('input', e => { form[field] = e.target.value; saveActiveSoon(); });
   textField('f-customreq', 'customReq');
   textField('f-fb-patient', 'fbPatient');
@@ -1116,8 +1414,23 @@ function openConcernModal(p) {
       Flagging it <em>is</em> handling it.</p>
     <div class="field"><label>What did you hear? <span class="req">*</span></label>
       <div class="chips" id="cn-reasons" style="display:flex;flex-wrap:wrap;gap:8px">
-        ${CONCERN_REASONS.map(r => `<button type="button" class="chip seg-btn" data-reason="${r.key}" data-tone="danger" title="${r.hint}" style="padding:8px 12px"><span>${r.label}</span></button>`).join('')}
+        ${CONCERN_REASONS.filter(r => !CALLER_CONCERNS.includes(r.key))
+          .map(r => `<button type="button" class="chip seg-btn" data-reason="${r.key}" data-tone="danger" title="${r.hint}" style="padding:8px 12px"><span>${r.label}</span></button>`).join('')}
       </div>
+    </div>
+    <div class="field" style="margin-top:var(--s4)">
+      <label>Or is this about the call itself?</label>
+      <p style="font:var(--t-xs);color:var(--ink-3);margin:0 0 8px">If someone speaks to you in a way that is not okay, that is a flag too. You do not have to keep taking those calls.</p>
+      <div class="chips" id="cn-reasons-self" style="display:flex;flex-wrap:wrap;gap:8px">
+        ${CONCERN_REASONS.filter(r => CALLER_CONCERNS.includes(r.key))
+          .map(r => `<button type="button" class="chip seg-btn" data-reason="${r.key}" data-tone="danger" title="${r.hint}" style="padding:8px 12px"><span>${r.label}</span></button>`).join('')}
+      </div>
+      <label class="svc" id="cn-reassign-wrap" style="display:none;margin-top:10px;align-items:flex-start;gap:9px;padding:10px 12px">
+        <input type="checkbox" id="cn-reassign" />
+        <span style="font:var(--t-sm)">Take this patient off my list and give them to someone else.
+          <span style="display:block;font:var(--t-xs);color:var(--ink-3);margin-top:2px">They come off your list the moment you send this. A supervisor decides who picks them up.</span>
+        </span>
+      </label>
     </div>
     <div class="field" style="margin-top:var(--s4)"><label>How urgent?</label>
       <div class="seg" style="grid-template-columns:repeat(3,1fr)" id="cn-sev">
@@ -1132,10 +1445,20 @@ function openConcernModal(p) {
     </div>`;
   showModal({ title: `Raise a concern · ${p.full_name || ''}`, content: el, size: 'lg' });
 
-  el.querySelectorAll('#cn-reasons .chip').forEach(btn => btn.addEventListener('click', () => {
+  // One selection across BOTH chip rows: the welfare list and the two that
+  // are about the caller. Picking either clears the other.
+  const allChips = () => el.querySelectorAll('#cn-reasons .chip, #cn-reasons-self .chip');
+  allChips().forEach(btn => btn.addEventListener('click', () => {
     state.reason = btn.dataset.reason;
-    el.querySelectorAll('#cn-reasons .chip').forEach(b => { b.className = 'chip seg-btn'; b.style.padding = '8px 12px'; });
+    allChips().forEach(b => { b.className = 'chip seg-btn'; b.style.padding = '8px 12px'; });
     btn.className = 'chip seg-btn on tone-danger'; btn.style.padding = '8px 12px';
+    // Asking to be taken off the call is only offered for the reasons it
+    // answers; anything else is a welfare flag and the mentor stays on it.
+    const wrap = el.querySelector('#cn-reassign-wrap');
+    const box = el.querySelector('#cn-reassign');
+    const offerable = CALLER_CONCERNS.includes(state.reason);
+    wrap.style.display = offerable ? 'flex' : 'none';
+    if (!offerable) box.checked = false;
     // Life-threatening reasons default to urgent unless they chose otherwise.
     if (!state.sevTouched && ['self_harm', 'condition_critical'].includes(state.reason)) {
       state.severity = 'urgent';
@@ -1151,16 +1474,41 @@ function openConcernModal(p) {
   el.querySelector('#cn-save').addEventListener('click', async () => {
     if (!state.reason) { showToast('Pick what you heard. That routes the help', 'warning'); return; }
     const btn = el.querySelector('#cn-save');
+    const wantsOff = !!el.querySelector('#cn-reassign')?.checked;
     btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>Raising…';
     try {
-      const { error } = await getSupabase().from('patient_concerns').insert({
-        patient_id: p.patient_id, raised_by: me.id, source: 'manual',
-        reason: state.reason, severity: state.severity,
-        note: el.querySelector('#cn-note').value.trim() || null,
+      const note = el.querySelector('#cn-note').value.trim() || null;
+      if (wantsOff) {
+        // One RPC: raises the flag AND takes them off this caller's queue
+        // in the same transaction, so she is never told "done" while the
+        // person is still on tomorrow's list. sql/113.
+        const { error } = await getSupabase().rpc('request_patient_reassignment', {
+          p_patient_id: p.patient_id, p_reason: state.reason,
+          p_severity: state.severity, p_note: note,
+        });
+        if (error) throw error;
+        closeModal();
+        showToast('Sent. They are off your list from now, and a supervisor will pick it up. You did the right thing.', 'success', 8000);
+        // The row they were on has just been cancelled: move on rather
+        // than leaving her looking at the person she asked to leave.
+        stopTimer(); clearActive(); getNextCall();
+        return;
+      }
+      // Was a bare .insert(), which is half of "in concern section multiple
+      // patients appear twice or thrice": every automatic flag path already
+      // refuses to stack a second live flag for the same patient and reason,
+      // and the two manual paths did not. raise_call_concern (sql/116) applies
+      // the same rule and appends the new wording to the flag already open,
+      // so nothing she typed is lost.
+      const { data: res, error } = await getSupabase().rpc('raise_call_concern', {
+        p_patient_id: p.patient_id, p_reason: state.reason,
+        p_severity: state.severity, p_note: note,
       });
       if (error) throw error;
       closeModal();
-      showToast('Concern raised. A supervisor will see it. Well done for flagging it.', 'success');
+      showToast(res?.created === false
+        ? 'Added to the flag already open on them. A supervisor has it.'
+        : 'Concern raised. A supervisor will see it. Well done for flagging it.', 'success');
     } catch (e) {
       showToast('Could not raise it: ' + e.message, 'error');
       btn.disabled = false; btn.innerHTML = `${icon('alertTriangle')}Raise it now`;
@@ -1308,10 +1656,18 @@ async function skipPatient() {
     showToast(data.message, 'info');
     return;   // the row stays put, so keep the caller where they are
   }
+  // The last servable row has nowhere to sink to: get_next_call would hand
+  // the SAME person straight back, which is what "Skip does nothing" is.
+  // Say so, and keep the draft rather than wiping it for a no-op.
+  if (outcome === 'skipped_alone') {
+    if (btn) btn.disabled = false;
+    showToast(`${name} is the only person left on your list today, so there is nobody to move them behind. Log this call when you can, or check back after the list is rebuilt.`, 'info', 9000);
+    return;
+  }
   showToast(outcome === 'skipped'
     ? `${name} moved down, still on your list. We'll circle back`
     : data.message, 'info', outcome === 'skipped' ? 4000 : 7000);
-  stopTimer(); clearActive(); getNextCall();
+  stopTimer(); clearActive(); getNextCall(currentQueueId);
 }
 
 async function submitCallLog() {
@@ -1377,10 +1733,12 @@ async function submitCallLog() {
     }).select().single();
     if (error) throw error;
 
-    if (form.services.length > 0 || form.consent === true) {
+    if (form.services.length > 0 || (form.consent === true && !form.consentSaved)) {
       const now = new Date().toISOString(); const patch = {};
       form.services.forEach(key => { const svc = SERVICES.find(s => s.key === key); if (svc) patch[svc.column] = now; });
-      if (form.consent === true) {
+      // recordConsentNow() already wrote this the moment she ticked it, so
+      // do not restamp consent_date with the submit time.
+      if (form.consent === true && !form.consentSaved) {
         patch.consent_given = true; patch.consent_date = now; patch.consent_method = 'verbal_during_call';
       }
       // RPC instead of a direct update: plain RLS blocks coverage callers
@@ -1403,6 +1761,9 @@ async function submitCallLog() {
       p_receptiveness: connected ? form.receptiveness : null });
 
     clearActive();
+    if (callLog?.id) {
+      lastLoggedCall = { id: callLog.id, name: (currentPatient.full_name || '').split(' ')[0] || 'that call', at: Date.now() };
+    }
     const fName = (currentPatient.full_name || '').split(' ')[0];
     const niceDate = followUp ? new Date(followUp).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }) : null;
     showToast(niceDate ? `Logged. ${fName}'s next check-in is set for ${niceDate}` : `Logged for ${fName}`, 'success');
@@ -1429,6 +1790,7 @@ async function mountQueueEmpty() {
 
   const finished = summary.done_today > 0;
   el.innerHTML = `
+    ${undoBarHTML()}
     <div class="ready"><div class="ready-card">
       <div class="ready-ico" style="background:var(--ok-soft);color:var(--ok)">${icon(finished ? 'checkCircle' : 'inbox')}</div>
       <h2>${finished ? "That's everyone for now." : 'Nothing queued to you.'}</h2>
@@ -1439,6 +1801,7 @@ async function mountQueueEmpty() {
       <button class="btn btn-secondary btn-lg" id="back-ready" style="margin-top:8px">${icon('refresh')}Check again</button>
     </div></div>`;
   document.getElementById('back-ready')?.addEventListener('click', mountReady);
+  wireUndoBar();
   document.getElementById('goto-team')?.addEventListener('click', () => navigate('team'));
 }
 

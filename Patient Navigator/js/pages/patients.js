@@ -16,7 +16,7 @@ import { openAssessmentFlow } from '../components/assessmentFlow.js';
 import { mountBeforeYouCall } from '../components/beforeYouCall.js';
 import { formatDate, formatRelativeTime, capitalize, getDialStatusBadge, exportToCSV, renderSkeleton } from '../utils/formatters.js';
 import { sanitize } from '../utils/validators.js';
-import { navigate } from '../router.js';
+import { navigate, goBack } from '../router.js';
 import { icon } from '../components/icons.js';
 import {
   PATIENT_STATUSES, statusBadge, GI_SUBTYPES, giLabel, TRAJECTORIES, STOMA_TYPES,
@@ -428,14 +428,6 @@ function showPatientForm(existing = null, onSaved = null) {
             ${['unknown', 'bpl', 'lower_middle', 'middle', 'upper_middle'].map(s => `<option value="${s}" ${(x.economic_status || 'unknown') === s ? 'selected' : ''}>${s === 'bpl' ? 'Below poverty line' : capitalize(s)}</option>`).join('')}
           </select></div>
       </div>
-      <div class="form-row">
-        <div class="form-group"><label class="form-label">Employment at diagnosis</label>
-          <input class="form-input" id="pf-employment" value="${sanitize(x.employment_at_diagnosis || '')}" placeholder="e.g., farmer, shop owner, homemaker" /></div>
-        <div class="form-group"><label class="form-label">Dependents at home</label>
-          <input class="form-input" id="pf-dependents" type="number" min="0" max="20" value="${x.dependents_count ?? ''}" /></div>
-        <div class="form-group"><label class="form-label">Distance to treatment (km)</label>
-          <input class="form-input" id="pf-distance" type="number" min="0" value="${x.distance_to_treatment_km ?? ''}" /></div>
-      </div>
       <div class="form-group" style="max-width:280px"><label class="form-label">Health literacy</label>
         <select class="form-select" id="pf-literacy">${opt(HEALTH_LITERACY, x.health_literacy, 'N/A')}</select></div>
 
@@ -505,9 +497,6 @@ function showPatientForm(existing = null, onSaved = null) {
       payment_method: v('pf-payment'),
       insurance_status: v('pf-insurance') || 'unknown',
       economic_status: v('pf-economic') || 'unknown',
-      employment_at_diagnosis: v('pf-employment'),
-      dependents_count: num('pf-dependents'),
-      distance_to_treatment_km: num('pf-distance'),
       health_literacy: v('pf-literacy'),
       consent_given: true,
       consent_method: v('pf-consent-method'),
@@ -637,7 +626,9 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       <div id="tab-content"></div>
     `;
 
-    container.querySelector('#back-to-patients').addEventListener('click', () => navigate('patients'));
+    // Back goes where they came from (Calls, Concerns, the queue board, the
+    // calling portal...), not always to the patients list. See goBack().
+    container.querySelector('#back-to-patients').addEventListener('click', () => goBack('patients'));
     container.querySelector('#edit-patient-btn').addEventListener('click', () => showPatientForm(patient, reload));
     // The batch reader. One PDF, twenty photos or a mix, segmented into
     // documents and reviewed as one thing. See js/pages/docBatch.js.
@@ -861,9 +852,6 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
           <div><div class="k">Paying via</div>${dash(p.payment_method)}</div>
           <div><div class="k">Insurance</div><div class="v">${capitalize(p.insurance_status || 'unknown')}</div></div>
           <div><div class="k">Economic</div><div class="v">${p.economic_status === 'bpl' ? 'Below poverty line' : capitalize(p.economic_status || 'unknown')}</div></div>
-          <div><div class="k">Employment at dx</div>${dash(p.employment_at_diagnosis)}</div>
-          <div><div class="k">Dependents</div>${p.dependents_count != null ? vHas(String(p.dependents_count)) : vNone()}</div>
-          <div><div class="k">Distance to care</div>${p.distance_to_treatment_km != null ? vHas(p.distance_to_treatment_km + ' km') : vNone()}</div>
           <div><div class="k">Health literacy</div>${dash(HEALTH_LITERACY.find(l => l.key === p.health_literacy)?.label)}</div>
           <div><div class="k">Vulnerability</div><div class="v">${vulnerabilityBadge(p.vulnerability_score)} <span style="font-weight:500;font-size:12px;color:var(--ink-3)">of 10</span></div></div>
           <div><div class="k">Current POC</div>${pocCell}</div>

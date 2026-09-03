@@ -1,0 +1,4 @@
+{
+  "//": "Everything under js/ is ES modules. The browser already knows that from <script type=\"module\">; Node does not, because the root package.json says commonjs for the sake of scripts/*.js. This one line lets the offline harnesses (scripts/_verify_96_messages.mjs) import the same i18n catalogue and message template the app runs, instead of a copy that can drift.",
+  "type": "module"
+}

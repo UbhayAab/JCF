@@ -167,7 +167,7 @@ function paint() {
   const groupHTML = (key, title, hint) => {
     const list = groups[key];
     if (!list.length || (sevFilter && sevFilter !== key)) return '';
-    const cards = `<div style="display:flex;flex-direction:column;gap:10px">${list.map(concernCard).join('')}</div>`;
+    const cards = `<div style="display:flex;flex-direction:column;gap:10px">${groupByPatient(list)}</div>`;
     const head = `
       <div style="display:flex;align-items:baseline;gap:10px;margin:0 0 10px">
         <span class="lever-group-title" style="margin:0;color:${SEV_COLOR[key]}">${title} · ${list.length}</span>
@@ -231,6 +231,8 @@ function paint() {
         </div>
       </details>` : ''}`;
 
+  body.querySelectorAll('[data-reassign]').forEach(b => b.addEventListener('click', () => openReassignModal(b.dataset.reassign)));
+  body.querySelectorAll('[data-decline-reassign]').forEach(b => b.addEventListener('click', () => openDeclineReassignModal(b.dataset.declineReassign)));
   body.querySelectorAll('[data-ack]').forEach(b => b.addEventListener('click', () => acknowledge(b.dataset.ack)));
   body.querySelectorAll('[data-resolve]').forEach(b => b.addEventListener('click', () => openResolveModal(b.dataset.resolve)));
   body.querySelectorAll('[data-open-patient]').forEach(b => b.addEventListener('click', () => { window.location.hash = 'patients/' + b.dataset.openPatient; }));
@@ -385,20 +387,53 @@ function patientName(r) {
   return r.patient?.full_name || r.patient?.patient_code || 'Patient (restricted)';
 }
 
-function concernCard(r) {
+// One patient, one name, however many flags they carry. A single flag renders
+// exactly as it always did; only a repeat gets the wrapper, so the common case
+// is untouched.
+function groupByPatient(list) {
+  const order = [];
+  const byPatient = new Map();
+  list.forEach(r => {
+    const key = r.patient?.id || r.patient_id || ('unknown:' + r.id);
+    if (!byPatient.has(key)) { byPatient.set(key, []); order.push(key); }
+    byPatient.get(key).push(r);
+  });
+  return order.map(key => {
+    const flags = byPatient.get(key);
+    if (flags.length === 1) return concernCard(flags[0]);
+    const first = flags[0];
+    return `
+      <div class="card" style="padding:10px 12px;border-left:4px solid ${SEV_COLOR[first.severity] || 'var(--line)'}">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <button class="btn btn-ghost btn-sm" data-open-patient="${first.patient?.id || ''}" ${first.patient?.id ? '' : 'disabled'}
+            style="padding:2px 8px;font-weight:700;font-size:15px">${patientName(first)}</button>
+          <span class="badge badge-warn">${flags.length} separate flags</span>
+          <span class="hist-meta">${first.patient?.patient_code || ''}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;padding-left:6px;border-left:2px solid var(--line)">
+          ${flags.map(f => concernCard(f, true)).join('')}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function concernCard(r, compact = false) {
   const reason = concernReason(r.reason);
   const acked = r.status === 'acknowledged';
   const canAct = isManagerOrAdmin();
   const place = [r.patient?.city, r.patient?.state].filter(Boolean).join(', ');
   const phone = primaryPhone(r);
   return `
-    <div class="card" style="padding:12px 14px;border-left:4px solid ${SEV_COLOR[r.severity] || 'var(--line)'}">
+    <div class="${compact ? '' : 'card'}" style="padding:${compact ? '4px 2px' : '12px 14px'}${compact ? '' : `;border-left:4px solid ${SEV_COLOR[r.severity] || 'var(--line)'}`}">
       <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
         <div style="flex:1;min-width:220px">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-ghost btn-sm" data-open-patient="${r.patient?.id || ''}" ${r.patient?.id ? '' : 'disabled'}
-              style="padding:2px 8px;font-weight:700;font-size:14.5px">${patientName(r)}</button>
+            ${compact ? '' : `<button class="btn btn-ghost btn-sm" data-open-patient="${r.patient?.id || ''}" ${r.patient?.id ? '' : 'disabled'}
+              style="padding:2px 8px;font-weight:700;font-size:14.5px">${patientName(r)}</button>`}
             <span class="badge badge-neutral">${reason.label}</span>
+            ${r.reassign_status === 'pending' ? `<span class="badge badge-danger" title="This mentor asked to be taken off this patient. The patient is already off her list.">Asked to be taken off</span>` : ''}
+            ${r.reassign_status === 'done' ? `<span class="badge badge-ok">Reassigned</span>` : ''}
+            ${r.reassign_status === 'declined' ? `<span class="badge badge-neutral">Reassignment declined</span>` : ''}
             ${acked ? `<span class="badge badge-primary">Being handled · ${r.acknowledger?.full_name || ''}</span>` : ''}
             ${r.source === 'auto' ? `<span class="badge badge-gold" title="Raised automatically from a score threshold">Auto-flag</span>` : ''}
             <span class="hist-meta">${r.patient?.patient_code || ''}${place ? ' · ' + place : ''}</span>
@@ -413,11 +448,119 @@ function concernCard(r) {
         </div>
         ${canAct ? `
         <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${r.reassign_status === 'pending' ? `
+          <button class="btn btn-danger btn-sm" data-reassign="${r.id}">${icon('users')}Hand to someone else</button>
+          <button class="btn btn-ghost btn-sm" data-decline-reassign="${r.id}">Decline</button>` : ''}
           ${acked ? '' : `<button class="btn btn-secondary btn-sm" data-ack="${r.id}">${icon('check')}I'm on it</button>`}
           <button class="btn btn-primary btn-sm" data-resolve="${r.id}">${icon('checkCircle')}Resolve</button>
         </div>` : ''}
       </div>
     </div>`;
+}
+
+// ---- Reassignment requests (sql/113) --------------------------------
+// A mentor who asked to be taken off a patient is already off them: the
+// RPC cancelled her queue row when she asked. What is left for a
+// supervisor is the only part a person has to decide - who picks them up.
+async function openReassignModal(id) {
+  const r = rows.find(x => x.id === id);
+  const sb = getSupabase();
+  const el = document.createElement('div');
+  el.innerHTML = `
+    <p style="font:var(--t-sm);color:var(--ink-2);margin:0 0 var(--s4)">
+      <strong>${patientName(r || {})}</strong> is off ${sanitizeText(r?.raiser?.full_name || 'the mentor')}'s list already.
+      Choose who takes them on. They are queued for the new mentor straight away.</p>
+    ${r?.note ? `<p style="font:var(--t-sm);color:var(--ink-2);background:var(--surface-2);border-radius:var(--r-sm);padding:10px 12px;margin:0 0 var(--s4)">${sanitizeText(r.note)}</p>` : ''}
+    <div class="field"><label class="form-label" for="rs-to">Hand to</label>
+      <select class="form-select" id="rs-to" style="width:100%"><option value="">Loading the team…</option></select></div>
+    <div class="form-actions" style="margin-top:var(--s4)">
+      <button class="btn btn-secondary" id="rs-cancel">Cancel</button>
+      <button class="btn btn-primary" id="rs-save" disabled>${icon('users')}Hand over</button>
+    </div>`;
+  showModal({ title: 'Give this patient to someone else', content: el, size: 'md' });
+  el.querySelector('#rs-cancel').addEventListener('click', () => closeModal());
+
+  const sel = el.querySelector('#rs-to');
+  try {
+    const { data, error } = await sb.rpc('get_team_availability');
+    if (error) throw error;
+    // Never offer the person who asked to be taken off - AND never offer
+    // somebody assign_patients() will refuse. get_team_availability returns
+    // managers and admins too (sql/57), and assign_patients raises
+    // 'Target must be an active caregiver mentor' on any of them, so picking
+    // one rolled the whole hand-over back with a red toast. team.js:622 has
+    // always filtered this list; this modal never did. That is the whole of
+    // "manual reassignment is not consistently working".
+    const options = (data || [])
+      .filter(m => m.caller_id !== r?.reassign_from)
+      .filter(m => ['caller', 'caregiver_mentor'].includes(m.role));
+    if (!options.length) {
+      sel.innerHTML = `<option value="">No other caregiver mentor to hand them to</option>`;
+      showToast('There is no other active caregiver mentor to take this patient.', 'warning');
+      return;
+    }
+    sel.innerHTML = `<option value="">Pick a caregiver mentor…</option>`
+      + options.map(m => `<option value="${m.caller_id}">${sanitizeText(m.full_name)}${m.available === false ? ' · off today' : ''}</option>`).join('');
+  } catch (e) {
+    sel.innerHTML = `<option value="">Could not load the team</option>`;
+    showToast('Could not load the team: ' + e.message, 'error');
+    return;
+  }
+  const save = el.querySelector('#rs-save');
+  sel.addEventListener('change', () => { save.disabled = !sel.value; });
+  save.addEventListener('click', async () => {
+    save.disabled = true; save.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>Handing over…';
+    try {
+      const { data, error } = await sb.rpc('reassign_from_concern', { p_concern_id: id, p_to: sel.value });
+      if (error) throw error;
+      // Read the response before claiming anything happened. sql/116 makes the
+      // function raise when nothing moved, but this client also refuses to
+      // report a hand-over it cannot see, because the old code threw the
+      // payload away and rendered "Reassigned" over an assignment that had
+      // been silently skipped - leaving the patient with the mentor who asked
+      // to be taken off them. Same rule as sql/68 and patients.js.
+      const moved = Number(data?.assigned?.assigned ?? 0);
+      if (!moved) throw new Error('the server did not confirm the hand-over, so nothing was changed');
+      closeModal();
+      showToast('Handed over. They are on the new mentor\'s list from today.', 'success');
+      await load();
+    } catch (e) {
+      showToast('Could not hand over: ' + e.message, 'error');
+      save.disabled = false; save.innerHTML = `${icon('users')}Hand over`;
+    }
+  });
+}
+
+async function openDeclineReassignModal(id) {
+  const r = rows.find(x => x.id === id);
+  const el = document.createElement('div');
+  el.innerHTML = `
+    <p style="font:var(--t-sm);color:var(--ink-2);margin:0 0 var(--s4)">
+      ${patientName(r || {})} goes back onto ${sanitizeText(r?.raiser?.full_name || 'the mentor')}'s list on the next daily build.
+      Say why, in one line. They will read it.</p>
+    <div class="field"><textarea class="textarea" id="dr-note" placeholder="What you decided, and what she should do if it happens again…"></textarea></div>
+    <div class="form-actions" style="margin-top:var(--s4)">
+      <button class="btn btn-secondary" id="dr-cancel">Cancel</button>
+      <button class="btn btn-primary" id="dr-save">Decline the request</button>
+    </div>`;
+  showModal({ title: 'Decline the reassignment', content: el, size: 'md' });
+  el.querySelector('#dr-cancel').addEventListener('click', () => closeModal());
+  el.querySelector('#dr-save').addEventListener('click', async () => {
+    const btn = el.querySelector('#dr-save');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>Saving…';
+    try {
+      const { error } = await getSupabase().rpc('decline_patient_reassignment', {
+        p_concern_id: id, p_note: el.querySelector('#dr-note').value.trim() || null,
+      });
+      if (error) throw error;
+      closeModal();
+      showToast('Declined, with your note on the flag.', 'success');
+      await load();
+    } catch (e) {
+      showToast('Could not decline: ' + e.message, 'error');
+      btn.disabled = false; btn.innerHTML = 'Decline the request';
+    }
+  });
 }
 
 async function acknowledge(id) {

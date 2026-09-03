@@ -345,7 +345,11 @@ function canCorrectCall(c) {
 // goes through correct_call_log(), which refuses out loud and returns the
 // saved row, so nothing is reported as saved unless the row came back.
 // The audit trigger still fires on UPDATE, so corrections stay traceable.
-function openEditCall(c) {
+// Exported so the Calling Portal can reopen the log a caller has just
+// submitted ("once you enter a log call you cannot go back"). loadCalls() at
+// the end of the save is a no-op when the Calls page is not mounted, so this
+// is safe to drive from anywhere.
+export function openEditCall(c) {
   if (!c) return;
   const el = document.createElement('div');
   const curFollow = c.follow_up_date ? String(c.follow_up_date).slice(0, 10) : '';
@@ -419,6 +423,23 @@ function openEditCall(c) {
       <label class="form-label">Next check-in</label>
       <input class="input" id="ec-followup" type="date" value="${curFollow}" />
     </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">WhatsApp link sent?</label>
+        <select class="select" id="ec-wa-sent">
+          <option value="no" ${c.whatsapp_link_sent ? '' : 'selected'}>No</option>
+          <option value="yes" ${c.whatsapp_link_sent ? 'selected' : ''}>Yes</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Joined the WhatsApp group?</label>
+        <select class="select" id="ec-wa-joined">
+          <option value="no" ${c.whatsapp_group_joined ? '' : 'selected'}>No</option>
+          <option value="yes" ${c.whatsapp_group_joined ? 'selected' : ''}>Yes</option>
+        </select>
+        <div class="due-meta" style="margin-top:5px">People often join days after the call. Tick it here when they do.</div>
+      </div>
+    </div>
     <div class="form-actions">
       <button class="btn btn-secondary" id="ec-cancel">Cancel</button>
       <button class="btn btn-primary" id="ec-save">${icon('check')}Save correction</button>
@@ -445,6 +466,15 @@ function openEditCall(c) {
     put('feedback_caregiver', txt('ec-fb-caregiver') || null, c.feedback_caregiver);
     put('followup_strategy_notes', txt('ec-strategy') || null, c.followup_strategy_notes);
     put('follow_up_date', txt('ec-followup') || null, curFollow || null);
+
+    // The two WhatsApp flags. Reported by the field team: families often join
+    // the group days after the call, and there was no way to record that
+    // without a manager editing the row. `put` normalises '' to null, which is
+    // wrong for a boolean, so these compare explicitly against the stored
+    // value coerced the same way the detail view reads it.
+    const yn = (id) => el.querySelector('#' + id).value === 'yes';
+    if (yn('ec-wa-sent') !== !!c.whatsapp_link_sent) patch.whatsapp_link_sent = yn('ec-wa-sent');
+    if (yn('ec-wa-joined') !== !!c.whatsapp_group_joined) patch.whatsapp_group_joined = yn('ec-wa-joined');
 
     // "What they asked for" lives in two places: the text column the table and
     // the CSV export read, and the chip list in `structured`. Write both, or a

@@ -201,8 +201,17 @@ export const CONCERN_REASONS = [
   { key: 'condition_critical',      label: 'Condition critical',           hint: 'Sudden decline: emergency-adjacent' },
   { key: 'grief_risk',              label: 'Complicated grief',            hint: 'Family struggling after a loss' },
   { key: 'family_conflict',         label: 'Family conflict / disclosure', hint: 'Diagnosis hidden, tension at home' },
+  // The two below are about the MENTOR, not the patient's welfare. Every
+  // other reason on this list asks her to carry something for the family;
+  // these are the ones where the call is costing her something, and until
+  // sql/113 there was nothing here she could pick. See CALLER_CONCERNS.
+  { key: 'inappropriate_conduct',   label: 'Uncomfortable or inappropriate', hint: 'How they speak to you: not okay to carry alone' },
+  { key: 'not_engaging',            label: 'Not engaging with the programme', hint: 'Not seeking support, not taking part' },
   { key: 'other',                   label: 'Something else',               hint: 'Trust your judgment, flag it anyway' },
 ];
+// The subset that is about the caller's own safety and comfort. Shown
+// under its own heading so nobody has to hunt for it in a welfare list.
+export const CALLER_CONCERNS = ['inappropriate_conduct', 'not_engaging'];
 export const CONCERN_SEVERITIES = [
   { key: 'urgent', label: 'Urgent: today',        tone: 'danger' },
   { key: 'high',   label: 'High: this week',      tone: 'warn' },
@@ -521,14 +530,14 @@ const GAP_DEFS = [
     when: (p) => !p.diagnosis_date,
     input: { kind: 'month' },
     patch: (v) => ({ diagnosis_date: v + '-01' }) },
-  { key: 'distance', stage: 3, label: 'Distance to care', ask: '“How far do you travel for treatment?”',
-    when: (p) => p.distance_to_treatment_km == null,
-    input: { kind: 'number', placeholder: 'km', min: 0 },
-    patch: (v) => ({ distance_to_treatment_km: Number(v) }) },
-  { key: 'dependents', stage: 3, label: 'Dependents', ask: '“How many people at home depend on the family income?”',
-    when: (p) => p.dependents_count == null,
-    input: { kind: 'number', placeholder: '#', min: 0, max: 20 },
-    patch: (v) => ({ dependents_count: Number(v) }) },
+  // Distance to care and Dependents were removed from the call-time asks on
+  // 2026-09-03. Both were near-permanently unfilled, so they sat in "Ask
+  // today" on every single call and were never answered; and neither changed
+  // what we offer a family, because we help regardless. The COLUMNS and every
+  // value already collected are untouched - see
+  // docs/FIELD_FEEDBACK_TRIAGE_2026-09-03.md section 8-10. They are two of the
+  // four inputs to vulnerability_score, so dropping the columns is a separate,
+  // deliberate decision that has not been taken yet.
   { key: 'ecog', stage: 4, label: 'Activity level (ECOG)', ask: '“How much of the day are they up and about, versus resting?”',
     when: (p) => p.ecog_status == null,
     input: { kind: 'select', options: ECOG.map(e => ({ key: String(e.key), label: e.label })) },

@@ -39,16 +39,26 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   // Patient choices when not pre-selected (role-scoped like the patients page).
   let patientOptions = [];
   if (!patient) {
-    let q = sb.from('patients').select('id, patient_code, full_name')
+    let q = sb.from('patients').select('id, patient_code, full_name, consent_given')
       .eq('is_active', true).neq('patient_status', 'deceased').order('full_name').limit(800);
     if (!isManagerOrAdmin()) q = q.or(`assigned_to.eq.${me.id},created_by.eq.${me.id}`);
     const { data } = await q;
     patientOptions = data || [];
   }
 
+  // Consent used to be reachable only from Patient -> Edit, so a mentor who
+  // took it on the call had to go and find the record afterwards, and often
+  // did not. It is asked here, where she already is. Only asked of people who
+  // have not given it: re-ticking it would overwrite the original date.
+  let consentOnFile = false;
+  if (patient?.id) {
+    const { data: pc } = await sb.from('patients').select('consent_given').eq('id', patient.id).maybeSingle();
+    consentOnFile = !!pc?.consent_given;
+  }
+
   const role = getUserRole();
   const state = { dial: '', recep: '', cond: '', reqs: [], waLink: null, waJoin: null,
-                  levers: {}, mainResolved: null, interruption: null };
+                  levers: {}, mainResolved: null, interruption: null, consent: null };
   const measureKeys = ROLE_MEASURES[role] || DEFAULT_MEASURES;
   const shownMeasures = MEASURES.filter(m => measureKeys.includes(m.key));
   const openGroup = ROLE_LEVER_GROUP[role] || null;
@@ -161,6 +171,11 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
           <div class="field" style="flex:1;min-width:150px"><label>Joined the group?</label>
             <div class="ynp" data-yn="waJoin"><button type="button" class="yn" data-v="yes">Yes</button><button type="button" class="yn" data-v="no">No</button></div></div>
         </div>
+        <div class="field" id="lc-consent-wrap" style="display:${consentOnFile ? 'none' : ''}">
+          <label>Did they give consent on this call?</label>
+          <p style="font-size:12px;color:var(--color-text-muted);margin:2px 0 8px">“Is it alright if we stay in touch and keep a few notes about your care? It stays private, and you can ask us to stop any time.” Tick it here and it goes on the record: no need to open Patient Edit afterwards.</p>
+          <div class="ynp" data-yn="consent"><button type="button" class="yn" data-v="yes">They consented</button><button type="button" class="yn" data-v="no">Not today</button></div>
+        </div>
         <div class="row" style="display:flex;gap:16px;flex-wrap:wrap">
           <div class="field" style="flex:1;min-width:200px"><label>Feedback from patient</label>
             <input class="input" id="lc-fb-patient" placeholder="In their words…" /></div>
@@ -214,6 +229,16 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   }
 
   $('#lc-patient')?.addEventListener('change', updateSubmit);
+  // Picking a patient from the dropdown decides whether the consent
+  // question is worth asking at all.
+  $('#lc-patient')?.addEventListener('change', (e) => {
+    const chosen = patientOptions.find(p => p.id === e.target.value);
+    const wrap = $('#lc-consent-wrap');
+    if (!wrap) return;
+    const already = !!chosen?.consent_given;
+    wrap.style.display = already ? 'none' : '';
+    if (already) state.consent = null;
+  });
   $$('#lc-outcome .seg-btn').forEach(btn => btn.addEventListener('click', () => {
     state.dial = btn.dataset.status;
     $$('#lc-outcome .seg-btn').forEach(b => b.className = 'seg-btn');
@@ -301,6 +326,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     const structured = {
       requirements: state.reqs, custom_requirement: customReq || null,
       condition: state.cond || null, whatsapp_link_sent: state.waLink, whatsapp: state.waJoin,
+      consent_taken: state.consent,
     };
     try {
       const { error } = await sb.from('call_logs').insert({
@@ -328,6 +354,21 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
         lead_source: 'other',
       });
       if (error) throw error;
+
+      // Consent, taken on the call, written on the call. Direct update
+      // rather than update_patient_from_call: that RPC needs a queue row
+      // touched in the last 12 hours, which a call logged from the patient
+      // page does not have. This is the same write the Patient Edit form
+      // makes, so it needs no permission the mentor did not already have.
+      // Said out loud when it fails: a consent that silently did not save
+      // is worse than one nobody ticked.
+      if (state.consent === true) {
+        const nowIso = new Date().toISOString();
+        const { error: cErr } = await sb.from('patients')
+          .update({ consent_given: true, consent_date: nowIso, consent_method: 'verbal_during_call' })
+          .eq('id', patientId);
+        if (cErr) showToast('The call saved, but consent did not: ' + cErr.message, 'error', 8000);
+      }
 
       // ACTION: upsert the support-lever ledger
       const leverRows = Object.entries(state.levers).map(([lever, f]) => ({

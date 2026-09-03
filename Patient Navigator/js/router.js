@@ -7,6 +7,12 @@ let currentRoute = null;
 let authGuard = null;
 let roleGuard = null;
 
+// The full hash we were on before the current one, or null if this is the
+// first route of the session (a deep link, a refresh, or a fresh login).
+// goBack() is the only reader. See the comment there.
+let previousHash = null;
+let currentHash = null;
+
 // Register a route
 export function registerRoute(path, handler, options = {}) {
   routes[path] = { handler, ...options };
@@ -19,6 +25,25 @@ export function setRoleGuard(fn) { roleGuard = fn; }
 // Navigate to a route
 export function navigate(path) {
   window.location.hash = path;
+}
+
+// Go back to wherever the user actually came from, falling back to a fixed
+// route when there is nowhere to go back to.
+//
+// Reported from the field: "while checking the call logs of interns when we
+// hit back button it automatically land into patient section". The patient
+// detail page's Back button was a hard-coded navigate('patients'), so all nine
+// screens that link into #patients/<id> - Calls, Concerns, Dashboard, Team,
+// Nutrition, Brief, Intake, the calling portal - dumped you in the patients
+// list instead of back where you were.
+//
+// history.back() is only used when we have recorded an in-app route change,
+// which means our own hash entry is on the stack and back() cannot walk off
+// the site. A deep link or a refresh has no previousHash and takes the
+// fallback.
+export function goBack(fallback = 'dashboard') {
+  if (previousHash && previousHash !== currentHash) window.history.back();
+  else navigate(fallback);
 }
 
 // Get current route
@@ -65,6 +90,7 @@ function getBasePath(hash) {
 // Handle route change
 async function handleRouteChange() {
   const hash = window.location.hash || '#login';
+  if (hash !== currentHash) { previousHash = currentHash; currentHash = hash; }
   const basePath = getBasePath(hash);
   const route = routes[basePath];
 
