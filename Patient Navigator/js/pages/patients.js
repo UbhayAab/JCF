@@ -538,7 +538,14 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
   try {
     const [pRes, cRes, sRes, aRes, hRes] = await Promise.all([
       sb.from('patients').select('*, mentor:profiles!patients_assigned_to_fkey(full_name), nutritionist:profiles!patients_nutrition_owner_id_fkey(full_name)').eq('id', patientId).single(),
-      sb.from('call_logs').select('*, profiles:caller_id(full_name)').eq('patient_id', patientId).order('call_date', { ascending: false }),
+      // The record shows EVERY call on this patient, not just the ones this
+      // user personally made. Reading call_logs directly gets call_logs RLS,
+      // which since sql/73 is "calls you made, or patients you CURRENTLY
+      // hold" - so on PAT-2026-01657 (7 calls, three mentors) an admin saw 7
+      // and four mentors saw 0. Reported twice: 2026-08-27 and again
+      // 2026-09-03 ("ye abhi bhi resolve ni hua h"). sql/117 authorises on
+      // "may you open this record at all", which is the right question here.
+      sb.rpc('get_patient_calls_for_record', { p_patient_id: patientId }),
       sb.from('patient_services').select('*').eq('patient_id', patientId),
       sb.from('patient_assessments').select('*').eq('patient_id', patientId).order('recorded_at', { ascending: true }),
       sb.from('patient_assignment_history')
@@ -548,7 +555,16 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
     ]);
     if (pRes.error) throw pRes.error;
     const patient = pRes.data;
+    // NEVER `cRes.data || []`. That is what made this unreportable: a query
+    // that FAILED and a patient with no calls both rendered "No calls yet", so
+    // nobody could tell a permissions problem from an empty history. A failure
+    // is now shown as a failure.
+    if (cRes.error) {
+      console.error('Call history failed:', cRes.error.message);
+      showToast('Could not load the call history: ' + cRes.error.message, 'error', 8000);
+    }
     const calls = cRes.data || [];
+    const callsFailed = !!cRes.error;
     const services = Object.fromEntries((sRes.data || []).map(s => [s.lever, s]));
     const assessments = aRes.data || [];
     // RLS hides rows from non-managers who were never a party to a handover;
@@ -680,7 +696,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       else if (activeTab === 'support') renderSupportTab(tabContent, patient, services, sb, reload);
       else if (activeTab === 'wellbeing') renderWellbeingTab(tabContent, patient, services, assessments, sb, reload);
       else if (activeTab === 'documents') renderDocumentsTab(tabContent, patient, sb, reload);
-      else renderCallsTab(tabContent, patient, calls, reload);
+      else renderCallsTab(tabContent, patient, calls, reload, callsFailed);
     };
     container.querySelectorAll('.dtab').forEach(tab => {
       tab.addEventListener('click', () => {
@@ -1459,7 +1475,7 @@ function docLabel(cls) {
   return L[cls] || (cls ? String(cls).replace(/_/g, ' ') : 'Document');
 }
 
-function renderCallsTab(el, p, calls, reload) {
+function renderCallsTab(el, p, calls, reload, failed = false) {
   const toneOf = (s) => ({ connected: 'ok', no_answer: 'warn', busy: 'warn', callback_requested: 'info', voicemail: 'neutral', wrong_number: 'danger' })[s] || 'neutral';
   el.innerHTML = `
     <div class="card">
@@ -1468,7 +1484,9 @@ function renderCallsTab(el, p, calls, reload) {
         ${p.patient_status !== 'deceased' ? `<button class="btn btn-primary btn-sm" id="tab-log-call">${icon('plus')}Log a call</button>` : ''}
       </div>
       ${calls.length === 0
-        ? `<div class="empty"><div class="ico-wrap">${icon('phone')}</div><h4>No calls yet</h4><p>The first conversation starts the story.</p></div>`
+        ? (failed
+          ? `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Couldn't load the call history</h4><p>This is not the same as "no calls". Something went wrong fetching them, so nothing is being shown rather than something wrong. Reload, and tell a supervisor if it keeps happening.</p></div>`
+          : `<div class="empty"><div class="ico-wrap">${icon('phone')}</div><h4>No calls yet</h4><p>The first conversation starts the story.</p></div>`)
         : `<div class="tl">
             ${calls.map(c => {
               const reqs = (c.structured?.requirements || []).slice(0, 8);
@@ -1484,7 +1502,7 @@ function renderCallsTab(el, p, calls, reload) {
                   ${c.receptiveness_bucket ? `<span class="badge badge-primary">${capitalize(c.receptiveness_bucket.replace(/_/g, ' '))}</span>` : ''}
                   ${c.patient_mindset ? `<span class="badge badge-neutral">${capitalize(c.patient_mindset)}</span>` : ''}
                   ${cond ? `<span class="badge badge-${cond.tone === 'ok' ? 'ok' : cond.tone === 'danger' ? 'danger' : cond.tone === 'warn' ? 'warn' : 'neutral'}">${cond.label}</span>` : ''}
-                  <span class="tl-when">${capitalize((c.profiles?.full_name || c.contacted_by_name || 'N/A').toLowerCase())} · ${formatDate(c.call_date)} · ${c.call_duration_mins || 0} min</span>
+                  <span class="tl-when">${capitalize((c.caller_name || c.profiles?.full_name || c.contacted_by_name || 'N/A').toLowerCase())} · ${formatDate(c.call_date)} · ${c.call_duration_mins || 0} min</span>
                 </div>
                 ${c.caller_notes ? `<div class="tl-body">${sanitize(c.caller_notes)}</div>` : ''}
                 ${reqText ? `<div class="tl-body"><strong>Asked for:</strong> ${sanitize(reqText)}</div>` : ''}
