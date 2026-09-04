@@ -187,7 +187,7 @@ function paint() {
   };
 
   body.innerHTML = `
-    <div class="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--s4);margin-bottom:var(--s2)">
+    <div class="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:var(--s4);margin-bottom:var(--s2)">
       ${statCard('Urgent: act today', groups.urgent.length, groups.urgent.length > 0 ? 'danger' : 'ok', 'alertTriangle', 'urgent')}
       ${statCard('High: this week', groups.high.length, groups.high.length > 0 ? 'warn' : 'ok', 'alertCircle', 'high')}
       ${statCard('Watching', groups.watch.length, 'info', 'search', 'watch')}
@@ -378,7 +378,7 @@ function statCard(label, n, tone, ico, filterKey) {
     <div class="card" ${filterKey ? `data-sev-filter="${filterKey}" role="button" tabindex="0"` : ''}
       style="padding:14px 16px;display:flex;align-items:center;gap:12px;${filterKey ? 'cursor:pointer;' : ''}${active ? 'box-shadow:var(--ring);' : ''}">
       <span class="stat-ico ${tone}">${icon(ico)}</span>
-      <div><div style="font:var(--t-h3);line-height:1.1">${n}</div><div class="due-meta">${label}</div></div>
+      <div style="min-width:0"><div style="font:var(--t-h3);line-height:1.1">${n}</div><div class="due-meta" style="overflow-wrap:anywhere">${label}</div></div>
     </div>`;
 }
 

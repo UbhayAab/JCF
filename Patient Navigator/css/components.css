@@ -383,7 +383,13 @@ table.data tbody tr:last-child td { border-bottom: none; }
 .dropdown-divider { height: 1px; background: var(--line); margin: var(--s1) 0; }
 
 /* ============================================================ TABS */
-.tabs { display: flex; gap: var(--s1); border-bottom: 1px solid var(--line); margin-bottom: var(--s6); }
+/* Scrollable, because the last tab is otherwise unreachable: body is
+   overflow-x:clip (base.css:11), so anything past the right edge cannot be
+   scrolled to. Measured on #team at 360px: the last tab sat 13px over. */
+.tabs { display: flex; gap: var(--s1); border-bottom: 1px solid var(--line); margin-bottom: var(--s6);
+        overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs > .tab { flex: none; }
 .tab { padding: var(--s3) var(--s4); font: var(--t-body-strong); font-size: 14px; color: var(--ink-3); border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; transition: all var(--fast) var(--ease); margin-bottom: -1px; }
 .tab:hover { color: var(--ink-2); }
 .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
