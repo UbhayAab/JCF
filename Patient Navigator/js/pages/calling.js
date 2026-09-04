@@ -702,7 +702,7 @@ function mountActive(p, history) {
         ${renderOpenLoopsPanel(p)}
         ${renderGapsPanel(p)}
       </div>
-      <div class="col-right">${renderLogForm(p)}${renderLeversPanel(p)}</div>
+      <div class="col-right">${renderLogForm(p)}</div>
     </div>`;
   wireActive(p);
   wireGapsPanel(p);
@@ -792,13 +792,13 @@ function renderLeversPanel(p) {
   const svc = currentServices || {};
   const done = Object.values(svc).filter(x => x.done).length;
   return `
-    <div class="card card-flush" id="levers-panel" style="margin-top:var(--s4)">
-      <div class="card-head" style="padding:14px 18px">
-        <h3 style="font-size:15.5px;display:flex;align-items:center;gap:8px"><span style="width:17px;height:17px;display:inline-flex;flex:none">${icon('handHeart')}</span>Support given</h3>
+    <div class="followup" id="levers-panel" style="display:block">
+      <div class="fu-head" style="justify-content:space-between">
+        <span style="display:flex;align-items:center;gap:8px">${icon('handHeart')}<span>Support given</span></span>
         <span class="badge badge-${done ? 'ok' : 'neutral'}" id="levers-count">${done} on</span>
       </div>
-      <div style="padding:6px 12px 12px;max-height:420px;overflow-y:auto">
-        <p class="due-meta" style="margin:2px 6px 8px">Tick these as you go. They save on their own, straight away, so there is nothing to come back for after the call.</p>
+      <div style="margin-top:8px">
+        <p class="due-meta" style="margin:2px 0 8px">Tick these as you go. They save on their own, straight away, so there is nothing to come back for after the call.</p>
         ${LEVER_GROUPS.map(g => `
           <div class="lever-group">
             <div class="lever-group-title">${g.group}</div>
@@ -1166,6 +1166,7 @@ function renderLogForm(p) {
         </div>
         <label class="upload">${icon('mic')}<div class="grow" style="flex:1"><div class="up-title" id="up-title">Attach call recording</div><div class="up-sub">Optional · auto-captured on the mobile app</div></div>${icon('upload')}
           <input type="file" accept="audio/*,.m4a,.mp3,.wav,.ogg,.aac" hidden id="f-recording" /></label>
+        ${renderLeversPanel(p)}
       </div>
       <div class="lf-actions">
         <button class="btn btn-ghost" id="f-skip">${icon('skip')}Skip for now</button>
