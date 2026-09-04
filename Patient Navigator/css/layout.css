@@ -559,6 +559,16 @@
   .greet .date { display: none; }
   .seg-wrap { grid-template-columns: repeat(2, 1fr); }
   .recep { grid-template-columns: 1fr; }
+  /* The submit bar follows the caller down a long form. It never actually
+     pinned: .card.card-flush sets overflow:hidden to clip flush children to
+     the rounded corners, and that makes the card its own scrollport - a
+     sticky child of a scrollport that does not itself scroll never moves.
+     Measured in a real browser at 390x844 on 2026-09-04: the bar sat at
+     y=937 in an 844px viewport while the caller was at the support toggles,
+     which is the "Save & Next is not visible anywhere" report.
+     Nothing in this card is actually clipped: .lf-head has no background of
+     its own and .lf-actions carries its own bottom radius. */
+  .logform.card-flush { overflow: visible; }
   .lf-actions { position: sticky; bottom: calc(var(--bottomnav-h) + 2px); z-index: 5; box-shadow: 0 -10px 24px -12px rgba(20,45,42,0.25); }
 }
 @media (max-width: 480px) {
