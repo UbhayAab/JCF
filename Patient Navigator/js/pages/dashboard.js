@@ -160,9 +160,9 @@ async function loadSaturdayCard(role) {
       : 'No circles logged yet.';
     el.innerHTML = `
       <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:16px 20px">
-        <div style="display:flex;align-items:center;gap:12px">
+        <div style="display:flex;align-items:center;gap:12px;min-width:0;flex:1">
           <span class="stat-ico ${next.type === 'nutrition' ? 'ok' : 'violet'}">${icon(next.type === 'nutrition' ? 'leaf' : 'heart')}</span>
-          <div><div class="info-value">Next circle: <strong>${next.type === 'nutrition' ? 'Nutrition' : 'Well-being'}</strong> · ${nice}</div>
+          <div style="min-width:0"><div class="info-value">Next circle: <strong>${next.type === 'nutrition' ? 'Nutrition' : 'Well-being'}</strong> · ${nice}</div>
             <div class="due-meta">${lastLine} Invite your patients on this week's calls.</div></div>
         </div>
         ${canLog ? `<button class="btn btn-secondary btn-sm" id="sat-log-btn">${icon('plus')}Log a session</button>` : ''}

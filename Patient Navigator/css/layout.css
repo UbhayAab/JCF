@@ -191,7 +191,7 @@
 /* 198px, not 220: the analytics pulse row is 5 KPIs since talk time joined it,
    and 220 was just wide enough to push the fifth onto a row of its own on a
    laptop. Rows of four still fill the width - auto-fit stretches them. */
-.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(198px, 1fr)); gap: var(--s4); margin-bottom: var(--s6); }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(198px, 100%), 1fr)); gap: var(--s4); margin-bottom: var(--s6); }
 .content-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: var(--s6); }
 .col-span-3 { grid-column: span 3; }
 .col-span-4 { grid-column: span 4; }
@@ -304,8 +304,8 @@
 
 /* auto-fit, not a hard 4: the insight row is 5 cards since talk time joined
    it, and a fixed 4-column track stranded the fifth alone on its own row. */
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(196px, 1fr)); gap: var(--s4); }
-.stat { display: flex; align-items: center; gap: 14px; padding: 17px 19px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--hi), var(--sh-1); transition: transform var(--base) var(--ease), box-shadow var(--base) var(--ease); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(196px, 100%), 1fr)); gap: var(--s4); }
+.stat { display: flex; align-items: center; gap: 14px; min-width: 0; padding: 17px 19px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--hi), var(--sh-1); transition: transform var(--base) var(--ease), box-shadow var(--base) var(--ease); }
 .stat:hover { transform: translateY(-2px); box-shadow: var(--sh-2); border-color: var(--line-2); }
 .stat-ico { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; flex: none; background: var(--primary-soft); color: var(--primary); box-shadow: var(--hi); }
 .stat-ico svg { width: 20px; height: 20px; }
@@ -315,6 +315,12 @@
 .stat-ico.danger { background: var(--danger-soft); color: var(--danger); }
 .stat-ico.info { background: var(--info-soft); color: var(--info); }
 .stat-ico.neutral { background: var(--surface-3); color: var(--ink-3); }
+/* Grid and flex children default to min-width:auto, which means they refuse
+   to shrink below their min-content width. With html,body{overflow-x:clip}
+   (base.css:11) the result is not a scrollbar, it is content the user can
+   neither see nor reach - reported 2026-09-04 as "can't scroll not
+   everything visible". min-width:0 lets the text wrap instead. */
+.stat > div, .stat > div > * { min-width: 0; overflow-wrap: anywhere; }
 .stat-num { font: 600 25px/1.05 var(--font-serif); letter-spacing: -0.01em; }
 .stat-lbl { font: var(--t-xs); color: var(--ink-3); }
 
@@ -540,7 +546,7 @@
   .bottom-nav { display: block; }
   .page-content { padding: var(--s4) var(--s4); padding-bottom: calc(var(--bottomnav-h) + var(--s6)); }
   .header { padding: 0 var(--s4); height: 60px; }
-  .stats-grid { grid-template-columns: repeat(2, 1fr); gap: var(--s3); }
+  .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); }
   .page-header { flex-direction: column; align-items: flex-start; gap: var(--s2); margin-bottom: var(--s4); }
   .form-row { grid-template-columns: 1fr; }
   .table-toolbar { flex-direction: column; align-items: stretch; gap: var(--s2); }
@@ -572,7 +578,7 @@
   .lf-actions { position: sticky; bottom: calc(var(--bottomnav-h) + 2px); z-index: 5; box-shadow: 0 -10px 24px -12px rgba(20,45,42,0.25); }
 }
 @media (max-width: 480px) {
-  .stats-grid { grid-template-columns: 1fr; }
+  .stats-grid { grid-template-columns: minmax(0, 1fr); }
   .stats { grid-template-columns: 1fr 1fr; }
   .page-content { padding: var(--s3) var(--s3); padding-bottom: calc(var(--bottomnav-h) + var(--s6)); }
   .card { padding: var(--s4); }
