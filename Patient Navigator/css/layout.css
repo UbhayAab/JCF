@@ -321,6 +321,12 @@
    neither see nor reach - reported 2026-09-04 as "can't scroll not
    everything visible". min-width:0 lets the text wrap instead. */
 .stat > div, .stat > div > * { min-width: 0; overflow-wrap: anywhere; }
+/* The ITEM, not just its contents. A grid item is min-width:auto too, so a
+   card whose min-content is wider than its track overflows the track no
+   matter what is done inside it. This is the rule that actually fixed the
+   clipped 'Urgent: act toda...' labels on #concerns; min-width:0 on the
+   text column alone did nothing, because the card had already won. */
+.stats > *, .stats-grid > * { min-width: 0; }
 .stat-num { font: 600 25px/1.05 var(--font-serif); letter-spacing: -0.01em; }
 .stat-lbl { font: var(--t-xs); color: var(--ink-3); }
 
