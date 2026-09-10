@@ -48,7 +48,15 @@ import { DOCUMENT_TYPES } from '../utils/docTypes.js';
 // A WhatsApp bold run: an asterisk pair, within one line.
 const BOLD_RE = /\*([^*\n]+)\*/g;
 
-const RESOURCE_SEND_URL = 'https://uhesnagqbmuyqiuzfhcv.supabase.co/functions/v1/resource-send';
+// Patient Navigator's OWN send function, on Patient Navigator's own project,
+// sending from +91 93895 29263 "Jarurat Care Foundation".
+//
+// It used to post to the carcinome_wpp project, which sends from the
+// Carcinome home-care number. That number carries nurse-en-route and
+// invoice messages, so a family waiting on a nurse was getting an NGO list
+// in the same thread. Both numbers are on the same WABA, so the approved
+// resource_share template carried over with no re-submission.
+const RESOURCE_SEND_URL = 'https://bcgsejdwqefcdaqxykde.supabase.co/functions/v1/resource-send';
 
 // Two shelves, because those are the two the library actually holds and the
 // two the field reports are about. sql/74 permits eleven more; they have zero
