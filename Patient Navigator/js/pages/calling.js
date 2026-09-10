@@ -20,6 +20,7 @@ import { AVATAR_COLORS, avatarColor, initials } from '../utils/avatar.js';
 // Everything else lives in the component. Owner of calling.js: this is the
 // whole footprint, and removing those three lines removes the feature cleanly.
 import { renderNotesPanel } from '../components/patientNotes.js';
+import { openDisinterestModal } from '../components/escalate.js';
 
 // ---- module state ----
 let me = null;                 // current profile
@@ -1129,6 +1130,13 @@ function renderLogForm(p) {
                button said "Raise a concern", which nobody looking for a way
                out of a call reads as that. Text only, same handler. -->
           <button type="button" class="btn btn-ghost btn-sm" id="f-concern" title="Flag something a supervisor must see, including how this call is going for you, and ask to be taken off this patient" style="color:var(--danger);gap:6px">${icon('alertTriangle')}Flag / hand over</button>
+          <!-- 2026-09-10: mark_patient_disinterest shipped in sql/125 and had
+               been used ZERO times, because the only way to reach it was the
+               patient record. The intern learns a family is not taking part
+               DURING the call, on this screen, and was not going to navigate
+               away mid-call to say so. Same modal, reachable where the fact
+               is learned. -->
+          <button type="button" class="btn btn-ghost btn-sm" id="f-disinterest" title="They do not want to take part. Stops them being passed round the team while that is true." style="color:var(--warn);gap:6px">${icon('skip')}Not taking part</button>
         </div>
       </div>
       <div class="lf-body">
@@ -1438,6 +1446,9 @@ function wireActive(p) {
     onSaved: () => {},
   }));
   document.getElementById('f-concern')?.addEventListener('click', () => openConcernModal(p));
+  document.getElementById('f-disinterest')?.addEventListener('click', () => openDisinterestModal(
+    { id: p.id, full_name: p.full_name },
+    { onDone: () => { showToast('Recorded. They will not be reassigned around the team while this stands', 'success'); } }));
   document.getElementById('f-skip')?.addEventListener('click', skipPatient);
   document.getElementById('f-submit')?.addEventListener('click', submitCallLog);
 }
