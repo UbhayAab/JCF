@@ -13,7 +13,7 @@ import { formatDate, formatDateTime, formatRelativeTime, capitalize, getRoleBadg
 import { sanitize, validateEmail } from '../utils/validators.js';
 import { icon } from '../components/icons.js';
 import { navigate } from '../router.js';
-import { DIAL_STATUSES, CONDITIONS } from '../utils/catalog.js';
+import { DIAL_STATUSES, CONDITIONS, statusBadge } from '../utils/catalog.js';
 import { withMvp, mvpBand, median } from '../utils/performance.js';
 
 const AV_COLORS = ['#006469', '#7A4C00', '#5B4892', '#295B86', '#106841', '#953028'];
@@ -39,6 +39,7 @@ export async function renderTeam(container) {
       <button class="tab" data-tab="queue">Today's queue</button>
       <button class="tab" data-tab="nutrition">Nutrition team</button>
       <button class="tab" data-tab="sessions">Saturday circles</button>
+      <button class="tab" data-tab="holds">Not taking part</button>
     </div>
     <div id="team-content">${Array(5).fill('<div class="sk skeleton-row"></div>').join('')}</div>`;
 
@@ -51,10 +52,68 @@ export async function renderTeam(container) {
     if (tab.dataset.tab === 'queue') loadQueue();
     else if (tab.dataset.tab === 'sessions') loadSessions();
     else if (tab.dataset.tab === 'nutrition') loadNutritionRoster();
+    else if (tab.dataset.tab === 'holds') loadEngagementHolds();
     else loadAvailability();
   }));
 
   await loadAvailability();
+}
+
+// ---- Not taking part: who is on an engagement hold, and until when ----
+// sql/125. A deferral nobody can see is a patient who has silently vanished
+// from the programme, which is the thing the Ground POC lead was actually
+// worried about on the other side of the same message: patients being churned
+// AND patients being lost. This is the ledger for the second half.
+async function loadEngagementHolds() {
+  const sb = getSupabase();
+  const content = document.getElementById('team-content');
+  content.innerHTML = Array(4).fill('<div class="sk skeleton-row"></div>').join('');
+
+  const { data, error } = await sb.from('v_engagement_holds').select('*').limit(500);
+  if (error) {
+    content.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertTriangle')}</div>
+      <h4>Could not load the holds</h4><p>${sanitize(error.message)}</p>
+      <p class="form-hint">If this says the relation does not exist, sql/125 has not been applied yet.</p></div>`;
+    return;
+  }
+  const rows = data || [];
+  if (!rows.length) {
+    content.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('checkCircle')}</div>
+      <h4>Nobody is on hold</h4>
+      <p>Every patient is in the normal call order. A hold appears here when a mentor marks somebody
+        as not engaging, or when the nightly build has just moved someone automatically.</p></div>`;
+    return;
+  }
+
+  const LEVEL = { not_engaging: 'Not engaging', completely_disinterested: 'Completely disinterested' };
+  content.innerHTML = `
+    <div class="hist-meta" style="margin-bottom:var(--s2)">${rows.length} patient${rows.length === 1 ? '' : 's'}
+      on hold. Nobody hands them to a new mentor automatically until the date shown; a manager still can, by hand.
+      When the date passes, anyone marked completely disinterested comes back into the call order on their own.</div>
+    <div class="table-container"><table class="data-table">
+      <thead><tr><th>Patient</th><th>Why</th><th>Status</th><th>Held until</th><th>Owner</th><th>Marked by</th></tr></thead>
+      <tbody>
+        ${rows.map(r => `
+          <tr data-patient-id="${r.patient_id}" tabindex="0" style="cursor:pointer">
+            <td><strong>${sanitize(r.full_name || '')}</strong>
+              <div class="hist-meta">${sanitize(r.patient_code || '')}</div></td>
+            <td>${r.disinterest_level
+              ? `<span class="badge badge-warn">${LEVEL[r.disinterest_level] || sanitize(r.disinterest_level)}</span>`
+              : '<span class="badge badge-neutral">Just reassigned</span>'}</td>
+            <td>${statusBadge(r.patient_status)}</td>
+            <td>${formatDate(r.engagement_hold_until)}
+              <div class="hist-meta">${Math.max(0, Number(r.days_left) || 0)} day${Number(r.days_left) === 1 ? '' : 's'} left</div></td>
+            <td>${sanitize(r.owner_name || 'Unassigned')}</td>
+            <td>${sanitize(r.marked_by_name || 'Automatic')}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table></div>`;
+
+  content.querySelectorAll('tr[data-patient-id]').forEach(row => {
+    const go = () => navigate('patients/' + row.dataset.patientId);
+    row.addEventListener('click', go);
+    row.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  });
 }
 
 // ---- Nutrition team: who holds whom, and the one button that changes it ----

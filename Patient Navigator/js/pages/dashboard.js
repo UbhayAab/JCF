@@ -70,13 +70,13 @@ export async function renderDashboard(container) {
         ` : isSpecialist ? `
         <a class="qa" id="qa-patients"><span class="qa-ico teal">${icon('users')}</span><div><div class="qa-title">People in your care</div><div class="qa-sub">Your nutrition / therapy patients</div></div></a>
         <a class="qa" id="qa-callhist"><span class="qa-ico blue">${icon('phone')}</span><div><div class="qa-title">Conversations</div><div class="qa-sub">Calls with your patients</div></div></a>
-        <a class="qa" id="qa-resources"><span class="qa-ico coral">${icon('handHeart')}</span><div><div class="qa-title">Money &amp; stay help</div><div class="qa-sub">Funds and places to stay, by state</div></div></a>
+        <a class="qa" id="qa-resources"><span class="qa-ico coral">${icon('handHeart')}</span><div><div class="qa-title">Money &amp; stay help</div><div class="qa-sub">Free stays, grants and schemes</div></div></a>
         <a class="qa" id="qa-learn"><span class="qa-ico coral">${icon('book')}</span><div><div class="qa-title">Learning Hub</div><div class="qa-sub">Playbooks &amp; instruments</div></div></a>
         ` : `
         <a class="qa" id="qa-call"><span class="qa-ico coral">${icon('phoneCall')}</span><div><div class="qa-title">Start calling</div><div class="qa-sub">Open your worklist</div></div></a>
         <a class="qa" id="qa-learn"><span class="qa-ico teal">${icon('book')}</span><div><div class="qa-title">Learning Hub</div><div class="qa-sub">Playbooks &amp; instruments</div></div></a>
         <a class="qa" id="qa-patients"><span class="qa-ico blue">${icon('users')}</span><div><div class="qa-title">People in your care</div><div class="qa-sub">Browse and search</div></div></a>
-        <a class="qa" id="qa-resources"><span class="qa-ico coral">${icon('handHeart')}</span><div><div class="qa-title">Money &amp; stay help</div><div class="qa-sub">Funds and places to stay, by state</div></div></a>`}
+        <a class="qa" id="qa-resources"><span class="qa-ico coral">${icon('handHeart')}</span><div><div class="qa-title">Money &amp; stay help</div><div class="qa-sub">Free stays, grants and schemes</div></div></a>`}
       </div>
 
       <div id="saturday-card"></div>
@@ -130,9 +130,15 @@ export async function renderDashboard(container) {
   document.getElementById('qa-profile')?.addEventListener('click', () => navigate('profile'));
   document.getElementById('view-all-calls')?.addEventListener('click', () => navigate(isSpecialist ? 'sessions' : 'calls'));
   document.getElementById('qa-callhist')?.addEventListener('click', () => navigate('calls'));
-  // Straight onto the financial + accommodation shelf, which is the pair the
-  // field team asked to have "in the dashboard itself for easy and quick
-  // access" (2026-09-03). resources.js reads the route param.
+  // Straight onto the shelf the field team asked to have "in the dashboard
+  // itself for easy and quick access" (2026-09-03). `money_stay` now means
+  // the help_only shelf from sql/121: free beds, grants and schemes, about
+  // 62 rows, with the 555 rented hotel and dormitory rooms one tap away
+  // behind their own chip rather than mixed in with them.
+  //
+  // This link has existed since 03/09 and had never worked: app.js registered
+  // the resources route without passing route params, so every deep link
+  // landed on the unfiltered 617 row shelf. Fixed 2026-09-10 in app.js.
   document.getElementById('qa-resources')?.addEventListener('click', () => navigate('resources/money_stay'));
   document.getElementById('open-portal')?.addEventListener('click', () => navigate(isSpecialist ? (role === 'nutritionist' ? 'nutrition' : 'sessions') : (isIntake ? 'upload' : 'calling')));
   document.getElementById('distribute-btn')?.addEventListener('click', buildAssignments);

@@ -14,6 +14,8 @@ import { openCallForm } from '../components/callForm.js';
 import { openWhatsappShare, recipientsFromPatient } from '../components/whatsappShare.js';
 import { openAssessmentFlow } from '../components/assessmentFlow.js';
 import { mountBeforeYouCall } from '../components/beforeYouCall.js';
+import { renderNotesPanel } from '../components/patientNotes.js';
+import { openEscalateModal, openDisinterestModal, clearDisinterest } from '../components/escalate.js';
 import { formatDate, formatRelativeTime, capitalize, getDialStatusBadge, exportToCSV, renderSkeleton } from '../utils/formatters.js';
 import { sanitize } from '../utils/validators.js';
 import { navigate, goBack } from '../router.js';
@@ -255,7 +257,7 @@ async function loadPatients() {
               <td>${p.age || 'N/A'} · ${p.gender === 'prefer_not_to_say' ? 'N/A' : capitalize(p.gender)}</td>
               <td>${giLabel(p.gi_subtype) ? `<span class="badge badge-primary">${giLabel(p.gi_subtype)}</span>` : `<span style="color:var(--ink-4)">${sanitize(p.cancer_type || '') || 'N/A'}</span>`}</td>
               <td>${p.cancer_stage && p.cancer_stage !== 'unknown' ? `<span class="badge badge-neutral">${capitalize(p.cancer_stage)}</span>` : '<span style="color:var(--ink-4)">N/A</span>'}</td>
-              <td>${statusBadge(p.patient_status)}</td>
+              <td>${statusBadge(p.patient_status)}${holdBadge(p)}</td>
               <td>${vulnerabilityBadge(p.vulnerability_score)}</td>
               <td>${[p.city, p.state].filter(Boolean).map(sanitize).join(', ') || 'N/A'}</td>
               <td>${formatDate(p.created_at)}</td>
@@ -528,10 +530,27 @@ function showPatientForm(existing = null, onSaved = null) {
 // ============================================================
 // DETAIL: WHO · ACTION · IMPACT
 // ============================================================
+const TABS = ['overview', 'support', 'wellbeing', 'calls', 'documents'];
 let activeTab = 'overview';
 
+// Which tab the URL is asking for. The tab lives in the hash as a query
+// string (#patients/<id>?tab=calls) rather than a path segment, because
+// getRouteParams() reads everything after "patients/" as the id and would
+// hand the page "<id>/calls".
+function tabFromHash() {
+  const q = window.location.hash.split('?')[1] || '';
+  const t = new URLSearchParams(q).get('tab');
+  return TABS.includes(t) ? t : 'overview';
+}
+
 async function renderPatientDetail(container, patientId, keepTab = false) {
-  if (!keepTab) activeTab = 'overview';
+  // Reported 2026-09-03: "while checking the call logs of interns when we hit
+  // back button it automatically land into patient section column". The in-app
+  // Back button was fixed by goBack() (js/router.js). This is the other half:
+  // the tabs were not in the URL at all, so the BROWSER back button, pressed
+  // while reading the Calls tab, left the patient record entirely instead of
+  // stepping back to the tab before it.
+  if (!keepTab) activeTab = tabFromHash();
   container.innerHTML = `<div class="card">${renderSkeleton(6)}</div>`;
   const sb = getSupabase();
 
@@ -587,6 +606,18 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       if (error) console.warn('Documents unavailable:', error.message);
       else docCount = count ?? 0;
     }
+    // The ground team's notes (sql/125). Its own query for the same reason
+    // the documents count has one: a project that has not run sql/125 yet has
+    // no patient_notes table, and a missing table must degrade to a zero on a
+    // tab rather than take the whole record down.
+    let noteCount = 0;
+    {
+      const { count, error } = await sb.from('patient_notes')
+        .select('id', { count: 'exact', head: true })
+        .eq('patient_id', patientId).is('deleted_at', null);
+      if (error) console.warn('Patient notes unavailable:', error.message);
+      else noteCount = count ?? 0;
+    }
     const supportCount = Object.values(services).filter(s => s.done && !OUTCOME_FLAGS.some(f => f.key === s.lever)).length;
     const AVATAR_COLORS = ['#006469', '#7A4C00', '#5B4892', '#295B86', '#106841', '#953028'];
     let h = 0; for (const ch of patient.full_name) h = ch.charCodeAt(0) + ((h << 5) - h);
@@ -613,6 +644,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
               ${statusBadge(patient.patient_status)}
               ${vulnerabilityBadge(patient.vulnerability_score)}
               ${patient.do_not_call ? '<span class="badge badge-danger badge-dot">Do not call</span>' : ''}
+              ${holdBadge(patient)}
             </div>
           </div>
         </div>
@@ -620,6 +652,20 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
           <select class="form-select" id="status-select" style="width:auto" title="Patient status">
             ${PATIENT_STATUSES.map(s => `<option value="${s.key}" ${patient.patient_status === s.key ? 'selected' : ''}>${s.label}</option>`).join('')}
           </select>
+          <!-- Reported 09/09 by the Ground POC lead. Measured cause: a patient
+               with 0 or 1 conversations free-floats to a new mentor at every
+               due follow-up, and a no-answer schedules that follow-up +7 days
+               (auto_followup_date). Minimum observed gap between two automatic
+               owner changes on the same patient over 90 days: exactly 7.
+               This is where a mentor says "stop passing them around". -->
+          ${!deceased ? (patient.disinterest_level
+            ? `<button class="btn btn-secondary" id="clear-hold-btn" title="Put them back in the call order now">${icon('refresh')}Back in the programme</button>`
+            : `<button class="btn btn-secondary" id="disinterest-btn">${icon('clock')}Not taking part</button>`) : ''}
+          <!-- Reported 01/09 by Prachi. The RPC behind this has been live since
+               sql/113 and had been used zero times, because the only trigger in
+               the whole app was a ghost button inside the calling portal's log
+               form. This is the same call, from the record. -->
+          ${!deceased ? `<button class="btn btn-secondary" id="escalate-btn" style="color:var(--danger)">${icon('alertTriangle')}Flag / hand over</button>` : ''}
           <button class="btn btn-secondary" id="edit-patient-btn">${icon('edit')}Edit</button>
           <button class="btn btn-secondary" id="read-docs-btn">${icon('upload')}Upload documents</button>
           <button class="btn btn-secondary" id="assess-btn">${icon('activity')}Record wellbeing</button>
@@ -637,6 +683,11 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
         <button class="dtab ${activeTab === 'wellbeing' ? 'active' : ''}" data-tab="wellbeing">${icon('activity')}Wellbeing <span class="cnt">${assessments.length}</span></button>
         <button class="dtab ${activeTab === 'calls' ? 'active' : ''}" data-tab="calls">${icon('phone')}Calls <span class="cnt">${calls.length}</span></button>
         <button class="dtab ${activeTab === 'documents' ? 'active' : ''}" data-tab="documents">${icon('fileText')}Documents <span class="cnt">${docCount}</span></button>
+        <!-- 08/09, Ground POC lead: "add a Notes section under Ground POC
+             access ... allow the CGMP team to review the notes before
+             contacting the patient". This is where the ground team writes;
+             the calling portal and the morning brief are where it is read. -->
+        <button class="dtab ${activeTab === 'notes' ? 'active' : ''}" data-tab="notes">${icon('message')}Notes <span class="cnt">${noteCount}</span></button>
       </div>
 
       <div id="tab-content"></div>
@@ -663,6 +714,17 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       openCallForm({ patient: { id: patient.id, full_name: patient.full_name }, onSaved: reload }));
     container.querySelector('#wa-share-btn')?.addEventListener('click', () =>
       openWhatsappShare({ patient, recipients: recipientsFromPatient(patient) }));
+    container.querySelector('#escalate-btn')?.addEventListener('click', () =>
+      openEscalateModal({ id: patient.id, full_name: patient.full_name }, { onDone: (handedOver) => {
+        // A hand-over that went through means she no longer holds them, so
+        // sending her back to a record she may not be able to reload is worse
+        // than sending her to the list. Anything else just refreshes.
+        if (handedOver) navigate('patients'); else reload();
+      } }));
+    container.querySelector('#disinterest-btn')?.addEventListener('click', () =>
+      openDisinterestModal({ id: patient.id, full_name: patient.full_name }, { onDone: reload }));
+    container.querySelector('#clear-hold-btn')?.addEventListener('click', () =>
+      clearDisinterest({ id: patient.id, full_name: patient.full_name }, reload));
 
     container.querySelector('#status-select').addEventListener('change', async (e) => {
       const next = e.target.value;
@@ -696,11 +758,22 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       else if (activeTab === 'support') renderSupportTab(tabContent, patient, services, sb, reload);
       else if (activeTab === 'wellbeing') renderWellbeingTab(tabContent, patient, services, assessments, sb, reload);
       else if (activeTab === 'documents') renderDocumentsTab(tabContent, patient, sb, reload);
+      else if (activeTab === 'notes') renderNotesTab(tabContent, patient);
       else renderCallsTab(tabContent, patient, calls, reload, callsFailed);
     };
     container.querySelectorAll('.dtab').forEach(tab => {
       tab.addEventListener('click', () => {
         activeTab = tab.dataset.tab;
+        // replaceState, deliberately, not pushState and not a hash assignment.
+        // A hash assignment fires hashchange and would make the router re-run
+        // the whole page (a fresh read of five tables) to switch a tab.
+        // pushState would put every tab on the history stack, which sounds
+        // right until you notice the button above is labelled "All patients":
+        // it would then land on the Overview tab instead of the list. So the
+        // URL simply always names the tab being read. Refresh keeps the tab,
+        // the link is shareable, and no back button changes behaviour.
+        const url = `#patients/${patientId}` + (activeTab === 'overview' ? '' : `?tab=${activeTab}`);
+        if (window.location.hash !== url) { try { history.replaceState(null, '', url); } catch { /* file:// */ } }
         container.querySelectorAll('.dtab').forEach(t => t.classList.toggle('active', t === tab));
         renderTab();
       });
@@ -710,6 +783,38 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
     console.error('Patient detail error:', err);
     container.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Patient not found</h4><p>${sanitize(err.message)}</p></div>`;
   }
+}
+
+// ---- The engagement hold, said on the record (sql/125) ----
+// A hold that nobody can see is a hold nobody trusts, and the first question
+// a manager asks about a patient who stopped moving is "why".
+const DISINTEREST_LABEL = {
+  not_engaging: 'Not engaging',
+  completely_disinterested: 'Completely disinterested',
+};
+function holdBadge(p) {
+  if (!p.engagement_hold_until) return '';
+  const until = new Date(p.engagement_hold_until);
+  if (!(until > new Date())) return '';
+  const days = Math.max(0, Math.ceil((until - Date.now()) / 864e5));
+  const what = DISINTEREST_LABEL[p.disinterest_level];
+  return `<span class="badge badge-warn" title="No automatic reassignment until ${formatDate(p.engagement_hold_until)}. A manager can still move them by hand.">${
+    what ? sanitize(what) + ' · ' : 'Reassignment held · '}${days} day${days === 1 ? '' : 's'} left</span>`;
+}
+
+// ---- Notes tab ----
+// The stream itself lives in js/components/patientNotes.js because three
+// surfaces render it: here, the calling portal, and the morning brief.
+function renderNotesTab(el, p) {
+  el.innerHTML = `
+    <div class="doc-callout" style="margin-bottom:var(--s3)">
+      <strong>${icon('info')} What should the next person know before they call?</strong>
+      <p>Anything the ground team saw in person, or a family said off the record.
+        The caregiver mentor reads this in the calling portal before she dials, and on
+        This morning. It is not a red flag: use Flag / hand over for those.</p>
+    </div>
+    <div id="pn-mount"></div>`;
+  renderNotesPanel(el.querySelector('#pn-mount'), p.id, { canWrite: true, canAck: true });
 }
 
 // ---- Care history (POC handovers) ----

@@ -58,6 +58,20 @@ const MEASURE_LABEL = {
 
 const pretty = (s) => String(s || '').replace(/_/g, ' ');
 
+// Who a note came from. A mentor treats "the ground team met this family in
+// person" differently from "a mentor wrote this after a call", so the source
+// is the first thing on the line, not a footnote.
+const GROUND_SOURCE = {
+  ground_poc: 'Ground team',
+  uploader: 'Intake',
+  system: 'Automatic',
+  caregiver_mentor: 'A mentor',
+  caller: 'A mentor',
+  nutritionist: 'Nutrition',
+  manager: 'A supervisor',
+  admin: 'A supervisor',
+};
+
 // A quote with no date beside it reads as something the family said this week.
 // Inside a fortnight that is true and the date is noise; past it the mentor has
 // to be told, or she opens a call by responding to a worry the family may have
@@ -120,6 +134,37 @@ async function load(container) {
   }
 
   const rows = data || [];
+
+  // The ground team's notes (sql/125), asked for on 08/09: the CGMP team must
+  // be able to "review the notes before contacting the patient". This page IS
+  // before, so the notes belong on it.
+  //
+  // One batched read for the whole queue rather than one per card, through
+  // plain patient_notes RLS (can_open_patient_record) rather than the per-call
+  // RPC, because here she holds the queue for all of them and 30 round trips
+  // to save one join is how this page got slow the first time. A failure is
+  // swallowed on purpose: a missing note must never take the call list down,
+  // and it is logged so a real outage is still findable.
+  const notesBy = new Map();
+  if (rows.length) {
+    try {
+      const { data: notes, error: nErr } = await sb
+        .from('patient_notes')
+        .select('patient_id, body, author_role, pinned, created_at, profiles:author_id(full_name)')
+        .in('patient_id', rows.map(r => r.patient_id))
+        .is('deleted_at', null)
+        .order('pinned', { ascending: false })
+        .order('created_at', { ascending: false });
+      if (nErr) throw nErr;
+      for (const n of notes || []) {
+        const list = notesBy.get(n.patient_id) || [];
+        if (list.length < 2) list.push(n);           // two lines per card, no more
+        notesBy.set(n.patient_id, list);
+      }
+    } catch (e) { console.warn('Ground notes unavailable:', e.message); }
+  }
+  for (const r of rows) r.ground_notes = notesBy.get(r.patient_id) || [];
+
   if (!rows.length) {
     body.innerHTML = `<div class="card"><div class="empty">
       <div class="ico-wrap">${icon('checkCircle')}</div>
@@ -145,12 +190,14 @@ async function load(container) {
   const needsEye = rows.filter((r) => r.open_concern
     || (r.signals || []).some((s) => s.kind === 'red_flag' || s.kind === 'contradiction')
     || (r.worsened || []).length);
+  const withNotes = rows.filter((r) => (r.ground_notes || []).length).length;
 
   body.innerHTML = `
     <div class="doc-callout" style="margin-bottom:var(--s3)">
       <strong>${icon('info')} ${rows.length} to call${needsEye.length
         ? `, and ${needsEye.length} of them need a look first` : ''}.</strong>
-      <p>Ordered by who needs you most. Quotes are a mentor's own words, from calls in the last 60 days.</p>
+      <p>Ordered by who needs you most. Quotes are a mentor's own words, from calls in the last 60 days.${
+        withNotes ? ` ${withNotes} of them carry a note from the ground team: read it before you dial.` : ''}</p>
     </div>
     <div class="brief-list">${rows.map(card).join('')}</div>`;
 
@@ -208,6 +255,17 @@ export function card(r) {
 
           ${r.priority_reason
             ? `<div class="brief-line">${icon('info')}<span>${sanitize(r.priority_reason)}</span></div>` : ''}
+
+          ${(r.ground_notes || []).length ? `<div class="brief-sigs">
+            ${r.ground_notes.map((n) => `<div class="brief-sig">
+              <span class="badge badge-gold">${sanitize(GROUND_SOURCE[n.author_role] || 'Team note')}</span>
+              ${n.pinned ? '<span class="badge badge-danger">Read first</span>' : ''}
+              <span class="brief-quote">${sanitize(String(n.body).slice(0, 240))}${
+                String(n.body).length > 240 ? '&hellip;' : ''}</span>
+              <span class="brief-when">${sanitize(n.profiles?.full_name || '')}${
+                n.profiles?.full_name ? ' · ' : ''}${sanitize(formatRelativeTime(n.created_at))}</span>
+            </div>`).join('')}
+          </div>` : ''}
 
           ${r.open_concern ? `<div class="brief-line">
             <span class="badge badge-${r.concern_severity === 'urgent' ? 'danger'

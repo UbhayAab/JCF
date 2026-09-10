@@ -122,6 +122,23 @@
 .form-label { font: var(--t-mono-label); color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.08em; }
 .form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--s4); }
 .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--s3); padding-top: var(--s4); border-top: 1px solid var(--line); margin-top: var(--s5); }
+/* Inside a modal the action row has to STAY on screen. .modal is the scrollport
+   (max-height:90vh; overflow-y:auto) and .form-actions is the last thing in the
+   form, so on a long form it sits far below the fold with no affordance that
+   the modal scrolls at all. Measured on the live site at 1366x768 on 2026-09-10
+   with tools/portal_laptop_check.mjs: the shared "Log a call" modal is 1583 px
+   of content in a 691 px box, and #lc-submit ("Save call") sat at y=1552 with
+   the modal at its scroll top. That is the "the Save a Call option was not
+   appearing" report - the control exists, is enabled, and is 890 px below the
+   only part of the modal anyone can see.
+   Full-bleed via negative margins so it spans the modal body's padding. */
+.modal .form-actions,
+.modal-footer { position: sticky; bottom: 0; z-index: 3; }
+.modal .form-actions {
+  margin: var(--s5) calc(-1 * var(--s6)) calc(-1 * var(--s6));
+  padding: var(--s4) var(--s6); background: var(--surface-2);
+  border-radius: 0 0 var(--r-xl) var(--r-xl);
+}
 
 .check, .form-checkbox { display: inline-flex; align-items: flex-start; gap: 10px; cursor: pointer; font: var(--t-sm); color: var(--ink); }
 .check input, .form-checkbox input[type="checkbox"] { width: 19px; height: 19px; margin: 1px 0 0; accent-color: var(--primary); flex: none; }

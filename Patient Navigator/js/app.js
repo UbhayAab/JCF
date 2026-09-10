@@ -452,7 +452,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20260904f';  // bumped on every breaking deploy
+const APP_BUILD = '20260910b';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -515,7 +515,12 @@ async function init() {
   registerRoute('concerns', (c) => renderConcerns(c), { requiresAuth: true, roles: CARE_ROLES });
   // Mentors can hold well-being/caregiver 1:1s themselves, so they get the pipeline too.
   registerRoute('sessions', (c) => renderSessions(c), { requiresAuth: true, roles: ['therapist', 'nutritionist', 'manager', 'admin', 'caller', 'caregiver_mentor'] });
-  registerRoute('resources', (c) => renderResources(c), { requiresAuth: true });
+  // SURGICAL, 2026-09-10: the params were dropped here, so every deep link
+  // into the library was ignored. The dashboard "Money & stay help" quick
+  // action has been navigating to #resources/money_stay since 03/09 and
+  // landing on the unfiltered shelf, which is a large part of why the list
+  // still reads as a dump. resources.js has read params.id since then.
+  registerRoute('resources', (c, p) => renderResources(c, p), { requiresAuth: true });
   // Data room: raw CSV downloads. Managers/admins get everything,
   // content (research) only the de-identified datasets.
   registerRoute('exports', (c) => renderExports(c), { requiresAuth: true, roles: ['admin', 'manager', 'content'] });

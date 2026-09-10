@@ -193,6 +193,7 @@ function paint() {
       ${statCard('Watching', groups.watch.length, 'info', 'search', 'watch')}
       ${statCard('Resolved (recent)', resolved.length, 'ok', 'checkCircle')}
     </div>
+    ${reassignBanner(rows)}
     ${sevFilter ? `<div style="margin-bottom:var(--s2)"><button class="btn btn-ghost btn-sm" id="cq-clear-filter">${icon('x')}Clear ${sevFilter} filter</button></div>` : ''}
     ${searchQ ? `<div class="hist-meta" style="margin-bottom:var(--s2)">${visible.length} of ${rows.length} flags match “${sanitizeText(searchQ)}” · ${open.length} still open, ${resolved.length} already resolved</div>` : ''}
 
@@ -415,6 +416,44 @@ function groupByPatient(list) {
         </div>
       </div>`;
   }).join('');
+}
+
+// ---- Somebody asked to be taken off a patient ----------------------------
+// The severity cards above sort by clinical urgency, and a mentor asking to be
+// taken off a family is usually filed 'high', which puts it in the middle of a
+// long week's list. It is not that kind of item: the patient is ALREADY off her
+// queue (sql/113 cancels it in the same transaction), so until a supervisor
+// picks a new mentor, nobody is calling that family at all. That is a clock
+// running, and it gets its own line at the top of the page.
+//
+// For a mentor, the same banner is the answer to the question she is actually
+// on this page to ask: what happened to what I sent?
+function reassignBanner(all) {
+  const mine = (all || []).filter(r => r.reassign_requested);
+  const pending = mine.filter(r => r.reassign_status === 'pending');
+  if (!mine.length) return '';
+  if (isManagerOrAdmin()) {
+    if (!pending.length) return '';
+    return `
+      <div class="doc-callout" style="margin-bottom:var(--s3);border-left:3px solid var(--danger)">
+        <strong>${icon('users')} ${pending.length} mentor${pending.length === 1 ? '' : 's'}
+          asked to be taken off a patient.</strong>
+        <p>Each of those families is off that mentor's list already and is not being called by anyone
+          until you choose who picks them up. They are marked
+          <span class="badge badge-danger">Asked to be taken off</span> below.</p>
+      </div>`;
+  }
+  const done = mine.filter(r => r.reassign_status === 'done').length;
+  const declined = mine.filter(r => r.reassign_status === 'declined').length;
+  return `
+    <div class="doc-callout" style="margin-bottom:var(--s3)">
+      <strong>${icon('users')} You asked to be taken off ${mine.length} patient${mine.length === 1 ? '' : 's'}.</strong>
+      <p>${[
+        pending.length ? `${pending.length} still with a supervisor` : '',
+        done ? `${done} handed to someone else` : '',
+        declined ? `${declined} sent back to you, with a reason on the flag` : '',
+      ].filter(Boolean).join(' · ')}. Asking was the right thing to do.</p>
+    </div>`;
 }
 
 function concernCard(r, compact = false) {

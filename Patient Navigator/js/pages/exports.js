@@ -17,6 +17,8 @@ import { icon } from '../components/icons.js';
 import { exportToCSV } from '../utils/formatters.js';
 import { measureLabel, leverLabel, giLabel } from '../utils/catalog.js';
 import { valueLabel } from '../components/analyticsFilters.js';
+import { exportToXLSX } from '../utils/xlsx.js';
+import { renderAskTab, renderFilesTab } from './dataRoomAsk.js';
 
 const DATA_ROOM_ROLES = ['admin', 'manager', 'content'];
 
@@ -182,6 +184,128 @@ async function fetchFollowupMap(sb) {
 }
 
 // ---- the datasets, one card each ----
+
+// ============================================================
+// The impact-report and ASCO GI datasets.
+//
+// These are the tables a collaborator asked for over WhatsApp on 07/09, and the
+// reason they live HERE rather than in another one-off Excel file is that the
+// one-off is what everybody keeps asking for. Each is a canned query through
+// data_room_run, the same validated de-identified door the plain-English tab
+// uses, so there is exactly one definition of what a "need" is and one
+// definition of when a patient joined the registry.
+//
+// THE ONE THING NOT TO CHANGE WITHOUT READING THIS
+// Registry growth counts first_contact_date, the day a mentor first reached the
+// family. It does NOT count db_record_created_date: 504 of the 847 rows carry
+// 2026-06-24 because that is the day the old registry was migrated into this
+// database, and plotting that column invents a spike that never happened and
+// makes the registry look like it began in June. The line chart in the current
+// impact report has that bug. These datasets do not.
+// ============================================================
+const IMPACT_QUERIES = {
+  registry_growth: {
+    name: 'Registry growth, per month',
+    desc: 'New patients added each month by the date a mentor first reached them, with a running total. This is the series behind the Registry Growth chart, and it is the corrected one: it counts first contact, not the day the old registry was migrated in.',
+    file: 'jcf_registry_growth_monthly',
+    sql: `select month as "Month", new_patients as "New patients added",
+                 cumulative_patients as "Cumulative registry"
+          from registry_growth order by month`,
+  },
+  registry_growth_daily: {
+    name: 'Registry growth, per day',
+    desc: 'The same intake day by day, for a finer bar chart or to see the shape inside a month.',
+    file: 'jcf_registry_growth_daily',
+    sql: `select first_contact_date as "Date", count(*) as "New patients"
+          from patients where first_contact_date is not null group by 1 order by 1`,
+  },
+  needs_by_category: {
+    name: 'Supportive-care needs by category, pre-AI vs post-AI',
+    desc: 'Every need mention, split by category and by which channel found it: the mentor tick-list on the call form, or the NLP tool reading that same mentor free-text note. Pre-AI means calls before 1 Aug 2026, which the tool has never read. Transportation is absent because neither channel tracks it.',
+    file: 'jcf_needs_by_category_pre_post_ai',
+    sql: `select category as "Need category", channel as "Identified by",
+                 case when is_post_ai then 'post-AI' else 'pre-AI' end as "Period",
+                 count(*) as "Mentions", count(distinct patient_code) as "Patients"
+          from needs group by 1, 2, 3 order by 1, 3, 2`,
+  },
+  needs_longitudinal: {
+    name: 'Longitudinal need tracking, per patient',
+    desc: 'One row per patient per need category: how many separate days it was raised and over what span. This is the repeat-measures view the paper asked for, not a single snapshot.',
+    file: 'jcf_needs_longitudinal_per_patient',
+    sql: `with n as (
+            select patient_code, category, count(*) as mentions,
+                   count(distinct raised_on) as distinct_days,
+                   min(raised_on) as first_raised, max(raised_on) as last_raised,
+                   count(*) filter (where channel = 'mentor') as by_mentor,
+                   count(*) filter (where channel = 'NLP') as by_nlp
+            from needs group by 1, 2)
+          select n.patient_code as "Patient code", n.category as "Need category",
+                 n.mentions as "Times raised", n.distinct_days as "Distinct days raised",
+                 n.by_mentor as "Found by mentor", n.by_nlp as "Found by NLP",
+                 n.first_raised as "First raised", n.last_raised as "Last raised",
+                 (n.last_raised - n.first_raised) as "Days first to last",
+                 p.state as "State", p.gi_subtype as "GI subtype", p.cancer_stage as "Stage"
+          from n join patients p on p.patient_code = n.patient_code
+          order by n.patient_code, n.category`,
+  },
+  paired_same_call: {
+    name: 'Paired same-call comparison (the ASCO table)',
+    desc: 'On the calls the NLP has read, how many carried a need from the mentor tick-list, from the NLP, from both, and from neither. Both channels read the same conversation, so there is no secular trend and no case-mix drift in this comparison.',
+    file: 'jcf_paired_same_call_comparison',
+    sql: `with ai as (select call_id from calls where read_by_nlp),
+               m as (select distinct call_id from needs where channel = 'mentor'),
+               nl as (select distinct call_id from needs where channel = 'NLP')
+          select count(*) as "Calls read by the NLP",
+                 count(*) filter (where call_id in (select call_id from m)
+                              and call_id in (select call_id from nl)) as "Both channels",
+                 count(*) filter (where call_id in (select call_id from m)
+                              and call_id not in (select call_id from nl)) as "Mentor tick-list only",
+                 count(*) filter (where call_id not in (select call_id from m)
+                              and call_id in (select call_id from nl)) as "NLP only",
+                 count(*) filter (where call_id not in (select call_id from m)
+                              and call_id not in (select call_id from nl)) as "Neither"
+          from ai`,
+  },
+  instrument_trajectories: {
+    name: 'Validated-instrument readings, in sequence',
+    desc: 'Every MUST, PHQ-4, Zarit, financial-toxicity, QoL, activation and caregiver-confidence reading, numbered per patient per instrument, so a trajectory can be built straight from the file.',
+    file: 'jcf_instrument_readings',
+    sql: `select patient_code as "Patient code", measure as "Instrument",
+                 reading_no as "Reading number", recorded_on as "Date", score as "Score"
+          from assessments order by patient_code, measure, reading_no`,
+  },
+  monthly_operations: {
+    name: 'Monthly operating denominators',
+    desc: 'Calls placed, patients reached and how many calls the NLP read, each month. Every rate in the impact report can be recomputed from this, which is the point: a percentage nobody can rebuild is a percentage nobody should quote.',
+    file: 'jcf_monthly_operations',
+    sql: `select call_month as "Month", count(*) as "Calls placed",
+                 count(distinct patient_code) as "Patients called",
+                 count(*) filter (where dial_status = 'connected') as "Connected",
+                 count(*) filter (where read_by_nlp) as "Calls read by the NLP"
+          from calls group by 1 order by 1`,
+  },
+};
+
+// A canned query becomes a dataset card. `pid` is deliberately null: these are
+// aggregates over the whole registry, and silently cutting them to the cohort
+// filter would hand somebody a "registry growth" file that is not the registry.
+function impactDefs() {
+  return Object.entries(IMPACT_QUERIES).map(([key, q]) => ({
+    key, research: true, impact: true, ico: 'chart', pid: null,
+    name: q.name, desc: q.desc, file: q.file, countFrom: null,
+    build: async (sb) => {
+      const { data, error } = await sb.rpc('data_room_run', { p_sql: q.sql, p_limit: 50000 });
+      if (error) throw new Error(error.message);
+      if (!data || data.ok !== true) throw new Error(data?.reason || 'the Data room refused this query');
+      const rows = data.rows || [];
+      const columns = rows.length
+        ? Object.keys(rows[0]).map((k) => ({ label: k, accessor: (r) => v(r[k]) }))
+        : [];
+      return { rows, columns };
+    },
+  }));
+}
+
 // research: true → de-identified, visible to the content role too.
 function datasetDefs() {
   const managerish = isManagerOrAdmin();
@@ -252,6 +376,8 @@ function datasetDefs() {
       },
     },
   ];
+
+  defs.push(...impactDefs());
 
   if (!managerish) return defs;
 
@@ -459,7 +585,8 @@ export async function renderExports(container) {
   }
 
   const defs = datasetDefs();
-  const research = defs.filter((x) => x.research);
+  const impact = defs.filter((x) => x.impact);
+  const research = defs.filter((x) => x.research && !x.impact);
   const operational = defs.filter((x) => !x.research);
 
   const card = (ds) => `
@@ -474,7 +601,10 @@ export async function renderExports(container) {
       <p style="font:var(--t-xs);color:var(--ink-2);margin:0;flex:1">${ds.desc}</p>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
         <span class="tnum" id="dr-count-${ds.key}" style="font:var(--t-xs);color:var(--ink-3)">Counting…</span>
-        <button class="btn btn-primary btn-sm" data-ds="${ds.key}">${icon('download')}Download CSV</button>
+        <span style="display:flex;gap:6px;flex:none">
+          <button class="btn btn-primary btn-sm" data-ds="${ds.key}" data-fmt="xlsx">${icon('download')}Excel</button>
+          <button class="btn btn-ghost btn-sm" data-ds="${ds.key}" data-fmt="csv">CSV</button>
+        </span>
       </div>
     </div>`;
 
@@ -496,6 +626,16 @@ export async function renderExports(container) {
       <button class="btn btn-primary" id="dr-all" title="One click: every dataset you can access, each as its own CSV">${icon('download')}Download everything</button>
     </div>
 
+    <div class="tab-strip" id="dr-tabs" style="display:flex;gap:4px;margin-bottom:var(--s5);border-bottom:1px solid var(--line);overflow-x:auto">
+      <button class="btn btn-ghost btn-sm dr-tab is-active" data-tab="datasets">${icon('download')}Datasets</button>
+      <button class="btn btn-ghost btn-sm dr-tab" data-tab="ask">${icon('search')}Ask in English</button>
+      <button class="btn btn-ghost btn-sm dr-tab" data-tab="files">${icon('fileText')}Shared files</button>
+    </div>
+
+    <div id="dr-pane-ask" hidden></div>
+    <div id="dr-pane-files" hidden></div>
+
+    <div id="dr-pane-datasets">
     <div class="card" style="padding:13px 16px;margin-bottom:var(--s5);display:flex;align-items:center;gap:11px;border-left:4px solid var(--warn);background:var(--warn-soft)">
       <span style="width:18px;height:18px;display:inline-flex;flex:none;color:var(--warn)">${icon('shieldCheck')}</span>
       <div style="font:var(--t-xs);color:var(--ink-2)"><strong>DPDPA note.</strong> Exports contain personal data. Handle every downloaded file under the same confidentiality as the portal itself. Research-grade files are de-identified: patient codes only, never names or phones.</div>
@@ -503,9 +643,36 @@ export async function renderExports(container) {
 
     <div class="card" id="dr-filter" style="margin-bottom:var(--s5)"></div>
 
+    ${section('Impact report and ASCO GI',
+      'The tables people keep asking for over WhatsApp. Registry growth here counts the day a mentor first reached the family, not the day the old registry was migrated in, so it does not show the 504-patient spike the current chart does.', impact)}
     ${section('Research-grade (de-identified)', 'Safe to share with the research team: no names, no phone numbers.', research)}
     ${section('Operational (contains personal data)', 'Names, phones and free-text notes: for internal coordination only.', operational)}
+    </div>
   `;
+
+  // ---- tabs. Ask and Files are built on first visit, not on page load:
+  // most people come here for a CSV and should not pay for the rest. ----
+  const panes = { datasets: '#dr-pane-datasets', ask: '#dr-pane-ask', files: '#dr-pane-files' };
+  const built = { datasets: true };
+  container.querySelectorAll('.dr-tab').forEach((tab) => tab.addEventListener('click', () => {
+    const want = tab.dataset.tab;
+    container.querySelectorAll('.dr-tab').forEach((t) => t.classList.toggle('is-active', t === tab));
+    Object.entries(panes).forEach(([k, sel]) => { container.querySelector(sel).hidden = (k !== want); });
+    // The header button and the cohort filter belong to the datasets tab only.
+    const own = want === 'datasets';
+    const allBtnEl = container.querySelector('#dr-all');
+    if (allBtnEl) allBtnEl.hidden = !own;
+    if (!built[want]) {
+      built[want] = true;
+      const host = container.querySelector(panes[want]);
+      try {
+        if (want === 'ask') renderAskTab(host);
+        if (want === 'files') renderFilesTab(host);
+      } catch (e) {
+        host.innerHTML = `<div class="card"><p style="font:var(--t-xs);color:var(--ink-3)">This tab failed to load: ${e.message}</p></div>`;
+      }
+    }
+  }));
 
   const sb = getSupabase();
 
@@ -575,6 +742,10 @@ export async function renderExports(container) {
   // Live row counts, loaded after render: head-only, no data pulled.
   defs.forEach(async (ds) => {
     const el = container.querySelector('#dr-count-' + ds.key);
+    // The impact datasets are canned queries, not tables. Counting one means
+    // running it, and running it twice per page load to fill in a grey label is
+    // not worth it: the row count lands in the toast when they download.
+    if (!ds.countFrom) { if (el) el.textContent = 'built on download'; return; }
     try {
       const { count, error } = await sb.from(ds.countFrom).select('*', { count: 'exact', head: true });
       if (error) throw error;
@@ -616,7 +787,8 @@ export async function renderExports(container) {
         showToast(isFiltered() ? 'No rows for this filter. Try a wider one' : 'No rows in this dataset yet', 'info');
         return;
       }
-      exportToCSV(rows, ds.file + fileSuffix(), columns);
+      if (btn.dataset.fmt === 'xlsx') await exportToXLSX(rows, ds.file + fileSuffix(), columns, ds.name);
+      else exportToCSV(rows, ds.file + fileSuffix(), columns);
       showToast(`${ds.name} · ${rows.length.toLocaleString('en-IN')} rows downloaded${isFiltered() ? ` (${filterSentence()})` : ''}`, 'success');
     } catch (e) {
       showToast('Export failed: ' + e.message, 'error');

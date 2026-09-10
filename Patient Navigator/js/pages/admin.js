@@ -33,6 +33,7 @@ export async function renderAdmin(container, params) {
     </div>
     <div class="tabs" id="admin-tabs">
       <button class="tab ${!isAudit ? 'active' : ''}" data-tab="users">User Management</button>
+      ${isAdmin() ? `<button class="tab" data-tab="assignment">Assignment policy</button>` : ''}
       ${isAdmin() ? `<button class="tab ${isAudit ? 'active' : ''}" data-tab="audit">Audit Log</button>` : ''}
     </div>
     <div id="admin-content"></div>
@@ -45,6 +46,7 @@ export async function renderAdmin(container, params) {
       document.querySelectorAll('#admin-tabs .tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
       if (tab.dataset.tab === 'audit') loadAuditLog();
+      else if (tab.dataset.tab === 'assignment') loadAssignmentPolicy();
       else loadUsers();
     });
   });
@@ -321,6 +323,101 @@ function openManagersModal(user, allManagers, currentIds, onSaved) {
 }
 
 // ---- Load Audit Log ----
+// ---- Assignment policy (sql/125) ----
+// Reported 09/09 by the Ground POC lead: "patients marked as inactive are
+// being reassigned within a week ... extend the reassignment timeline to at
+// least one month", and defer a completely disinterested family by 2-3 months.
+//
+// The week was real and it was not a setting anyone could change. It came out
+// of two literals meeting: auto_followup_date() schedules a no-answer +7 days,
+// and the sql/40 float rule moves ownership of anyone with 0 or 1
+// conversations every time their follow-up comes due. Measured over 90 days of
+// patient_assignment_history, the minimum gap between two automatic owner
+// changes on one patient was exactly 7 days, and the median was 7.
+//
+// These four numbers replace that. They are read by the database on every
+// automatic reassignment, so changing one here changes tonight's build.
+async function loadAssignmentPolicy() {
+  const sb = getSupabase();
+  const content = document.getElementById('admin-content');
+  content.innerHTML = '<div class="card"><div class="spinner"></div></div>';
+
+  const { data, error } = await sb.from('assignment_policy')
+    .select('*').eq('is_active', true).maybeSingle();
+  if (error) {
+    content.innerHTML = `<div class="empty-state"><h3>Could not load the policy</h3>
+      <p>${sanitize(error.message)}</p>
+      <p class="text-muted">If this says the relation does not exist, sql/125 has not been applied yet.</p></div>`;
+    return;
+  }
+  if (!data) {
+    content.innerHTML = '<div class="empty-state"><h3>No active policy row</h3><p>sql/125 seeds one. Run it.</p></div>';
+    return;
+  }
+
+  const field = (id, label, val, hint) => `
+    <div class="form-group">
+      <label class="form-label" for="${id}">${label}</label>
+      <input class="form-input" id="${id}" type="number" min="0" max="365" step="1" value="${val}" style="max-width:140px" />
+      <p class="form-hint">${hint}</p>
+    </div>`;
+
+  content.innerHTML = `
+    <div class="card" style="padding:20px 22px;max-width:760px">
+      <h3 style="margin:0 0 6px">How long an automatic reassignment waits</h3>
+      <p class="text-muted" style="margin:0 0 var(--s4)">
+        A manager moving somebody by hand is never blocked by any of these. They only hold the
+        nightly build and the auto-distribute pass, and they never leave a patient with nobody.</p>
+      ${field('ap-float', 'After an automatic reassignment, wait (days)', data.float_hold_days,
+        'Was effectively 7. The field asked for at least a month.')}
+      ${field('ap-inactive', 'When a patient is marked inactive or not engaging, wait (days)', data.inactive_hold_days,
+        'They stop being passed from mentor to mentor while they are not taking part.')}
+      ${field('ap-dis', 'When a patient is marked completely disinterested, wait (days)', data.disinterested_hold_days,
+        'The field asked for 2 to 3 months. 60 to 90 is that range; 75 is the middle.')}
+      <label class="svc" style="display:flex;align-items:flex-start;gap:9px;padding:10px 12px;margin-top:var(--s3)">
+        <input type="checkbox" id="ap-auto" ${data.auto_release_holds ? 'checked' : ''} />
+        <span>Let a deferral run out by itself
+          <span style="display:block;font-size:12px;color:var(--ink-3);margin-top:2px">
+            At 11:50 IST, ten minutes before the daily build, anyone whose deferral has expired goes back
+            into the call order with a note on their record saying why they came back. Turn this off and
+            somebody has to remember instead.</span></span>
+      </label>
+      <div class="form-actions" style="margin-top:var(--s4)">
+        <button class="btn btn-primary" id="ap-save">Save policy</button>
+      </div>
+      <p class="text-muted" style="font-size:12px;margin-top:10px">
+        Last changed ${formatDateTime(data.updated_at)}.</p>
+    </div>`;
+
+  document.getElementById('ap-save').addEventListener('click', async () => {
+    const btn = document.getElementById('ap-save');
+    const num = (id) => parseInt(document.getElementById(id).value, 10);
+    const patch = {
+      float_hold_days: num('ap-float'),
+      inactive_hold_days: num('ap-inactive'),
+      disinterested_hold_days: num('ap-dis'),
+      auto_release_holds: document.getElementById('ap-auto').checked,
+      updated_at: new Date().toISOString(),
+    };
+    if (Object.values(patch).some(v => typeof v === 'number' && (!Number.isFinite(v) || v < 0 || v > 365))) {
+      showToast('Every interval has to be a whole number of days between 0 and 365.', 'warning');
+      return;
+    }
+    btn.disabled = true; btn.textContent = 'Saving…';
+    // Read the row back rather than trusting a 204. The CHECK constraint is
+    // the real gate and a client-side range test is only a courtesy.
+    const { data: saved, error: sErr } = await sb.from('assignment_policy')
+      .update(patch).eq('id', data.id).select().maybeSingle();
+    if (sErr || !saved) {
+      showToast('Could not save: ' + (sErr?.message || 'the server did not confirm the change'), 'error');
+      btn.disabled = false; btn.textContent = 'Save policy';
+      return;
+    }
+    showToast(`Saved. From tonight's build, an automatic reassignment waits ${saved.float_hold_days} days.`, 'success');
+    loadAssignmentPolicy();
+  });
+}
+
 async function loadAuditLog() {
   const sb = getSupabase();
   const content = document.getElementById('admin-content');

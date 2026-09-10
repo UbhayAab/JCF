@@ -15,6 +15,11 @@ import { showModal, closeModal } from '../components/modal.js';
 import { navigate } from '../router.js';
 import { openWhatsappShare, recipientsFromPatient } from '../components/whatsappShare.js';
 import { AVATAR_COLORS, avatarColor, initials } from '../utils/avatar.js';
+// sql/125, ground-team notes. THREE LINES IN THIS FILE: this import, the mount
+// div in renderActive(), and the renderNotesPanel() call in wireActive().
+// Everything else lives in the component. Owner of calling.js: this is the
+// whole footprint, and removing those three lines removes the feature cleanly.
+import { renderNotesPanel } from '../components/patientNotes.js';
 
 // ---- module state ----
 let me = null;                 // current profile
@@ -63,7 +68,30 @@ function clearActive() { try { localStorage.removeItem(ACTIVE_KEY()); sessionSto
 let saveSoonTimer = null;
 function saveActiveSoon() { clearTimeout(saveSoonTimer); saveSoonTimer = setTimeout(saveActive, 400); }
 async function restoreActive(s) {
-  currentQueueId = s.queueId; currentPatient = s.patient; currentHistory = s.history || [];
+  // The saved draft outlives the claim. A colleague can log the call, a
+  // manager can move the patient, the row can be cancelled - all while the
+  // caller is away from the site (the draft lives for ~20 hours). Remounting
+  // a call that no longer exists leaves the caller on a screen with NO working
+  // exit: skip_call raises "This call is no longer on your list", submit
+  // cannot close the queue row, and there is no third button. That is what
+  // "upon clicking on the calling portal, the page is not moving forward"
+  // looks like. So the claim is re-checked first, against the same RPC the
+  // Today's list uses, and a dead claim drops the caller back on their list
+  // with the reason instead of stranding them.
+  let fresh = null;
+  try {
+    const { data, error } = await getSupabase().rpc('get_call_by_queue_id', { p_queue_id: s.queueId });
+    if (error) throw error;
+    if (!data || data.found === false) throw new Error('That call is no longer on your list.');
+    fresh = data;
+  } catch (e) {
+    clearActive();
+    showToast((e.message || 'That call is no longer on your list.') + ' Back to your list.', 'warning', 8000);
+    await mountReady();
+    return;
+  }
+  currentQueueId = s.queueId; currentPatient = fresh; currentHistory = s.history || [];
+  s = { ...s, patient: fresh };
   Object.assign(form, blankForm());
   timerSeconds = s.timerSeconds || 0;
   timerRunning = !!s.timerRunning;
@@ -699,11 +727,15 @@ function mountActive(p, history) {
           </details>` : ''}
           ${renderFullHistory(history)}
         </div>
+        <div id="ground-notes-mount"></div>
         ${renderOpenLoopsPanel(p)}
         ${renderGapsPanel(p)}
       </div>
       <div class="col-right">${renderLogForm(p)}</div>
     </div>`;
+  // sql/125: what the ground team wants read BEFORE the call, not after it.
+  renderNotesPanel(document.getElementById('ground-notes-mount'), p.patient_id,
+    { compact: true, canWrite: false, canAck: true, title: 'From the ground team' });
   wireActive(p);
   wireGapsPanel(p);
   wireLeversPanel(p);
@@ -1090,7 +1122,13 @@ function renderLogForm(p) {
       <div class="lf-head"><h3>How did it go?</h3>
         <div style="display:flex;align-items:center;gap:10px">
           <span class="faint" style="font-size:13px;color:var(--ink-3)">${(p.full_name || '').split(' ')[0]}</span>
-          <button type="button" class="btn btn-ghost btn-sm" id="f-concern" title="Flag something a supervisor must see, including how this call is going for you" style="color:var(--danger);gap:6px">${icon('alertTriangle')}Raise a concern</button>
+          <!-- Relabelled 2026-09-10. The RPC behind this modal has been live
+               since sql/113 and had been used ZERO times (321 concerns, 0 with
+               reassign_requested). Prachi's report on 01/09 asks for an
+               "Escalate/Flag Patient or Request Reassignment option"; the
+               button said "Raise a concern", which nobody looking for a way
+               out of a call reads as that. Text only, same handler. -->
+          <button type="button" class="btn btn-ghost btn-sm" id="f-concern" title="Flag something a supervisor must see, including how this call is going for you, and ask to be taken off this patient" style="color:var(--danger);gap:6px">${icon('alertTriangle')}Flag / hand over</button>
         </div>
       </div>
       <div class="lf-body">
@@ -1426,10 +1464,14 @@ function openConcernModal(p) {
         ${CONCERN_REASONS.filter(r => CALLER_CONCERNS.includes(r.key))
           .map(r => `<button type="button" class="chip seg-btn" data-reason="${r.key}" data-tone="danger" title="${r.hint}" style="padding:8px 12px"><span>${r.label}</span></button>`).join('')}
       </div>
-      <label class="svc" id="cn-reassign-wrap" style="display:none;margin-top:10px;align-items:flex-start;gap:9px;padding:10px 12px">
-        <input type="checkbox" id="cn-reassign" />
+      <!-- Was display:none until one of two chips out of thirteen was picked,
+           so an intern could not see that asking to be taken off a patient was
+           even possible. Now always visible, disabled until the reason makes
+           it applicable. Same rule, discoverable. -->
+      <label class="svc" id="cn-reassign-wrap" style="display:flex;opacity:.55;margin-top:10px;align-items:flex-start;gap:9px;padding:10px 12px">
+        <input type="checkbox" id="cn-reassign" disabled />
         <span style="font:var(--t-sm)">Take this patient off my list and give them to someone else.
-          <span style="display:block;font:var(--t-xs);color:var(--ink-3);margin-top:2px">They come off your list the moment you send this. A supervisor decides who picks them up.</span>
+          <span style="display:block;font:var(--t-xs);color:var(--ink-3);margin-top:2px">They come off your list the moment you send this. A supervisor decides who picks them up. Pick one of the two above to turn this on.</span>
         </span>
       </label>
     </div>
@@ -1458,7 +1500,8 @@ function openConcernModal(p) {
     const wrap = el.querySelector('#cn-reassign-wrap');
     const box = el.querySelector('#cn-reassign');
     const offerable = CALLER_CONCERNS.includes(state.reason);
-    wrap.style.display = offerable ? 'flex' : 'none';
+    box.disabled = !offerable;
+    wrap.style.opacity = offerable ? '1' : '.55';
     if (!offerable) box.checked = false;
     // Life-threatening reasons default to urgent unless they chose otherwise.
     if (!state.sevTouched && ['self_harm', 'condition_critical'].includes(state.reason)) {
@@ -1647,6 +1690,16 @@ async function skipPatient() {
   // really happened, and a refusal keeps every note the caller typed.
   const { data, error } = await sb.rpc('skip_call', { p_queue_id: currentQueueId });
   if (error) {
+    // Two of skip_call's refusals mean the row has left this caller for good
+    // ("no longer on your list", "belongs to <someone>"). Submit cannot rescue
+    // those either, so re-enabling the button just leaves the caller pressing
+    // it. Everything else is transient and keeps the draft where it is.
+    if (/no longer on your list|not yours to skip|belongs to/i.test(error.message || '')) {
+      clearActive();
+      showToast(error.message + ' Back to your list.', 'warning', 8000);
+      await mountReady();
+      return;
+    }
     if (btn) btn.disabled = false;
     showToast(error.message + ' Your notes are safe. Submit still records this call.', 'error', 7000);
     return;

@@ -495,7 +495,22 @@
 .up-title { font: var(--t-body-strong); font-size: 14px; color: var(--ink); }
 .up-sub { font: var(--t-xs); color: var(--ink-3); }
 
-.lf-actions { display: flex; gap: 12px; padding: var(--s5) var(--s6); border-top: 1px solid var(--line); background: var(--surface-2); border-radius: 0 0 var(--r-lg) var(--r-lg); }
+/* The submit bar follows the caller down the form at EVERY width, not just on
+   a phone. The 2026-09-04 fix only ever landed inside @media (max-width:760px),
+   so on a laptop "Skip for now" and "Submit & next call" stayed parked at the
+   end of the card. Measured on the live site at 1366x768 on 2026-09-10 with
+   tools/portal_laptop_check.mjs: .logform is 2109 px tall in a 768 px viewport
+   and #f-submit sat at y=1014 while the caller was at the support toggles, so
+   the only way to reach it was to scroll ~1450 px to the very bottom of the
+   page. That is the "Save & Next is not visible anywhere on the screen" report,
+   on a desktop rather than a phone.
+   overflow:visible releases .card.card-flush's clip, which makes the card its
+   own scrollport - a sticky child of a scrollport that never scrolls never
+   moves. Nothing here is actually clipped: .lf-head has no background of its
+   own and .lf-actions carries its own bottom radius. */
+.logform.card-flush { overflow: visible; }
+.lf-actions { display: flex; gap: 12px; padding: var(--s5) var(--s6); border-top: 1px solid var(--line); background: var(--surface-2); border-radius: 0 0 var(--r-lg) var(--r-lg);
+  position: sticky; bottom: 0; z-index: 5; box-shadow: 0 -10px 24px -12px rgba(20, 45, 42, 0.25); }
 .today-list { padding: var(--s3) var(--s4) var(--s4); display: flex; flex-direction: column; }
 .today-row { display: flex; align-items: center; gap: 11px; padding: 9px 4px; border-bottom: 1px solid var(--line); }
 .today-row:last-child { border-bottom: none; }
@@ -571,17 +586,9 @@
   .greet .date { display: none; }
   .seg-wrap { grid-template-columns: repeat(2, 1fr); }
   .recep { grid-template-columns: 1fr; }
-  /* The submit bar follows the caller down a long form. It never actually
-     pinned: .card.card-flush sets overflow:hidden to clip flush children to
-     the rounded corners, and that makes the card its own scrollport - a
-     sticky child of a scrollport that does not itself scroll never moves.
-     Measured in a real browser at 390x844 on 2026-09-04: the bar sat at
-     y=937 in an 844px viewport while the caller was at the support toggles,
-     which is the "Save & Next is not visible anywhere" report.
-     Nothing in this card is actually clipped: .lf-head has no background of
-     its own and .lf-actions carries its own bottom radius. */
-  .logform.card-flush { overflow: visible; }
-  .lf-actions { position: sticky; bottom: calc(var(--bottomnav-h) + 2px); z-index: 5; box-shadow: 0 -10px 24px -12px rgba(20,45,42,0.25); }
+  /* Phone only: clear the bottom nav. The sticky itself now lives on the base
+     .lf-actions rule, because the same bug bites on a laptop. See there. */
+  .lf-actions { bottom: calc(var(--bottomnav-h) + 2px); }
 }
 @media (max-width: 480px) {
   .stats-grid { grid-template-columns: minmax(0, 1fr); }

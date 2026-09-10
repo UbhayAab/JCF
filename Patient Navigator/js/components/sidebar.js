@@ -31,6 +31,14 @@ const NAV_ITEMS = [
       { id: 'sessions',  label: '1:1 Sessions',   icon: 'calendar',  route: 'sessions',  roles: ['therapist', 'nutritionist', 'manager', 'admin', 'caller', 'caregiver_mentor'] },
       { id: 'patients',  label: 'Patients',       icon: 'users',     route: 'patients',  roles: ALL_ROLES },
       { id: 'calls',     label: 'Call Logs',      icon: 'phone',     route: 'calls',     roles: CARE_ROLES },
+      // Moved out of Management, 2026-09-10. The route has been open to every
+      // care role since app.js:515, but the only nav link was under a heading
+      // admins and managers see and interns do not, so a mentor who raised a
+      // flag had nowhere to find out what happened to it, and one looking for
+      // a way to escalate had nowhere to look. Reported 01/09 by Prachi as
+      // "there does not appear to be a clear option for interns to flag such
+      // cases". Zero reassignment requests have ever been made.
+      { id: 'concerns',  label: 'Flags & concerns', icon: 'alertTriangle', route: 'concerns', roles: CARE_ROLES },
       { id: 'resources', label: 'Resources',      icon: 'mapPin',    route: 'resources', roles: ALL_ROLES },
       { id: 'upload',    label: 'Upload leads',   icon: 'upload',    route: 'upload',    roles: UPLOAD_ROLES },
       { id: 'intake',    label: 'Intake report',  icon: 'fileText',  route: 'intake',    roles: UPLOAD_ROLES },
@@ -42,7 +50,6 @@ const NAV_ITEMS = [
   {
     section: 'Management',
     items: [
-      { id: 'concerns',    label: 'Concerns',        icon: 'alertTriangle', route: 'concerns',  roles: ['admin', 'manager'] },
       { id: 'team',        label: 'Team & Queue',    icon: 'userPlus',    route: 'team',        roles: ['admin', 'manager'] },
       { id: 'leaderboard', label: 'Leaderboard',     icon: 'chart',       route: 'leaderboard', roles: ['admin', 'manager'] },
       { id: 'report',      label: 'Impact Report',   icon: 'fileText',    route: 'report',      roles: ['admin', 'manager'] },
