@@ -334,7 +334,7 @@ export async function renderUpload(container) {
         <div class="field" style="flex:1;min-width:180px"><label>Caregiver 2 phone</label><input class="input" id="s-cgphone2" inputmode="tel" /></div>
       </div>
       <span class="form-hint" style="display:block;margin:-6px 0 12px">All numbers stay linked to the same patient. Mentors call the patient first, then caregiver 1, then caregiver 2.</span>
-      <div class="field"><label>Notes</label><textarea class="textarea" id="s-notes" rows="4" maxlength="5000" placeholder="Anything else worth noting (up to 5000 characters)"></textarea>
+      <div class="field"><label>Notes</label><textarea class="textarea" id="s-notes" rows="4" maxlength="10000" placeholder="Anything else worth noting (up to 10000 characters)"></textarea>
         <span class="form-hint" id="s-notes-count"></span></div>
       <div id="s-phone-status"></div>
       <div class="form-actions" style="justify-content:flex-start"><button type="submit" class="btn btn-primary" id="s-submit">${icon('plus')}Add this lead</button></div>
@@ -538,7 +538,7 @@ export async function renderUpload(container) {
   });
   $('#s-notes')?.addEventListener('input', () => {
     const c = $('#s-notes-count');
-    if (c) c.textContent = `${($('#s-notes').value || '').length} / 5000 characters`;
+    if (c) c.textContent = `${($('#s-notes').value || '').length} / 10000 characters`;
   });
   $('#mode-single').addEventListener('submit', async (e) => {
     e.preventDefault();

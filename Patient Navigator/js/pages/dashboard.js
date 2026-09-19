@@ -81,6 +81,7 @@ export async function renderDashboard(container) {
 
       <div id="saturday-card"></div>
       <div id="resource-replies"></div>
+      <div id="blocked-card"></div>
 
       <div class="hero-metrics" id="hero-metrics">
         <div class="hero-card teal"><span class="hc-ico">${icon('handHeart')}</span><div class="hc-label">Reached today</div><div class="hc-num">…</div><div class="hc-sub">Loading…</div></div>
@@ -147,7 +148,7 @@ export async function renderDashboard(container) {
     isSpecialist ? loadRecentCheckins() : loadRecentCalls(),
     isSpecialist ? loadSpecialistPeople(role) : loadDueToday(isIntake),
     loadSaturdayCard(role), loadResourceReplies()];
-  if (isAdmin) { tasks.push(loadIntakeSummary(), loadInsights()); }
+  if (isAdmin) { tasks.push(loadIntakeSummary(), loadInsights(), loadBlockedCard()); }
   else if (isCaller) tasks.push(loadCallerAvailability());
   await Promise.all(tasks);
 }
@@ -227,6 +228,35 @@ function resourceThread(t, i) {
         </div>`).join('')}
       </div>
     </div>`;
+}
+
+// Blocked patients on the dashboard (field request 19/09): managers see who
+// is blocked and why without opening Team > Blocked. Nobody is handed these
+// patients while blocked; this is the heads-up, the review queue stays on
+// the Team page. Self-hides when nobody is blocked.
+async function loadBlockedCard() {
+  const el = document.getElementById('blocked-card');
+  if (!el) return;
+  try {
+    const { data, count, error } = await getSupabase().from('v_blacklisted_patients')
+      .select('patient_id,full_name,patient_code,blacklist_reason', { count: 'exact' }).limit(5);
+    if (error) throw error;
+    const rows = data || [];
+    if (!rows.length) { el.innerHTML = ''; return; }
+    const total = count ?? rows.length;
+    el.innerHTML = `
+      <div class="card card-flush" style="border-left:3px solid var(--danger)">
+        <div class="card-head"><h3>Blocked patients</h3><span class="badge badge-danger">${total}</span></div>
+        <div class="due-list">${rows.map(r => `
+          <div class="due-row clickable" data-patient="${r.patient_id}" style="cursor:pointer">
+            <span class="avatar avatar-sm" style="background:var(--danger)">${initials(r.full_name || '?')}</span>
+            <div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(r.full_name || 'Unknown')} <span class="due-meta">${sanitize(r.patient_code || '')}</span></div><div class="due-meta cell-clamp">${sanitize(r.blacklist_reason || 'No reason recorded')}</div></div>
+          </div>`).join('')}</div>
+        <div class="card-foot"><a id="open-blocked">Review on the Team page ${icon('arrowRight')}</a></div>
+      </div>`;
+    el.querySelectorAll('[data-patient]').forEach(row => row.addEventListener('click', () => navigate('patients/' + row.dataset.patient)));
+    document.getElementById('open-blocked')?.addEventListener('click', () => navigate('team'));
+  } catch { el.innerHTML = ''; }
 }
 
 async function loadCallerAvailability() {

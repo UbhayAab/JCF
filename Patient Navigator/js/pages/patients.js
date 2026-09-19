@@ -446,8 +446,8 @@ function showPatientForm(existing = null, onSaved = null) {
       </div>
 
       <div class="form-group"><label class="form-label">Detailed patient summary</label>
-        <textarea class="form-input" id="pf-summary" rows="5" maxlength="5000"
-          placeholder="Full story: diagnosis, family, needs, nutrition plan, psych updates. Up to 5000 characters.">${sanitize(x.legacy_notes || '')}</textarea>
+        <textarea class="form-input" id="pf-summary" rows="5" maxlength="10000"
+          placeholder="Full story: diagnosis, family, needs, nutrition plan, psych updates. Up to 10000 characters.">${sanitize(x.legacy_notes || '')}</textarea>
         <span class="form-hint" id="pf-summary-count"></span></div>
 
       <div class="form-actions">
@@ -459,11 +459,11 @@ function showPatientForm(existing = null, onSaved = null) {
 
   showModal({ title: isEdit ? `Edit · ${sanitize(x.full_name)}` : 'Register new patient', content: el, size: 'xl' });
   el.querySelector('#pf-cancel').addEventListener('click', () => closeModal());
-  // Detailed summary: 5000 chars with a live counter (was effectively a
+  // Detailed summary: 10000 chars with a live counter (was effectively a
   // single-line input elsewhere, which read as a word limit).
   const sumTa = el.querySelector('#pf-summary');
   const sumCount = el.querySelector('#pf-summary-count');
-  const paintSum = () => { if (sumCount) sumCount.textContent = `${(sumTa.value || '').length} / 5000 characters`; };
+  const paintSum = () => { if (sumCount) sumCount.textContent = `${(sumTa.value || '').length} / 10000 characters`; };
   sumTa?.addEventListener('input', paintSum); paintSum();
 
   el.querySelector('#patient-form').addEventListener('submit', async (e) => {
@@ -895,7 +895,7 @@ function careHistoryHtml(history) {
 // Asked 18/09: first-page photo, nutrition updates, psych, documents and
 // notes live in different tabs and the team loses the thread. This card sits
 // on Overview and pulls the headline of each together: detailed summary
-// (5000 chars), nutrition plan state, latest wellbeing scores, support
+// (10000 chars), nutrition plan state, latest wellbeing scores, support
 // delivered, and where to read the rest. Documents, sessions and notes keep
 // their full tabs; this is the index, not a second copy.
 function renderCareFolderCard(p, services, assessments) {
@@ -922,7 +922,7 @@ function renderCareFolderCard(p, services, assessments) {
       </div>
       ${p.legacy_notes
         ? `<div style="padding:10px 12px;background:var(--surface-3);border-radius:var(--r-sm);font:var(--t-sm);color:var(--ink-2);margin-bottom:10px;white-space:pre-wrap">${sanitize(p.legacy_notes)}</div>`
-        : `<div class="due-meta" style="margin-bottom:10px">No detailed summary yet. Add the full story from Edit (up to 5000 characters).</div>`}
+        : `<div class="due-meta" style="margin-bottom:10px">No detailed summary yet. Add the full story from Edit (up to 10000 characters).</div>`}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
         <span class="badge badge-${nutriPlan?.done ? 'ok' : 'neutral'}" title="One-on-one nutrition plan">Nutrition plan: ${nutriPlan?.done ? 'given' + (nutriPlan.updated_at ? ' · ' + formatDate(nutriPlan.updated_at) : '') : 'not yet'}</span>
         ${nutriFollow?.done && nutriFollow.sessions ? `<span class="badge badge-info">Nutrition follow-ups: ${nutriFollow.sessions}</span>` : ''}
