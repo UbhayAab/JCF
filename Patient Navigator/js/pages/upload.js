@@ -179,9 +179,10 @@ function phoneStatusHTML(st) {
   if (st.unchecked) return '';
   if (!st.found) return `<div class="due-meta" style="color:var(--ok)">New patient: this number is not on file yet.</div>`;
   const last = st.last_call_at ? new Date(st.last_call_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' }) : 'never called';
+  const lastMsg = st.last_message_at ? new Date(st.last_message_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' }) : null;
   return `<div class="card" style="background:rgba(199,134,47,.08);border-color:rgba(199,134,47,.3);margin-top:8px;padding:10px 12px">
     <div style="font-weight:700">Already registered: ${sanitize(st.full_name || '')} · ${sanitize(st.patient_code || '')}</div>
-    <div style="font-size:13px;color:var(--color-text-muted)">${st.total_calls || 0} calls (${st.connected_calls || 0} connected) · last: ${last}${st.assigned_mentor ? ' · with ' + sanitize(st.assigned_mentor) : ''}${st.is_blacklisted ? ' · BLOCKED' : ''}</div>
+    <div style="font-size:13px;color:var(--color-text-muted)">${st.total_calls || 0} calls (${st.connected_calls || 0} connected) · last call: ${last} · ${st.messages_sent || 0} WhatsApp messages sent${lastMsg ? ' · last: ' + lastMsg : ''}${st.assigned_mentor ? ' · with ' + sanitize(st.assigned_mentor) : ''}${st.is_blacklisted ? ' · BLOCKED' : ''}</div>
     ${st.patient_id ? `<a href="#patients/${st.patient_id}" style="font-size:13px;color:var(--primary);font-weight:600">Open their record →</a>` : ''}
   </div>`;
 }

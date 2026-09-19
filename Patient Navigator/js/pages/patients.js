@@ -938,7 +938,38 @@ function renderCareFolderCard(p, services, assessments) {
         <button class="btn btn-secondary btn-sm" onclick='${gotoTab('documents')}'>${icon('fileText')}Documents</button>
         <button class="btn btn-secondary btn-sm" onclick='${gotoTab('notes')}'>${icon('message')}Notes</button>
       </div>
+      <div id="folder-more" style="margin-top:10px"><div class="due-meta">Pulling the latest from documents, sessions and notes…</div></div>
     </div>`;
+}
+
+// Latest uploads, 1:1 sessions and team notes, inside the folder card so no
+// tab-hopping is needed to answer "what is new on this family". Fire and
+// forget: the card above already renders, this fills one div when the reads
+// land. RLS decides each row; a refused read renders as "nothing shared".
+async function loadFolderMore(patientId) {
+  const mount = document.getElementById('folder-more');
+  if (!mount) return;
+  try {
+    const sb = getSupabase();
+    const [docs, sess, notes] = await Promise.all([
+      sb.from('patient_documents').select('id, doc_type, uploaded_at, page_count').eq('patient_id', patientId).is('deleted_at', null).order('uploaded_at', { ascending: false }).limit(3),
+      sb.from('care_sessions').select('id, kind, status, scheduled_at, held_at, session_notes, assignee:profiles!care_sessions_assigned_to_fkey(full_name)').eq('patient_id', patientId).order('created_at', { ascending: false }).limit(3),
+      sb.from('patient_notes').select('kind, body, created_at').eq('patient_id', patientId).is('deleted_at', null).order('created_at', { ascending: false }).limit(2),
+    ]);
+    const docRows = (docs.data || []).map(d =>
+      `<div class="due-meta">Document · ${sanitize(d.doc_type || 'upload')}${d.page_count ? ' · ' + d.page_count + ' pages' : ''} · ${formatDate(d.uploaded_at)}</div>`).join('');
+    const sessRows = (sess.data || []).map(s => {
+      const when = s.held_at || s.scheduled_at;
+      return `<div class="due-meta">1:1 ${sanitize(sessionKind(s.kind).label)} · ${sanitize(sessionStatus(s.status).label)}${when ? ' · ' + formatDate(when) : ''}${s.assignee?.full_name ? ' · with ' + sanitize(s.assignee.full_name) : ''}${s.session_notes ? ' · ' + sanitize(String(s.session_notes).slice(0, 90)) : ''}</div>`;
+    }).join('');
+    const noteRows = (notes.data || []).map(n =>
+      `<div class="due-meta">${sanitize(n.kind || 'note')} · ${sanitize(String(n.body || '').slice(0, 110))}</div>`).join('');
+    mount.innerHTML = `
+      ${docRows ? `<div style="margin-top:8px"><strong style="font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-3)">Latest documents</strong><div style="margin-top:4px;display:flex;flex-direction:column;gap:4px">${docRows}</div></div>` : ''}
+      ${sessRows ? `<div style="margin-top:8px"><strong style="font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-3)">1:1 sessions (incl. psych)</strong><div style="margin-top:4px;display:flex;flex-direction:column;gap:4px">${sessRows}</div></div>` : ''}
+      ${noteRows ? `<div style="margin-top:8px"><strong style="font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-3)">Team notes</strong><div style="margin-top:4px;display:flex;flex-direction:column;gap:4px">${noteRows}</div></div>` : ''}
+      ${!docRows && !sessRows && !noteRows ? '<div class="due-meta">Nothing shared with you yet on documents, sessions or notes.</div>' : ''}`;
+  } catch { mount.innerHTML = '<div class="due-meta">Could not pull the latest activity.</div>'; }
 }
 
 // ---- Overview tab ----
@@ -1097,6 +1128,7 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
   // Not awaited: the record must not sit behind two more round trips, and
   // this card renders nothing at all when there is nothing to say.
   mountBeforeYouCall(el.querySelector('#byc-mount'), p);
+  loadFolderMore(p.id);
 }
 
 // ---- Bereavement panel (deceased patients) ----
