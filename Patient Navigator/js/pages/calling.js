@@ -20,7 +20,7 @@ import { AVATAR_COLORS, avatarColor, initials } from '../utils/avatar.js';
 // Everything else lives in the component. Owner of calling.js: this is the
 // whole footprint, and removing those three lines removes the feature cleanly.
 import { renderNotesPanel } from '../components/patientNotes.js';
-import { openDisinterestModal } from '../components/escalate.js';
+import { openDisinterestModal, openBlacklistModal } from '../components/escalate.js';
 
 // ---- module state ----
 let me = null;                 // current profile
@@ -456,8 +456,16 @@ async function getNextCall(justSkippedId = null) {
   const sb = getSupabase();
   const btn = document.getElementById('start');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:20px;height:20px;border-width:2.5px"></span>Finding the next person…'; }
+  // A hung request used to leave the button on "Finding the next person"
+  // forever with no way back. Race the RPC against a timeout and always
+  // restore the button, so a slow network reads as an error, not a freeze.
+  const withTimeout = (p, ms) => Promise.race([
+    p,
+    new Promise((_, rej) => setTimeout(() => rej(new Error('The request timed out. Check your internet and try again.')), ms)),
+  ]);
   try {
-    const { data, error } = await sb.rpc('get_next_call', { p_team_member_id: me.id });
+    if (!navigator.onLine) throw new Error('You appear to be offline. Check your internet and try again.');
+    const { data, error } = await withTimeout(sb.rpc('get_next_call', { p_team_member_id: me.id }), 20000);
     if (error) throw error;
     if (!data || !data.found) { await mountQueueEmpty(); return; }
     if (justSkippedId && data.queue_id === justSkippedId) {
@@ -466,7 +474,11 @@ async function getNextCall(justSkippedId = null) {
     await startCallSession(data);
   } catch (err) {
     showToast('Something went wrong: ' + err.message, 'error');
-    if (btn) { btn.disabled = false; btn.innerHTML = `${icon('phoneCall')}Start calling`; }
+    // The active view replaces this button; only restore it when we are
+    // still on the ready screen (button still in the DOM and no call open).
+    const live = document.getElementById('start');
+    if (live && !currentQueueId) { live.disabled = false; live.innerHTML = `${icon('phoneCall')}Start calling`; }
+    else if (!document.getElementById('portal-content')) { try { await mountReady(); } catch {} }
   }
 }
 
@@ -557,14 +569,25 @@ async function loadPatientHistory(patientId) {
   const sb = getSupabase();
   // SECURITY DEFINER RPC: the caller on this queue entry sees the FULL
   // history, everyone's notes, not just their own (plain RLS hides those).
+  // The RPC used to allow only queue-holders, owners and managers. Anyone
+  // else (cover caller, nutritionist, a mentor reopened from history) fell
+  // to the direct SELECT below, where RLS hides other people's rows. That
+  // is why one device showed history and another showed none for the same
+  // patient: it was never the device, it was which permission path applied.
+  // sql/130 widens the RPC to can_care_for_patient; this fallback stays for
+  // older deploys and now says what it is showing.
   try {
     const { data, error } = await sb.rpc('get_patient_call_history', { p_patient_id: patientId });
     if (error) throw error;
     return data || [];
-  } catch {
+  } catch (e) {
     try {
-      const { data } = await sb.from('call_logs').select('*').eq('patient_id', patientId).order('call_date', { ascending: false }).limit(20);
-      return (data || []).map(h => ({ ...h, caller_name: h.contacted_by_name, is_mine: false }));
+      const { data } = await sb.from('call_logs').select('*').eq('patient_id', patientId).order('call_date', { ascending: false }).limit(100);
+      const rows = (data || []).map(h => ({ ...h, caller_name: h.contacted_by_name, is_mine: h.caller_id === me?.id }));
+      if (!rows.length && e && /No active call/i.test(e.message || '')) {
+        console.warn('[history] RPC refused, RLS fallback empty:', e.message);
+      }
+      return rows;
     } catch { return []; }
   }
 }
@@ -1137,6 +1160,7 @@ function renderLogForm(p) {
                away mid-call to say so. Same modal, reachable where the fact
                is learned. -->
           <button type="button" class="btn btn-ghost btn-sm" id="f-disinterest" title="They do not want to take part. Stops them being passed round the team while that is true." style="color:var(--warn);gap:6px">${icon('skip')}Not taking part</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="f-block" title="Severe cases only: block for everyone until a manager reviews. Needs a reason." style="color:var(--danger);gap:6px">${icon('x')}Block</button>
         </div>
       </div>
       <div class="lf-body">
@@ -1447,8 +1471,24 @@ function wireActive(p) {
   }));
   document.getElementById('f-concern')?.addEventListener('click', () => openConcernModal(p));
   document.getElementById('f-disinterest')?.addEventListener('click', () => openDisinterestModal(
-    { id: p.id, full_name: p.full_name },
-    { onDone: () => { showToast('Recorded. They will not be reassigned around the team while this stands', 'success'); } }));
+    // p is a queue row: the patient id lives on patient_id, not id.
+    // Passing p.id (undefined) made mark_patient_disinterest fail with
+    // "That patient no longer exists" exactly while a call was active;
+    // the patient page passed the right id, which is why it worked there.
+    { id: p.patient_id || p.id, full_name: p.full_name },
+    { onDone: (data) => {
+      showToast('Recorded. They will not be reassigned around the team while this stands', 'success');
+      // A full opt-out removes them from the pool: do not leave the caller
+      // staring at a patient who just left the queue.
+      if (data && data.level === 'completely_disinterested') {
+        try { stopTimer(); } catch {}
+        clearActive();
+        getNextCall();
+      }
+    } }));
+  document.getElementById('f-block')?.addEventListener('click', () => openBlacklistModal(
+    { id: p.patient_id || p.id, full_name: p.full_name },
+    { onDone: () => { try { stopTimer(); } catch {} clearActive(); getNextCall(); } }));
   document.getElementById('f-skip')?.addEventListener('click', skipPatient);
   document.getElementById('f-submit')?.addEventListener('click', submitCallLog);
 }

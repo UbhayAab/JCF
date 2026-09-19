@@ -167,7 +167,32 @@ function parseList(text) {
   return { rows, invalid, dup, cols, hasHeader };
 }
 
+async function checkPhoneRPC(sb, phone) {
+  try {
+    const { data, error } = await sb.rpc('check_phone', { p_phone: phone });
+    if (error) throw error;
+    return data || { found: false };
+  } catch { return { found: false, unchecked: true }; }
+}
+
+function phoneStatusHTML(st) {
+  if (st.unchecked) return '';
+  if (!st.found) return `<div class="due-meta" style="color:var(--ok)">New patient: this number is not on file yet.</div>`;
+  const last = st.last_call_at ? new Date(st.last_call_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' }) : 'never called';
+  return `<div class="card" style="background:rgba(199,134,47,.08);border-color:rgba(199,134,47,.3);margin-top:8px;padding:10px 12px">
+    <div style="font-weight:700">Already registered: ${sanitize(st.full_name || '')} · ${sanitize(st.patient_code || '')}</div>
+    <div style="font-size:13px;color:var(--color-text-muted)">${st.total_calls || 0} calls (${st.connected_calls || 0} connected) · last: ${last}${st.assigned_mentor ? ' · with ' + sanitize(st.assigned_mentor) : ''}${st.is_blacklisted ? ' · BLOCKED' : ''}</div>
+    ${st.patient_id ? `<a href="#patients/${st.patient_id}" style="font-size:13px;color:var(--primary);font-weight:600">Open their record →</a>` : ''}
+  </div>`;
+}
+
 async function submitRows(sb, rows, resultEl, after) {
+  // Per-phone status BEFORE the insert, so "already exists" is answered with
+  // the actual record (name, code, calls, last contact) instead of a bare
+  // count. Checked first, then the insert runs.
+  let pre = [];
+  try { pre = await Promise.all(rows.slice(0, 20).map(r => checkPhoneRPC(sb, r.phone))); }
+  catch { pre = []; }
   try {
     const { data, error } = await sb.rpc('bulk_add_leads', { p_rows: rows });
     if (error) throw error;
@@ -182,19 +207,33 @@ async function submitRows(sb, rows, resultEl, after) {
       : done
         ? `${done} record${done === 1 ? '' : 's'} updated`
         : 'Nothing new to save';
+    const dupeRows = rows.map((row, i) => ({ row, st: pre[i] })).filter(x => x.st && x.st.found);
     resultEl.innerHTML = `
       <div class="card" style="background:rgba(12,110,116,.06);border-color:rgba(12,110,116,.2)">
         <div style="font-weight:700;color:var(--primary);margin-bottom:4px">${icon('checkCircle')} ${head}</div>
         <div style="font-size:13px;color:var(--color-text-muted)">
           ${linked ? `${linked} row${linked === 1 ? ' was' : 's were'} the same family. Their extra numbers are now linked to the existing patient. ` : ''}
           ${enriched ? `${enriched} ${enriched === 1 ? 'number was' : 'numbers were'} already on the list, and the new details you added (name, hospital, city) have been filled in. ` : ''}
-          ${r.duplicates ? `${r.duplicates} already had everything you entered. ` : ''}${r.invalid ? `${r.invalid} invalid number${r.invalid === 1 ? '' : 's'} skipped. ` : ''}
+          ${r.duplicates ? `${r.duplicates} already had everything you entered, so nothing changed for ${r.duplicates === 1 ? 'it' : 'them'}. Open the record below to see the calls and messages already on file. ` : ''}${r.invalid ? `${r.invalid} invalid number${r.invalid === 1 ? '' : 's'} skipped (not 10 digits). ` : ''}
+          ${!done && !r.duplicates && !r.invalid ? 'The server reported no change. If you just saw an error before this, that first attempt already saved it: check the record below rather than uploading again. ' : ''}
           New leads wait for the manager's auto-distribute. <a href="#intake" style="color:var(--primary);font-weight:600">See everything you've uploaded →</a>
         </div>
+        ${dupeRows.length ? `<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+          ${dupeRows.slice(0, 10).map(x => phoneStatusHTML(x.st)).join('')}
+          ${dupeRows.length > 10 ? `<div class="due-meta">+ ${dupeRows.length - 10} more already on file.</div>` : ''}
+        </div>` : ''}
       </div>`;
     showToast(done ? head : 'Nothing new to save', done ? 'success' : 'info');
     if (after) after();
   } catch (err) {
+    // Say whether it landed. A failed insert saves nothing, so retrying is
+    // safe; a "duplicate" AFTER an error means the first attempt actually
+    // saved and the retry is the no-op. That distinction is the whole fix.
+    resultEl.innerHTML = `
+      <div class="card" style="background:rgba(190,70,59,.06);border-color:rgba(190,70,59,.3)">
+        <div style="font-weight:700;color:var(--danger);margin-bottom:4px">Could not add these leads: ${sanitize(err.message)}</div>
+        <div style="font-size:13px;color:var(--color-text-muted)">Nothing was saved from this attempt, so it is safe to fix and retry. If retrying says "already exists", the earlier attempt actually landed: open the record to confirm rather than uploading a third time.</div>
+      </div>`;
     showToast('Could not add leads: ' + err.message, 'error');
   }
 }
@@ -294,7 +333,9 @@ export async function renderUpload(container) {
         <div class="field" style="flex:1;min-width:180px"><label>Caregiver 2 phone</label><input class="input" id="s-cgphone2" inputmode="tel" /></div>
       </div>
       <span class="form-hint" style="display:block;margin:-6px 0 12px">All numbers stay linked to the same patient. Mentors call the patient first, then caregiver 1, then caregiver 2.</span>
-      <div class="field"><label>Notes</label><input class="input" id="s-notes" placeholder="Anything else worth noting" /></div>
+      <div class="field"><label>Notes</label><textarea class="textarea" id="s-notes" rows="4" maxlength="5000" placeholder="Anything else worth noting (up to 5000 characters)"></textarea>
+        <span class="form-hint" id="s-notes-count"></span></div>
+      <div id="s-phone-status"></div>
       <div class="form-actions" style="justify-content:flex-start"><button type="submit" class="btn btn-primary" id="s-submit">${icon('plus')}Add this lead</button></div>
     </form>
 
@@ -478,6 +519,26 @@ export async function renderUpload(container) {
   });
 
   // single detailed add
+  // Live phone check: typing the number answers "already registered or new"
+  // BEFORE the insert, with the record behind it. Same check bulk submit
+  // runs, just earlier.
+  let phoneTimer = null;
+  $('#s-phone')?.addEventListener('input', () => {
+    clearTimeout(phoneTimer);
+    const mount = $('#s-phone-status');
+    phoneTimer = setTimeout(async () => {
+      const raw = $('#s-phone').value;
+      const digits = String(raw || '').replace(/\D/g, '').slice(-10);
+      if (digits.length !== 10) { if (mount) mount.innerHTML = ''; return; }
+      if (mount) mount.innerHTML = '<div class="due-meta">Checking…</div>';
+      const st = await checkPhoneRPC(sb, digits);
+      if (mount) mount.innerHTML = phoneStatusHTML(st);
+    }, 450);
+  });
+  $('#s-notes')?.addEventListener('input', () => {
+    const c = $('#s-notes-count');
+    if (c) c.textContent = `${($('#s-notes').value || '').length} / 5000 characters`;
+  });
   $('#mode-single').addEventListener('submit', async (e) => {
     e.preventDefault();
     const phone = normPhone($('#s-phone').value);

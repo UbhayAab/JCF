@@ -40,6 +40,7 @@ export async function renderTeam(container) {
       <button class="tab" data-tab="nutrition">Nutrition team</button>
       <button class="tab" data-tab="sessions">Saturday circles</button>
       <button class="tab" data-tab="holds">Not taking part</button>
+      <button class="tab" data-tab="blocked">Blocked</button>
     </div>
     <div id="team-content">${Array(5).fill('<div class="sk skeleton-row"></div>').join('')}</div>`;
 
@@ -53,6 +54,7 @@ export async function renderTeam(container) {
     else if (tab.dataset.tab === 'sessions') loadSessions();
     else if (tab.dataset.tab === 'nutrition') loadNutritionRoster();
     else if (tab.dataset.tab === 'holds') loadEngagementHolds();
+    else if (tab.dataset.tab === 'blocked') loadBlockedPatients();
     else loadAvailability();
   }));
 
@@ -114,6 +116,61 @@ async function loadEngagementHolds() {
     row.addEventListener('click', go);
     row.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   });
+}
+
+// ---- Blocked patients: severe cases, PM review queue (sql/130) ----
+// Blacklist stops the patient being handed to ANYONE. This is the ledger
+// where a manager reviews the reason and unblocks. Every row carries why.
+async function loadBlockedPatients() {
+  const sb = getSupabase();
+  const content = document.getElementById('team-content');
+  content.innerHTML = Array(4).fill('<div class="sk skeleton-row"></div>').join('');
+  try {
+    const { data, error } = await sb.from('v_blacklisted_patients').select('*').limit(500);
+    if (error) throw error;
+    const rows = data || [];
+    if (!rows.length) {
+      content.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('checkCircle')}</div>
+        <h4>Nobody is blocked</h4>
+        <p>Every patient is in the normal call order. A block appears here when someone marks a severe case, with the reason they gave.</p></div>`;
+      return;
+    }
+    content.innerHTML = `
+      <div class="hist-meta" style="margin-bottom:var(--s2)">${rows.length} patient${rows.length === 1 ? '' : 's'}
+        blocked. Nobody is handed them until a manager reviews and unblocks. Open the record to read the full story.</div>
+      <div class="table-container"><table class="data-table">
+        <thead><tr><th>Patient</th><th>Why blocked</th><th>Blocked</th><th>Owner</th><th></th></tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr data-patient-id="${r.patient_id}">
+              <td><strong style="cursor:pointer" data-open="${r.patient_id}">${sanitize(r.full_name || '')}</strong>
+                <div class="hist-meta">${sanitize(r.patient_code || '')} · ${r.total_calls || 0} calls${r.last_call_at ? ' · last ' + formatRelativeTime(r.last_call_at) : ''}</div></td>
+              <td style="max-width:320px;white-space:normal">${sanitize(r.blacklist_reason || '')}
+                <div class="hist-meta">by ${sanitize(r.blacklisted_by_name || 'team')} · ${r.blacklisted_at ? formatDate(r.blacklisted_at) : ''}</div></td>
+              <td>${r.blacklisted_at ? formatDate(r.blacklisted_at) : 'N/A'}</td>
+              <td>${sanitize(r.owner_name || 'Unassigned')}</td>
+              <td><button class="btn btn-secondary btn-sm" data-unblock="${r.patient_id}">Review unblock</button></td>
+            </tr>`).join('')}
+        </tbody>
+      </table></div>`;
+    content.querySelectorAll('[data-open]').forEach(el => el.addEventListener('click', () => navigate('patients/' + el.dataset.open)));
+    content.querySelectorAll('[data-unblock]').forEach(btn => btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const note = window.prompt('Unblock note (optional, goes on their record):');
+      if (note === null) return;
+      btn.disabled = true;
+      try {
+        const { error } = await sb.rpc('unblacklist_patient', { p_patient_id: btn.dataset.unblock, p_note: note || null });
+        if (error) throw error;
+        showToast('Unblocked. They return to the normal call order.', 'success');
+        loadBlockedPatients();
+      } catch (err) { showToast('Could not unblock: ' + err.message, 'error'); btn.disabled = false; }
+    }));
+  } catch (e) {
+    content.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertTriangle')}</div>
+      <h4>Could not load blocked patients</h4><p>${sanitize(e.message)}</p>
+      <p class="form-hint">If this says the relation does not exist, sql/130 has not been applied yet.</p></div>`;
+  }
 }
 
 // ---- Nutrition team: who holds whom, and the one button that changes it ----

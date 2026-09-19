@@ -15,7 +15,7 @@ import { openWhatsappShare, recipientsFromPatient } from '../components/whatsapp
 import { openAssessmentFlow } from '../components/assessmentFlow.js';
 import { mountBeforeYouCall } from '../components/beforeYouCall.js';
 import { renderNotesPanel } from '../components/patientNotes.js';
-import { openEscalateModal, openDisinterestModal, clearDisinterest } from '../components/escalate.js';
+import { openEscalateModal, openDisinterestModal, clearDisinterest, openBlacklistModal } from '../components/escalate.js';
 import { formatDate, formatRelativeTime, capitalize, getDialStatusBadge, exportToCSV, renderSkeleton } from '../utils/formatters.js';
 import { sanitize } from '../utils/validators.js';
 import { navigate, goBack } from '../router.js';
@@ -445,6 +445,11 @@ function showPatientForm(existing = null, onSaved = null) {
           </select></div>
       </div>
 
+      <div class="form-group"><label class="form-label">Detailed patient summary</label>
+        <textarea class="form-input" id="pf-summary" rows="5" maxlength="5000"
+          placeholder="Full story: diagnosis, family, needs, nutrition plan, psych updates. Up to 5000 characters.">${sanitize(x.legacy_notes || '')}</textarea>
+        <span class="form-hint" id="pf-summary-count"></span></div>
+
       <div class="form-actions">
         <button type="button" class="btn btn-secondary" id="pf-cancel">Cancel</button>
         <button type="submit" class="btn btn-primary" id="pf-submit">${isEdit ? 'Save changes' : 'Register patient'}</button>
@@ -454,6 +459,12 @@ function showPatientForm(existing = null, onSaved = null) {
 
   showModal({ title: isEdit ? `Edit · ${sanitize(x.full_name)}` : 'Register new patient', content: el, size: 'xl' });
   el.querySelector('#pf-cancel').addEventListener('click', () => closeModal());
+  // Detailed summary: 5000 chars with a live counter (was effectively a
+  // single-line input elsewhere, which read as a word limit).
+  const sumTa = el.querySelector('#pf-summary');
+  const sumCount = el.querySelector('#pf-summary-count');
+  const paintSum = () => { if (sumCount) sumCount.textContent = `${(sumTa.value || '').length} / 5000 characters`; };
+  sumTa?.addEventListener('input', paintSum); paintSum();
 
   el.querySelector('#patient-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -500,6 +511,7 @@ function showPatientForm(existing = null, onSaved = null) {
       insurance_status: v('pf-insurance') || 'unknown',
       economic_status: v('pf-economic') || 'unknown',
       health_literacy: v('pf-literacy'),
+      legacy_notes: v('pf-summary'),
       consent_given: true,
       consent_method: v('pf-consent-method'),
     };
@@ -530,7 +542,7 @@ function showPatientForm(existing = null, onSaved = null) {
 // ============================================================
 // DETAIL: WHO · ACTION · IMPACT
 // ============================================================
-const TABS = ['overview', 'support', 'wellbeing', 'calls', 'documents'];
+const TABS = ['overview', 'support', 'wellbeing', 'calls', 'documents', 'notes'];
 let activeTab = 'overview';
 
 // Which tab the URL is asking for. The tab lives in the hash as a query
@@ -644,6 +656,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
               ${statusBadge(patient.patient_status)}
               ${vulnerabilityBadge(patient.vulnerability_score)}
               ${patient.do_not_call ? '<span class="badge badge-danger badge-dot">Do not call</span>' : ''}
+              ${patient.is_blacklisted ? `<span class="badge badge-danger" title="${sanitize(patient.blacklist_reason || 'Blocked')}">Blocked${patient.blacklist_reviewed ? ' · reviewed' : ''}</span>` : ''}
               ${holdBadge(patient)}
             </div>
           </div>
@@ -666,6 +679,9 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
                the whole app was a ghost button inside the calling portal's log
                form. This is the same call, from the record. -->
           ${!deceased ? `<button class="btn btn-secondary" id="escalate-btn" style="color:var(--danger)">${icon('alertTriangle')}Flag / hand over</button>` : ''}
+          ${!deceased ? (patient.is_blacklisted
+            ? (isManagerOrAdmin() ? `<button class="btn btn-secondary" id="unblock-btn">${icon('check')}Review unblock</button>` : '')
+            : `<button class="btn btn-secondary" id="block-btn" style="color:var(--danger)" title="Severe cases: block for everyone until a manager reviews">${icon('x')}Block patient</button>`) : ''}
           <button class="btn btn-secondary" id="edit-patient-btn">${icon('edit')}Edit</button>
           <button class="btn btn-secondary" id="read-docs-btn">${icon('upload')}Upload documents</button>
           <button class="btn btn-secondary" id="assess-btn">${icon('activity')}Record wellbeing</button>
@@ -725,6 +741,17 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       openDisinterestModal({ id: patient.id, full_name: patient.full_name }, { onDone: reload }));
     container.querySelector('#clear-hold-btn')?.addEventListener('click', () =>
       clearDisinterest({ id: patient.id, full_name: patient.full_name }, reload));
+    container.querySelector('#block-btn')?.addEventListener('click', () =>
+      openBlacklistModal({ id: patient.id, full_name: patient.full_name }, { onDone: reload }));
+    container.querySelector('#unblock-btn')?.addEventListener('click', async () => {
+      const reason = window.prompt('Unblock note (optional, goes on their record):') || null;
+      try {
+        const { error } = await sb.rpc('unblacklist_patient', { p_patient_id: patient.id, p_note: reason });
+        if (error) throw error;
+        showToast('Unblocked. They return to the normal call order.', 'success');
+        reload();
+      } catch (e) { showToast('Could not unblock: ' + e.message, 'error'); }
+    });
 
     container.querySelector('#status-select').addEventListener('change', async (e) => {
       const next = e.target.value;
@@ -864,6 +891,56 @@ function careHistoryHtml(history) {
   </details>${lines.slice(-5).join('')}`;
 }
 
+// ---- Care folder: one place for the whole story ----
+// Asked 18/09: first-page photo, nutrition updates, psych, documents and
+// notes live in different tabs and the team loses the thread. This card sits
+// on Overview and pulls the headline of each together: detailed summary
+// (5000 chars), nutrition plan state, latest wellbeing scores, support
+// delivered, and where to read the rest. Documents, sessions and notes keep
+// their full tabs; this is the index, not a second copy.
+function renderCareFolderCard(p, services, assessments) {
+  const svc = services || {};
+  const done = Object.values(svc).filter(s => s.done);
+  const nutriPlan = svc.nutrition_plan_given;
+  const nutriFollow = svc.nutrition_followup;
+  const wellbeing = svc.wellbeing_sessions;
+  const lastScore = (key) => {
+    const series = (assessments || []).filter(a => a.measure === key);
+    return series.length ? series[series.length - 1] : null;
+  };
+  const must = lastScore('must_malnutrition');
+  const phq = lastScore('phq4_patient');
+  const gotoTab = (t) => `document.querySelector('.dtab[data-tab=\\"${t}\\"]')?.click()`;
+  return `
+    <div class="card" style="margin-bottom:var(--s5);border-left:3px solid var(--primary)">
+      <div style="display:flex;align-items:center;gap:11px;margin-bottom:10px">
+        <span class="stat-ico">${icon('user')}</span>
+        <div style="flex:1;min-width:0">
+          <div class="info-value">Care folder · everything on ${sanitize((p.full_name || '').split(' ')[0] || 'them')} in one place</div>
+          <div class="due-meta">Summary, nutrition plan, wellbeing, support given. Full documents, sessions and notes stay on their tabs.</div>
+        </div>
+      </div>
+      ${p.legacy_notes
+        ? `<div style="padding:10px 12px;background:var(--surface-3);border-radius:var(--r-sm);font:var(--t-sm);color:var(--ink-2);margin-bottom:10px;white-space:pre-wrap">${sanitize(p.legacy_notes)}</div>`
+        : `<div class="due-meta" style="margin-bottom:10px">No detailed summary yet. Add the full story from Edit (up to 5000 characters).</div>`}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <span class="badge badge-${nutriPlan?.done ? 'ok' : 'neutral'}" title="One-on-one nutrition plan">Nutrition plan: ${nutriPlan?.done ? 'given' + (nutriPlan.updated_at ? ' · ' + formatDate(nutriPlan.updated_at) : '') : 'not yet'}</span>
+        ${nutriFollow?.done && nutriFollow.sessions ? `<span class="badge badge-info">Nutrition follow-ups: ${nutriFollow.sessions}</span>` : ''}
+        ${wellbeing?.done && wellbeing.sessions ? `<span class="badge badge-info">Wellbeing sessions: ${wellbeing.sessions}</span>` : ''}
+        ${must ? `<span class="badge badge-${Number(must.score) >= 2 ? 'danger' : Number(must.score) === 1 ? 'warn' : 'ok'}">MUST ${must.score}</span>` : ''}
+        ${phq ? `<span class="badge badge-neutral">PHQ-4 ${phq.score}</span>` : ''}
+        <span class="badge badge-neutral">${done.length} support delivered</span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" onclick='${gotoTab('support')}'>${icon('handHeart')}Support</button>
+        <button class="btn btn-secondary btn-sm" onclick='${gotoTab('wellbeing')}'>${icon('activity')}Wellbeing</button>
+        <button class="btn btn-secondary btn-sm" onclick='${gotoTab('calls')}'>${icon('phone')}Calls</button>
+        <button class="btn btn-secondary btn-sm" onclick='${gotoTab('documents')}'>${icon('fileText')}Documents</button>
+        <button class="btn btn-secondary btn-sm" onclick='${gotoTab('notes')}'>${icon('message')}Notes</button>
+      </div>
+    </div>`;
+}
+
 // ---- Overview tab ----
 function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, pocHistory = []) {
   // Two teams hand patients over for different reasons. Interleaving them in
@@ -927,6 +1004,7 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
   el.innerHTML = `
     ${deceased ? `<div id="bereave-mount" style="margin-bottom:var(--s5)"></div>` : ''}
     ${nutriBanner}
+    ${renderCareFolderCard(p, services, assessments)}
     ${gaps.length ? `
     <div class="card" style="margin-bottom:var(--s5);border-left:3px solid var(--warn)">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">

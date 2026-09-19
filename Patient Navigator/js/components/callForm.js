@@ -36,12 +36,23 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   const sb = getSupabase();
   const me = getCurrentProfile() || { id: getCurrentUser()?.id };
 
-  // Patient choices when not pre-selected (role-scoped like the patients page).
+  // Patient choices when not pre-selected. Care roles (mentors, nutrition,
+  // therapy) read through RLS can_care_for_patient, which already covers
+  // assigned, queued, logged, nutrition-held and specialist patients. Adding
+  // an extra assigned_to/created_by filter on top hid everyone a nutritionist
+  // holds via continuity, leaving an empty dropdown and a Save button that
+  // never enables. That was the "Save a Call not appearing" report. So care
+  // roles get the RLS view unfiltered; intake-only roles keep the narrow
+  // "what you uploaded" scope.
   let patientOptions = [];
   if (!patient) {
     let q = sb.from('patients').select('id, patient_code, full_name, consent_given')
       .eq('is_active', true).neq('patient_status', 'deceased').order('full_name').limit(800);
-    if (!isManagerOrAdmin()) q = q.or(`assigned_to.eq.${me.id},created_by.eq.${me.id}`);
+    if (!isManagerOrAdmin()) {
+      const r = getUserRole();
+      const careRoles = ['caller', 'caregiver_mentor', 'therapist', 'nutritionist'];
+      if (!careRoles.includes(r)) q = q.eq('created_by', me.id);
+    }
     const { data } = await q;
     patientOptions = data || [];
   }

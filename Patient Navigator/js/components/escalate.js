@@ -267,3 +267,53 @@ export async function clearDisinterest(patient, onDone) {
     onDone?.();
   } catch (e) { showToast('Could not lift the hold: ' + e.message, 'error'); }
 }
+
+// ---- Block / blacklist: severe cases only ----
+// Asked 18/09 by Komal: flagging moves the patient to someone else, but in
+// severe cases nobody should be handed them at all. Requires a reason (min
+// 10 chars on the server), writes to patient_notes, cancels open queue rows
+// and sets do_not_call. Review + unblock is manager/admin only and lives on
+// Team and Queue -> Blocked.
+export function openBlacklistModal(patient, opts = {}) {
+  const el = document.createElement('div');
+  el.innerHTML = `
+    <p style="font:var(--t-sm);color:var(--ink-2);margin:0 0 var(--s4)">
+      This blocks <strong>${sanitize(patient.full_name || 'them')}</strong> for
+      <strong>everyone</strong>: no intern is handed them again until a manager
+      reviews and unblocks. Use it only for severe cases (abuse, threats,
+      explicit refusal with harassment). The reason is written on their record.</p>
+    <div class="field"><label>Why is blocking needed? <span class="req">*</span></label>
+      <textarea class="textarea" id="bl-reason" rows="4"
+        placeholder="What happened, in your words. At least a full sentence so a reviewer can judge it."></textarea>
+      <div class="due-meta" id="bl-count" style="margin-top:5px">0 characters (min 10)</div></div>
+    <div class="form-actions" style="margin-top:var(--s4)">
+      <button class="btn btn-secondary" id="bl-cancel">Cancel</button>
+      <button class="btn btn-danger" id="bl-save">${icon('alertTriangle')}Block this patient</button>
+    </div>`;
+  showModal({ title: `Block · ${sanitize(patient.full_name || '')}`, content: el, size: 'md' });
+
+  const ta = el.querySelector('#bl-reason');
+  ta.addEventListener('input', () => {
+    el.querySelector('#bl-count').textContent = `${ta.value.trim().length} characters (min 10)`;
+  });
+  el.querySelector('#bl-cancel').addEventListener('click', () => closeModal());
+  el.querySelector('#bl-save').addEventListener('click', async () => {
+    const reason = ta.value.trim();
+    if (reason.length < 10) { showToast('Give a reason of at least 10 characters.', 'warning'); return; }
+    const btn = el.querySelector('#bl-save');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>Blocking…';
+    try {
+      const { error } = await getSupabase().rpc('blacklist_patient', {
+        p_patient_id: patient.id, p_reason: reason,
+      });
+      if (error) throw error;
+      closeModal();
+      showToast('Blocked. Nobody will be handed them until a manager reviews.', 'success', 7000);
+      opts.onDone?.();
+    } catch (e) {
+      showToast('Could not block: ' + e.message, 'error');
+      btn.disabled = false; btn.innerHTML = `${icon('alertTriangle')}Block this patient`;
+    }
+  });
+}
