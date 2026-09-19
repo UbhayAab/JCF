@@ -630,6 +630,19 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       if (error) console.warn('Patient notes unavailable:', error.message);
       else noteCount = count ?? 0;
     }
+    // Open red flags on this patient (sql/43). The Flag button below is
+    // only red when one is actually open - asked 19/09 by Rinie:
+    // "highlighted for all patients, should be only for flagged ones".
+    // Its own query for the same reason the counts above have one: a
+    // missing table degrades to a neutral button, never a blank page.
+    let openFlags = 0;
+    {
+      const { count, error } = await sb.from('patient_concerns')
+        .select('id', { count: 'exact', head: true })
+        .eq('patient_id', patientId).in('status', ['open', 'acknowledged']);
+      if (error) console.warn('Open concerns unavailable:', error.message);
+      else openFlags = count ?? 0;
+    }
     const supportCount = Object.values(services).filter(s => s.done && !OUTCOME_FLAGS.some(f => f.key === s.lever)).length;
     const AVATAR_COLORS = ['#006469', '#7A4C00', '#5B4892', '#295B86', '#106841', '#953028'];
     let h = 0; for (const ch of patient.full_name) h = ch.charCodeAt(0) + ((h << 5) - h);
@@ -656,7 +669,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
               ${statusBadge(patient.patient_status)}
               ${vulnerabilityBadge(patient.vulnerability_score)}
               ${patient.do_not_call ? '<span class="badge badge-danger badge-dot">Do not call</span>' : ''}
-              ${patient.is_blacklisted ? `<span class="badge badge-danger" title="${sanitize(patient.blacklist_reason || 'Blocked')}">Blocked${patient.blacklist_reviewed ? ' · reviewed' : ''}</span>` : ''}
+              ${patient.is_blacklisted ? `<span class="badge badge-danger" title="${sanitize(patient.blacklist_reason || 'Blocked')}">Blocked · ${patient.blacklist_reviewed ? 'approved' : 'pending review'}</span>` : ''}
               ${holdBadge(patient)}
             </div>
           </div>
@@ -678,9 +691,9 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
                sql/113 and had been used zero times, because the only trigger in
                the whole app was a ghost button inside the calling portal's log
                form. This is the same call, from the record. -->
-          ${!deceased ? `<button class="btn btn-secondary" id="escalate-btn" style="color:var(--danger)">${icon('alertTriangle')}Flag / hand over</button>` : ''}
+          ${!deceased ? `<button class="btn btn-secondary" id="escalate-btn" ${openFlags ? 'style="color:var(--danger)"' : ''} title="${openFlags ? `${openFlags} open flag${openFlags === 1 ? '' : 's'} on this patient` : 'Raise a flag to the supervisors'}">${icon('alertTriangle')}Flag / hand over${openFlags ? ` <span class="badge badge-danger">${openFlags}</span>` : ''}</button>` : ''}
           ${!deceased ? (patient.is_blacklisted
-            ? (isManagerOrAdmin() ? `<button class="btn btn-secondary" id="unblock-btn">${icon('check')}Review unblock</button>` : '')
+            ? (isManagerOrAdmin() ? `${!patient.blacklist_reviewed ? `<button class="btn btn-secondary" id="approve-block-btn" title="Validate this block against the reason on record. They stay blocked.">${icon('checkCircle')}Approve block</button>` : ''}<button class="btn btn-secondary" id="unblock-btn">${icon('check')}Review unblock</button>` : '')
             : `<button class="btn btn-secondary" id="block-btn" style="color:var(--danger)" title="Severe cases: block for everyone until a manager reviews">${icon('x')}Block patient</button>`) : ''}
           <button class="btn btn-secondary" id="edit-patient-btn">${icon('edit')}Edit</button>
           <button class="btn btn-secondary" id="read-docs-btn">${icon('upload')}Upload documents</button>
@@ -751,6 +764,18 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
         showToast('Unblocked. They return to the normal call order.', 'success');
         reload();
       } catch (e) { showToast('Could not unblock: ' + e.message, 'error'); }
+    });
+    // sql/132: the PM validates the block against the reason on record.
+    // Approving keeps them blocked; only "Review unblock" releases them.
+    container.querySelector('#approve-block-btn')?.addEventListener('click', async () => {
+      const note = window.prompt('Approval note (optional, goes on their record):');
+      if (note === null) return;
+      try {
+        const { error } = await sb.rpc('approve_blacklist_patient', { p_patient_id: patient.id, p_note: note || null });
+        if (error) throw error;
+        showToast('Block approved. They stay blocked until a review releases them.', 'success');
+        reload();
+      } catch (e) { showToast('Could not approve: ' + e.message, 'error'); }
     });
 
     container.querySelector('#status-select').addEventListener('change', async (e) => {

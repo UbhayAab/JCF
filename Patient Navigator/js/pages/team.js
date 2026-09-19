@@ -118,9 +118,10 @@ async function loadEngagementHolds() {
   });
 }
 
-// ---- Blocked patients: severe cases, PM review queue (sql/130) ----
-// Blacklist stops the patient being handed to ANYONE. This is the ledger
-// where a manager reviews the reason and unblocks. Every row carries why.
+// ---- Blocked patients: severe cases, PM review queue (sql/130, approved sql/132) ----
+// Blacklist stops the patient being handed to ANYONE. A manager reviews the
+// reason and either APPROVES the block (stays blocked, workflow complete)
+// or unblocks. Every row carries why, who asked, and whether it is validated.
 async function loadBlockedPatients() {
   const sb = getSupabase();
   const content = document.getElementById('team-content');
@@ -137,9 +138,9 @@ async function loadBlockedPatients() {
     }
     content.innerHTML = `
       <div class="hist-meta" style="margin-bottom:var(--s2)">${rows.length} patient${rows.length === 1 ? '' : 's'}
-        blocked. Nobody is handed them until a manager reviews and unblocks. Open the record to read the full story.</div>
+        blocked. Nobody is handed them until a manager reviews: approve the block to confirm it against the reason given, unblock to release them. Open the record to read the full story.</div>
       <div class="table-container"><table class="data-table">
-        <thead><tr><th>Patient</th><th>Why blocked</th><th>Blocked</th><th>Owner</th><th></th></tr></thead>
+        <thead><tr><th>Patient</th><th>Why blocked</th><th>Status</th><th>Owner</th><th></th></tr></thead>
         <tbody>
           ${rows.map(r => `
             <tr data-patient-id="${r.patient_id}">
@@ -147,13 +148,27 @@ async function loadBlockedPatients() {
                 <div class="hist-meta">${sanitize(r.patient_code || '')} · ${r.total_calls || 0} calls${r.last_call_at ? ' · last ' + formatRelativeTime(r.last_call_at) : ''}</div></td>
               <td style="max-width:320px;white-space:normal">${sanitize(r.blacklist_reason || '')}
                 <div class="hist-meta">by ${sanitize(r.blacklisted_by_name || 'team')} · ${r.blacklisted_at ? formatDate(r.blacklisted_at) : ''}</div></td>
-              <td>${r.blacklisted_at ? formatDate(r.blacklisted_at) : 'N/A'}</td>
+              <td>${r.blacklist_reviewed
+                ? '<span class="badge badge-ok">Approved</span>'
+                : '<span class="badge badge-warn">Pending review</span>'}</td>
               <td>${sanitize(r.owner_name || 'Unassigned')}</td>
-              <td><button class="btn btn-secondary btn-sm" data-unblock="${r.patient_id}">Review unblock</button></td>
+              <td style="white-space:nowrap">${!r.blacklist_reviewed ? `<button class="btn btn-primary btn-sm" data-approve="${r.patient_id}">Approve</button> ` : ''}<button class="btn btn-secondary btn-sm" data-unblock="${r.patient_id}">Review unblock</button></td>
             </tr>`).join('')}
         </tbody>
       </table></div>`;
     content.querySelectorAll('[data-open]').forEach(el => el.addEventListener('click', () => navigate('patients/' + el.dataset.open)));
+    content.querySelectorAll('[data-approve]').forEach(btn => btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const note = window.prompt('Approval note (optional, goes on their record):');
+      if (note === null) return;
+      btn.disabled = true;
+      try {
+        const { error } = await sb.rpc('approve_blacklist_patient', { p_patient_id: btn.dataset.approve, p_note: note || null });
+        if (error) throw error;
+        showToast('Block approved. They stay blocked until a review releases them.', 'success');
+        loadBlockedPatients();
+      } catch (err) { showToast('Could not approve: ' + err.message, 'error'); btn.disabled = false; }
+    }));
     content.querySelectorAll('[data-unblock]').forEach(btn => btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const note = window.prompt('Unblock note (optional, goes on their record):');

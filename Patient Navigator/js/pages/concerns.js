@@ -34,7 +34,7 @@ export async function renderConcerns(container) {
         <h1>Concerns</h1>
         <p class="header-subtitle" style="margin:4px 0 0">${isManagerOrAdmin()
           ? 'Red flags from calls and assessments. Urgent means today. No flag waits alone.'
-          : 'Flags you raised, and what happened to them. Raising one is doing your job perfectly.'}</p>
+          : 'Flags you raised, or on patients in your care, and what happened to them. Raising one is doing your job perfectly.'}</p>
       </div>
       <button class="btn btn-secondary btn-sm" id="cq-refresh">${icon('refresh')}Refresh</button>
     </div>
@@ -129,6 +129,20 @@ async function load() {
     rows = [...(openRes.data || []), ...(doneRes.data || [])]
       .map((r) => ({ ...r, review: byConcern[r.id] || null }))
       .map(indexRow);
+    // sql/132: who asked for a resolve. A separate query rather than a
+    // join, because a project that has not run sql/132 yet still has a
+    // working concerns page; an error here degrades to an unnamed
+    // requester, never to a blank list.
+    try {
+      const wantIds = [...new Set(rows.filter(r => r.resolve_requested && r.resolve_requested_by).map(r => r.resolve_requested_by))];
+      if (wantIds.length) {
+        const { data: reqs, error: reqErr } = await sb.from('profiles').select('id, full_name').in('id', wantIds)
+          .abortSignal(controller.signal);
+        if (reqErr) throw reqErr;
+        const byId = Object.fromEntries((reqs || []).map(p => [p.id, p.full_name]));
+        rows.forEach(r => { if (r.resolve_requested_by) r.requester = { full_name: byId[r.resolve_requested_by] || null }; });
+      }
+    } catch (e) { console.warn('resolve requesters unavailable:', e.message); }
     paint();
   } catch (e) {
     if (seq !== loadSeq) return;
@@ -194,6 +208,7 @@ function paint() {
       ${statCard('Resolved (recent)', resolved.length, 'ok', 'checkCircle')}
     </div>
     ${reassignBanner(rows)}
+    ${resolveBanner(rows)}
     ${sevFilter ? `<div style="margin-bottom:var(--s2)"><button class="btn btn-ghost btn-sm" id="cq-clear-filter">${icon('x')}Clear ${sevFilter} filter</button></div>` : ''}
     ${searchQ ? `<div class="hist-meta" style="margin-bottom:var(--s2)">${visible.length} of ${rows.length} flags match “${sanitizeText(searchQ)}” · ${open.length} still open, ${resolved.length} already resolved</div>` : ''}
 
@@ -236,6 +251,8 @@ function paint() {
   body.querySelectorAll('[data-decline-reassign]').forEach(b => b.addEventListener('click', () => openDeclineReassignModal(b.dataset.declineReassign)));
   body.querySelectorAll('[data-ack]').forEach(b => b.addEventListener('click', () => acknowledge(b.dataset.ack)));
   body.querySelectorAll('[data-resolve]').forEach(b => b.addEventListener('click', () => openResolveModal(b.dataset.resolve)));
+  body.querySelectorAll('[data-request-resolve]').forEach(b => b.addEventListener('click', () => openRequestResolveModal(b.dataset.requestResolve)));
+  body.querySelectorAll('[data-review-resolve]').forEach(b => b.addEventListener('click', () => openReviewResolveModal(b.dataset.reviewResolve)));
   body.querySelectorAll('[data-open-patient]').forEach(b => b.addEventListener('click', () => { window.location.hash = 'patients/' + b.dataset.openPatient; }));
   body.querySelectorAll('[data-sev-filter]').forEach(c => c.addEventListener('click', () => {
     sevFilter = sevFilter === c.dataset.sevFilter ? null : c.dataset.sevFilter;
@@ -260,8 +277,9 @@ function rowFields(r) {
     p.cancer_type, p.gi_subtype, p.caregiver_name,
     p.phone_full, p.caregiver_phone_full, ...phones,
     concernReason(r.reason).label, r.reason, r.severity, r.status,
-    r.note, r.resolution_note,
+    r.note, r.resolution_note, r.resolve_request_note,
     r.raiser?.full_name, r.resolver?.full_name, r.acknowledger?.full_name,
+    r.requester?.full_name,
   ].filter(Boolean).map(String);
 }
 
@@ -456,10 +474,36 @@ function reassignBanner(all) {
     </div>`;
 }
 
+// ---- Resolve requests waiting for a PM (sql/132) ----------------------
+// An intern who covered a flagged patient says the need is met; the flag
+// stays OPEN until a supervisor reviews the call notes and approves.
+// Managers get the queue; everyone else gets the state of their own asks.
+function resolveBanner(all) {
+  const pending = (all || []).filter(r => r.resolve_requested
+    && (r.status === 'open' || r.status === 'acknowledged'));
+  if (!pending.length) return '';
+  if (isManagerOrAdmin()) {
+    return `
+      <div class="doc-callout" style="margin-bottom:var(--s3);border-left:3px solid var(--gold)">
+        <strong>${icon('checkCircle')} ${pending.length} resolve request${pending.length === 1 ? '' : 's'}
+          waiting for your review.</strong>
+        <p>Each flag below marked <span class="badge badge-gold">Resolve requested</span> carries
+          what the covering intern says was done. Open it, read the recent call notes,
+          then approve or send it back with a reason they can read.</p>
+      </div>`;
+  }
+  return `
+    <div class="doc-callout" style="margin-bottom:var(--s3)">
+      <strong>${icon('checkCircle')} You asked to close ${pending.length} flag${pending.length === 1 ? '' : 's'}.</strong>
+      <p>${pending.length === 1 ? 'It is' : 'They are'} with a supervisor now. If it comes back, the reason lands on the patient's notes.</p>
+    </div>`;
+}
+
 function concernCard(r, compact = false) {
   const reason = concernReason(r.reason);
   const acked = r.status === 'acknowledged';
   const canAct = isManagerOrAdmin();
+  const open = r.status === 'open' || r.status === 'acknowledged';
   const place = [r.patient?.city, r.patient?.state].filter(Boolean).join(', ');
   const phone = primaryPhone(r);
   return `
@@ -474,6 +518,7 @@ function concernCard(r, compact = false) {
             ${r.reassign_status === 'done' ? `<span class="badge badge-ok">Reassigned</span>` : ''}
             ${r.reassign_status === 'declined' ? `<span class="badge badge-neutral">Reassignment declined</span>` : ''}
             ${acked ? `<span class="badge badge-primary">Being handled · ${r.acknowledger?.full_name || ''}</span>` : ''}
+            ${r.resolve_requested ? `<span class="badge badge-gold" title="Someone covering this patient says the need is met. A supervisor reviews the call notes before closing.">Resolve requested${r.requester?.full_name ? ' · ' + sanitizeText(r.requester.full_name) : ''}</span>` : ''}
             ${r.source === 'auto' ? `<span class="badge badge-gold" title="Raised automatically from a score threshold">Auto-flag</span>` : ''}
             <span class="hist-meta">${r.patient?.patient_code || ''}${place ? ' · ' + place : ''}</span>
             ${phone ? `<a class="cg-call" href="tel:${phone.replace(/[^+\d]/g, '')}" style="padding:3px 9px;font-size:13px"
@@ -490,9 +535,13 @@ function concernCard(r, compact = false) {
           ${r.reassign_status === 'pending' ? `
           <button class="btn btn-danger btn-sm" data-reassign="${r.id}">${icon('users')}Hand to someone else</button>
           <button class="btn btn-ghost btn-sm" data-decline-reassign="${r.id}">Decline</button>` : ''}
+          ${r.resolve_requested ? `<button class="btn btn-primary btn-sm" data-review-resolve="${r.id}">${icon('checkCircle')}Review resolve</button>` : ''}
           ${acked ? '' : `<button class="btn btn-secondary btn-sm" data-ack="${r.id}">${icon('check')}I'm on it</button>`}
           <button class="btn btn-primary btn-sm" data-resolve="${r.id}">${icon('checkCircle')}Resolve</button>
-        </div>` : ''}
+        </div>`
+        : (open && !r.resolve_requested
+          ? `<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary btn-sm" data-request-resolve="${r.id}">${icon('checkCircle')}Mark resolved</button></div>`
+          : '')}
       </div>
     </div>`;
 }
@@ -636,8 +685,10 @@ function openResolveModal(id) {
     const sb = getSupabase();
     const me = getCurrentProfile();
     try {
+      // A direct resolve by a supervisor also clears any waiting request:
+      // the flag is closed either way, and nothing must keep asking.
       await mustWrite(sb.from('patient_concerns')
-        .update({ status: 'resolved', resolved_by: me.id, resolved_at: new Date().toISOString(), resolution_note: note })
+        .update({ status: 'resolved', resolved_by: me.id, resolved_at: new Date().toISOString(), resolution_note: note, resolve_requested: false })
         .eq('id', id), 'resolution');
       closeModal();
       showToast('Resolved. Thank you for closing the loop', 'success');
@@ -646,5 +697,122 @@ function openResolveModal(id) {
       showToast('Could not resolve: ' + e.message, 'error');
       btn.disabled = false; btn.innerHTML = `${icon('checkCircle')}Mark resolved`;
     }
+  });
+}
+
+// ---- Ask to close: the intern's half of the resolve workflow (sql/132) --
+// The flag stays OPEN. A supervisor reads this note against the call
+// history and approves, or sends it back with a reason the intern sees.
+function openRequestResolveModal(id) {
+  const r = rows.find(x => x.id === id);
+  const el = document.createElement('div');
+  el.innerHTML = `
+    <p style="font:var(--t-sm);color:var(--ink-2);margin:0 0 var(--s4)">
+      What was done for <strong>${patientName(r || {})}</strong> on
+      <strong>${sanitizeText(concernReason(r?.reason).label)}</strong>? One honest line.
+      A supervisor reviews it against the call notes before the flag closes.</p>
+    <div class="form-group"><label class="form-label">What was done</label>
+      <textarea class="textarea" id="rr-note" placeholder="e.g., Spoke with the family twice, connected them to the financial-aid desk, next follow-up Monday…"></textarea></div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="rr-cancel">Cancel</button>
+      <button class="btn btn-primary" id="rr-save">${icon('checkCircle')}Ask to close</button>
+    </div>`;
+  showModal({ title: 'Mark resolved for review', content: el, size: 'lg' });
+  el.querySelector('#rr-cancel').addEventListener('click', () => closeModal());
+  el.querySelector('#rr-save').addEventListener('click', async () => {
+    const note = el.querySelector('#rr-note').value.trim();
+    if (note.length < 10) { showToast('Say what was done in a full sentence (min 10 characters).', 'warning'); return; }
+    const btn = el.querySelector('#rr-save');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>';
+    try {
+      const { error } = await getSupabase().rpc('request_concern_resolve', { p_concern_id: id, p_note: note });
+      if (error) throw error;
+      closeModal();
+      showToast('Sent for review. The flag closes once a supervisor approves.', 'success');
+      await load();
+    } catch (e) {
+      showToast('Could not send: ' + e.message, 'error');
+      btn.disabled = false; btn.innerHTML = `${icon('checkCircle')}Ask to close`;
+    }
+  });
+}
+
+// ---- Review a resolve: the PM's half (sql/132) -------------------------
+// The concern, who raised it and what they said; what the covering
+// intern says was done; and the recent call notes as evidence. Approve
+// closes the flag (it leaves the open queue); sending back keeps it
+// open and puts the reason on the patient's notes for the intern.
+async function openReviewResolveModal(id) {
+  const r = rows.find(x => x.id === id);
+  const reason = concernReason(r?.reason);
+  const el = document.createElement('div');
+  el.innerHTML = `
+    <div class="doc-callout" style="margin:0 0 var(--s4)">
+      <strong>${sanitizeText(reason.label)}</strong>
+      <span class="badge badge-${r?.severity === 'urgent' ? 'danger' : r?.severity === 'high' ? 'warn' : 'neutral'}" style="margin-left:8px">${r?.severity || ''}</span>
+      <p style="margin:6px 0 0">${r?.note ? sanitizeText(r.note) : '<span style="color:var(--ink-3)">No raiser note.</span>'}</p>
+      <div class="hist-meta" style="margin-top:6px">
+        ${r?.source === 'auto' ? 'Flagged automatically' : `Raised by ${sanitizeText(r?.raiser?.full_name || 'N/A')}`} · ${formatRelativeTime(r?.created_at)}
+      </div>
+    </div>
+    <div style="background:var(--surface-2);border-radius:var(--r-sm);padding:10px 12px;margin:0 0 var(--s4)">
+      <div style="font:var(--t-sm)"><strong>${sanitizeText(r?.requester?.full_name || 'The covering intern')}</strong>
+        says the need is met${r?.resolve_requested_at ? ` · ${formatRelativeTime(r.resolve_requested_at)}` : ''}</div>
+      <div style="font:var(--t-sm);color:var(--ink-2);margin-top:4px">${r?.resolve_request_note ? sanitizeText(r.resolve_request_note) : '<span style="color:var(--ink-3)">No note recorded.</span>'}</div>
+    </div>
+    <div style="font:var(--t-xs);color:var(--ink-3);margin:0 0 6px;letter-spacing:.08em;text-transform:uppercase">Recent call notes</div>
+    <div id="rv-calls"><div style="padding:8px;color:var(--ink-3);font:var(--t-sm)">Reading the call history…</div></div>
+    <div class="form-group" style="margin-top:var(--s4)"><label class="form-label">Your note (needed to send back, optional to approve)</label>
+      <textarea class="textarea" id="rv-note" placeholder="What you checked, or what still needs doing…"></textarea></div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="rv-cancel">Cancel</button>
+      <button class="btn btn-ghost" id="rv-decline">Send back</button>
+      <button class="btn btn-primary" id="rv-approve">${icon('checkCircle')}Approve resolve</button>
+    </div>`;
+  showModal({ title: `Review resolve · ${patientName(r || {})}`, content: el, size: 'lg' });
+  el.querySelector('#rv-cancel').addEventListener('click', () => closeModal());
+
+  // Evidence first: the PM judges the ask against what calls actually say.
+  try {
+    const sb = getSupabase();
+    const { data, error } = await sb.rpc('get_patient_call_history', { p_patient_id: r?.patient?.id || r?.patient_id });
+    if (error) throw error;
+    const calls = (Array.isArray(data) ? data : []).filter(c => c.caller_notes || c.followup_strategy_notes).slice(0, 3);
+    el.querySelector('#rv-calls').innerHTML = calls.length ? calls.map(c => `
+      <div style="border-left:3px solid var(--line);padding:6px 10px;margin-bottom:8px;background:var(--surface-2);border-radius:var(--r-sm)">
+        <div class="hist-meta">${sanitizeText(c.caller_name || 'Unknown')} · ${formatRelativeTime(c.call_date)} · ${sanitizeText(c.dial_status || '')}</div>
+        <div style="font:var(--t-sm);color:var(--ink-2);margin-top:3px">${sanitizeText((c.caller_notes || c.followup_strategy_notes || '').slice(0, 400))}</div>
+      </div>`).join('')
+      : `<div style="padding:8px;color:var(--ink-3);font:var(--t-sm)">No call notes on file. Judge the ask on its own words, or ring the family first.</div>`;
+  } catch (e) {
+    el.querySelector('#rv-calls').innerHTML = `<div style="padding:8px;color:var(--ink-3);font:var(--t-sm)">Call history unavailable: ${sanitizeText(e.message || 'could not load')}.</div>`;
+  }
+
+  const busy = (btn, label) => { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>'; btn.dataset.label = label; };
+  const free = (btn) => { btn.disabled = false; btn.innerHTML = btn.dataset.label; };
+  el.querySelector('#rv-approve').addEventListener('click', async () => {
+    const btn = el.querySelector('#rv-approve');
+    busy(btn, `${icon('checkCircle')}Approve resolve`);
+    try {
+      const note = el.querySelector('#rv-note').value.trim() || null;
+      const { error } = await getSupabase().rpc('approve_concern_resolve', { p_concern_id: id, p_note: note });
+      if (error) throw error;
+      closeModal();
+      showToast('Resolved. The flag leaves the open queue.', 'success');
+      await load();
+    } catch (e) { showToast('Could not approve: ' + e.message, 'error'); free(btn); }
+  });
+  el.querySelector('#rv-decline').addEventListener('click', async () => {
+    const note = el.querySelector('#rv-note').value.trim();
+    if (note.length < 10) { showToast('Say what still needs doing (min 10 characters). They will read it.', 'warning'); return; }
+    const btn = el.querySelector('#rv-decline');
+    busy(btn, 'Send back');
+    try {
+      const { error } = await getSupabase().rpc('decline_concern_resolve', { p_concern_id: id, p_note: note });
+      if (error) throw error;
+      closeModal();
+      showToast('Sent back with your note on the patient record.', 'success');
+      await load();
+    } catch (e) { showToast('Could not send back: ' + e.message, 'error'); free(btn); }
   });
 }
