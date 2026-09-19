@@ -20,6 +20,7 @@ import { renderIntake } from './pages/intake.js';
 import { renderNutrition } from './pages/nutrition.js';
 import { renderLeaderboard } from './pages/leaderboard.js';
 import { renderConcerns } from './pages/concerns.js';
+import { renderLeads } from './pages/leads.js';
 import { renderBrief } from './pages/brief.js';
 import { renderSessions } from './pages/sessions.js';
 import { renderResources } from './pages/resources.js';
@@ -452,7 +453,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20260919a';  // bumped on every breaking deploy
+const APP_BUILD = '20260919b';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -513,6 +514,8 @@ async function init() {
   registerRoute('leaderboard', (c) => renderLeaderboard(c), { requiresAuth: true, roles: ['admin', 'manager'] });
   // Concerns: managers triage; calling roles can follow the flags they raised.
   registerRoute('concerns', (c) => renderConcerns(c), { requiresAuth: true, roles: CARE_ROLES });
+  // WhatsApp leads: HopeBot profiles. Care roles call them, managers triage.
+  registerRoute('leads', (c) => renderLeads(c), { requiresAuth: true, roles: CARE_ROLES });
   // Mentors can hold well-being/caregiver 1:1s themselves, so they get the pipeline too.
   registerRoute('sessions', (c) => renderSessions(c), { requiresAuth: true, roles: ['therapist', 'nutritionist', 'manager', 'admin', 'caller', 'caregiver_mentor'] });
   // SURGICAL, 2026-09-10: the params were dropped here, so every deep link

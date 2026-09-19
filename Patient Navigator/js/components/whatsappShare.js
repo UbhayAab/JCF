@@ -66,6 +66,15 @@ const SHELVES = [
   { key: 'financial_aid', label: 'Money for treatment' },
 ];
 
+// aid_kind is the GENERATED money shape (sql/121), not the category. A money
+// row can be a free stay via an NGO grant, which is why the finance shelf
+// used to show "charitable stays" with no explanation. Name both.
+const AID_KIND_LABEL = {
+  charitable_stay: 'Free stay', paid_stay: 'Paid stay', grant: 'Grant',
+  scheme: 'Govt scheme', guidance: 'Guidance', help_only: 'Info only',
+};
+const aidKindLabel = (k) => AID_KIND_LABEL[k] || null;
+
 // opts: { patient: {id|patient_id, full_name, ...}, recipients: [{phone, label, name}] }
 export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) {
   const sb = getSupabase();
@@ -86,6 +95,8 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
     recips: recipients.filter(r => r && r.phone),
     picked: new Set(recipients.length ? [0] : []),
     loadError: null,
+    exact: null,      // last dryRun answer from resource-send
+    exactKey: '',     // selection key that answer was built for
   };
 
   const el = document.createElement('div');
@@ -161,6 +172,47 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
       .filter(m => state.selected.has(m.resource_id))
       .map(m => ({ resource: state.byId.get(m.resource_id), match: m }))
       .filter(x => x.resource);
+  }
+
+  // Key for the server-exact preview: anything that changes the message.
+  function exactKey() {
+    return JSON.stringify([
+      patientId, state.shelf, state.lang, state.maxBlocks,
+      chosenItems().slice(0, state.maxBlocks).map(x => x.resource.id),
+    ]);
+  }
+
+  // Ask the deployed function what it would send (dryRun) and show THAT.
+  // The preview used to be composed locally while the function composed its
+  // own flat line, so the mentor read one thing and the family got another.
+  // Exact by construction now; the local render is only the instant fallback.
+  let exactTimer = null;
+  function refreshExact() {
+    clearTimeout(exactTimer);
+    exactTimer = setTimeout(async () => {
+      const key = exactKey();
+      if (state.exactKey === key || !patientId) return;
+      try {
+        const { data: sess } = await sb.auth.getSession();
+        const token = sess?.session?.access_token;
+        if (!token) return;
+        const items = chosenItems().slice(0, state.maxBlocks);
+        const res = await fetch(RESOURCE_SEND_URL, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            patientId, category: state.shelf, lang: state.lang, dryRun: true,
+            resourceIds: items.map(x => x.resource.id),
+          }),
+        });
+        const body = await res.json().catch(() => null);
+        if (body?.ok && body.dryRun && exactKey() === key) {
+          state.exact = body;
+          state.exactKey = key;
+          repaintPreview();
+        }
+      } catch { /* local fallback stays up */ }
+    }, 500);
   }
 
   function currentPlan() {
@@ -285,6 +337,7 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
       </div>`;
 
     wire();
+    refreshExact();
   }
 
   function recipientsHTML() {
@@ -364,6 +417,7 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
   function resRow(m, isOut) {
     const r = state.byId.get(m.resource_id) || {};
     const cat = resourceCategory(r.category);
+    const aid = aidKindLabel(r.aid_kind);
     const on = state.selected.has(m.resource_id);
     const badge = fitBadge(m.fit);
     const why = isOut
@@ -379,7 +433,7 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
             <span style="font:var(--t-body-strong);font-size:13.5px">${sanitize(cleanTitle(r.title) || 'Resource')}</span>
             <span class="badge badge-${badge.tone}">${badge.label}</span>
           </span>
-          <span style="display:block;font-size:11.5px;color:var(--ink-3);margin-top:1px">${cat.label}${place ? ' · ' + sanitize(place) : ''}${r.contact_phone ? ' · ' + sanitize(r.contact_phone) : ''}</span>
+          <span style="display:block;font-size:11.5px;color:var(--ink-3);margin-top:1px">${cat.label}${aid && aid !== cat.label ? ' · ' + sanitize(aid) : ''}${place ? ' · ' + sanitize(place) : ''}${r.contact_phone ? ' · ' + sanitize(r.contact_phone) : ''}</span>
           ${why.length ? `<span class="wa-why">${why.join('')}</span>` : ''}
         </span>
       </label>`;
@@ -392,6 +446,25 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
   function previewHTML() {
     if (!state.selected.size) {
       return `<div style="color:#8696a0;font-size:12.5px;padding:8px">Tick something on the left and the message appears here.</div>`;
+    }
+    // Server-exact: this is the dryRun answer for this exact selection, one
+    // line per resource, exactly as the template will carry it. Long lists
+    // arrive as numbered message parts.
+    if (state.exact && state.exactKey === exactKey() && Array.isArray(state.exact.lines)) {
+      const head = sanitize(`Hello ${state.exact.headline || 'ji'}, here are support resources from Jarurat Care:`);
+      const renderLines = (ls) => ls.map(l =>
+        sanitize(l).replace(BOLD_RE, '<strong>$1</strong>')).join('<br><br>');
+      const chunks = Array.isArray(state.exact.chunks) && state.exact.chunks.length
+        ? state.exact.chunks : [state.exact.lines];
+      const bubbles = chunks.map((ls, i) => {
+        const tag = chunks.length > 1
+          ? `<div style="color:#8696a0;font-size:11px;margin-bottom:6px">Message ${i + 1} of ${chunks.length}</div>` : '';
+        const firstHead = i === 0 ? `${head}<br><br>` : '';
+        return `<div class="wa-bubble" style="margin-bottom:8px">${tag}${firstHead}${renderLines(ls)}</div>`;
+      }).join('');
+      const tail = state.exact.sending < state.selected.size
+        ? `<div style="color:#8696a0;font-size:11px">+${state.selected.size - state.exact.sending} more ticked than fit in one send</div>` : '';
+      return bubbles + tail;
     }
     const out = renderMessage(currentPlan(), state.lang);
     const warn = out.fallbacks.length
@@ -409,6 +482,7 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
     if (p) p.innerHTML = previewHTML();
     const btn = el.querySelector('#wa-send');
     if (btn) btn.disabled = !(state.selected.size && state.picked.size);
+    refreshExact();
   }
 
   // ------------------------------------------------------------
@@ -523,6 +597,12 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
         mentorId: me.id || null,
         pocName: me.full_name || null,
         pocPhone: me.phone || null,
+        // New contract, read by resource-send: patient, shelf and the ticked
+        // resource ids in match rank order. Only eligible rows among these
+        // are ever sent; overridden ruled-out rows are dropped and counted.
+        patientId: patientId,
+        category: state.shelf,
+        resourceIds: items.map(({ resource: r }) => r.id),
         pnPatientId: patientId,
         recipients: recips,
         // The whole message, already written, already in the family's
@@ -537,7 +617,7 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
         // these fields. Removing it would break sending until that function
         // is redeployed, and that lives in the carcinome_wpp project.
         resources: items.map(({ resource: r }) => ({
-          title: r.title, category: r.category, city: r.city, state: r.state,
+          id: r.id, title: r.title, category: r.category, city: r.city, state: r.state,
           summary: r.summary, eligibility: r.eligibility, contact_phone: r.contact_phone,
           link: r.link, address: r.address,
         })),
@@ -558,6 +638,7 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
         closeModal();
         let msg = `Sent ${items.length} ${items.length === 1 ? 'place' : 'places'} to ${okN} number${okN === 1 ? '' : 's'} in ${languageLabel(state.lang)}`;
         if (failN) msg += ` · ${failN} couldn't be reached`;
+        if (body.dropped_overrides) msg += ` · ${body.dropped_overrides} ruled-out pick${body.dropped_overrides === 1 ? '' : 's'} held back (not eligible)`;
         showToast(msg, 'success');
       } else if (windowClosed) {
         showToast("Couldn't send yet. These numbers haven't messaged us on WhatsApp recently, so it needs our resource template, which is still in WhatsApp's review. Try again once it's approved.", 'warning', 7000);
