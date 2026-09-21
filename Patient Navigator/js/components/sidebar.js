@@ -41,6 +41,7 @@ const NAV_ITEMS = [
       // cases". Zero reassignment requests have ever been made.
       { id: 'concerns',  label: 'Flags & concerns', icon: 'alertTriangle', route: 'concerns', roles: CARE_ROLES },
       { id: 'leads',     label: 'WhatsApp leads', icon: 'inbox', route: 'leads', roles: CARE_ROLES },
+      { id: 'docreads',  label: 'Document reads', icon: 'fileText', route: 'docreads', roles: ['admin', 'manager'] },
       { id: 'resources', label: 'Resources',      icon: 'mapPin',    route: 'resources', roles: ALL_ROLES },
       { id: 'upload',    label: 'Upload leads',   icon: 'upload',    route: 'upload',    roles: UPLOAD_ROLES },
       { id: 'intake',    label: 'Intake report',  icon: 'fileText',  route: 'intake',    roles: UPLOAD_ROLES },
