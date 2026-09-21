@@ -164,3 +164,71 @@ function injectStyle() {
   `;
   document.head.appendChild(s);
 }
+
+// ============================================================
+// The install bar.
+//
+// The header of this file says nothing pops up on its own, and that was a
+// deliberate call: the old implementation was a popup over the app that had to
+// be dismissed before you could work. This is not that. On a phone the sidebar
+// is a drawer, so a button living in it is invisible to anyone who does not go
+// looking, and almost nobody does. One slim bar, at the bottom so it never
+// covers the header, dismissible, and at most once per browser session.
+// ============================================================
+
+const BAR_ID = 'pwa-install-bar';
+const SNOOZE_KEY = 'pwa_install_snoozed';
+
+export function mountInstallBar() {
+  // Wait for beforeinstallprompt, which fires after load on Chromium.
+  const tryShow = () => {
+    if (document.getElementById(BAR_ID)) return;
+    if (!canOfferInstall()) return;
+    // Never two bars at once. A stale build is the more urgent of the two
+    // problems, and stacking a second prompt on top of it just gets both
+    // dismissed without being read.
+    if (document.querySelector('.fs-bar')) return;
+    try { if (sessionStorage.getItem(SNOOZE_KEY)) return; } catch { /* blocked */ }
+    paintBar();
+  };
+  setTimeout(tryShow, 3500);
+  window.addEventListener('beforeinstallprompt', () => setTimeout(tryShow, 300));
+}
+
+function paintBar() {
+  injectStyle();
+  const bar = document.createElement('div');
+  bar.id = BAR_ID;
+  bar.setAttribute('role', 'status');
+  bar.style.cssText = [
+    'position:fixed', 'left:0', 'right:0', 'bottom:0', 'z-index:9998',
+    'display:flex', 'align-items:center', 'gap:10px', 'flex-wrap:wrap',
+    'padding:10px 14px calc(10px + env(safe-area-inset-bottom,0px))',
+    'background:var(--surface,#fff)', 'color:var(--text,#1b1b1f)',
+    'border-top:1px solid var(--border,#d7d7de)',
+    'box-shadow:0 -2px 12px rgba(0,0,0,.12)', 'font-size:13px', 'line-height:1.35',
+  ].join(';');
+  bar.innerHTML = `
+    <div style="flex:1 1 180px;min-width:0">
+      <strong>Install Patient Navigator</strong><br>
+      ${isIOS() ? 'Tap Share, then Add to Home Screen.' : 'Opens faster and works on a weak connection.'}
+    </div>
+    <div style="display:flex;gap:8px;flex:none">
+      ${isIOS() ? '' : '<button type="button" data-act="install" style="font:inherit;font-size:13px;font-weight:700;border:0;border-radius:8px;min-height:40px;padding:8px 14px;background:var(--primary,#006469);color:#fff;cursor:pointer">Install</button>'}
+      <button type="button" data-act="close" style="font:inherit;font-size:13px;font-weight:600;border:1px solid var(--border,#d7d7de);border-radius:8px;min-height:40px;padding:8px 14px;background:transparent;color:inherit;cursor:pointer">Not now</button>
+    </div>`;
+  const close = () => {
+    bar.remove();
+    try { sessionStorage.setItem(SNOOZE_KEY, '1'); } catch { /* blocked */ }
+  };
+  bar.querySelector('[data-act="close"]').addEventListener('click', close);
+  bar.querySelector('[data-act="install"]')?.addEventListener('click', async () => {
+    if (!deferredPrompt) return close();
+    const p = deferredPrompt;
+    deferredPrompt = null;
+    close();
+    try { p.prompt(); await p.userChoice; } catch { /* the browser declined to show it */ }
+    repaintAll();
+  });
+  document.body.appendChild(bar);
+}

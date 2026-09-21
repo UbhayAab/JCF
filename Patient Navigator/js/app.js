@@ -29,11 +29,20 @@ import { renderReport } from './pages/report.js';
 import { validateEmail, validatePassword } from './utils/validators.js';
 import { CONFIG } from './config.js';
 import { initTheme, renderThemeSwitch } from './theme.js';
-import { initPwa, mountInstallButton } from './pwa.js';
+import { initPwa, mountInstallButton, mountInstallBar } from './pwa.js';
+import { startUpdateWatch, mountFreshStart } from './freshstart.js';
 import './components/anim.js';  // premium motion engine (window.AnimKit)
 
 initTheme();  // apply saved light/dark/colorful before the shell renders
 initPwa();    // register the service worker + offer "Add to Home Screen"
+// Watch for a newer deploy and offer a one-tap update. This is the counterpart
+// to the reset button: most people never open a menu, so a stale device has to
+// be told. See js/freshstart.js.
+startUpdateWatch();
+// The install offer used to be sidebar-only on purpose, with nothing popping
+// up. On a phone the sidebar is a drawer, so in practice nobody ever saw it.
+// Reversed deliberately: one dismissible bar, at most once per session.
+mountInstallBar();
 
 // A clear banner the moment the device drops offline, so a connection problem
 // reads as "you're offline" instead of a cryptic "could not save" (or silence).
@@ -142,6 +151,7 @@ function renderLoginPage() {
                  phone, so the button is offered here too. It renders nothing
                  inside the already-installed app. -->
             <div id="pwa-install-slot-login" style="margin-top:var(--space-3)"></div>
+            <div id="freshstart-slot-login" style="margin-top:var(--space-2)"></div>
           </div>
         </div>
       </div>
@@ -149,6 +159,7 @@ function renderLoginPage() {
   `;
 
   mountInstallButton(document.getElementById('pwa-install-slot-login'));
+  mountFreshStart(document.getElementById('freshstart-slot-login'));
 
   // Auth modes:
   //   'login':            email + password
@@ -453,7 +464,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20260919e';  // bumped on every breaking deploy
+const APP_BUILD = '20260922a';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];

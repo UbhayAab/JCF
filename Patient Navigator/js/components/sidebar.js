@@ -13,6 +13,7 @@ import { confirmModal } from './modal.js';
 import { icon } from './icons.js';
 import { roleLabel } from '../utils/formatters.js';
 import { mountInstallButton } from '../pwa.js';
+import { mountFreshStart } from '../freshstart.js';
 import { AVATAR_COLORS, avatarColor, initials } from '../utils/avatar.js';
 
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -121,6 +122,11 @@ export function renderSidebar() {
       <!-- Install lives here, not in a popup: present in a browser tab,
            absent once the app is installed. -->
       <div id="pwa-install-slot"></div>
+      <!-- Update / Reset. Staff kept reporting bugs that were fixed days ago
+           because their device was still on an older shell; "clear your cache"
+           is five screens deep on Android Chrome and impossible inside the
+           installed app. See js/freshstart.js. -->
+      <div id="freshstart-slot"></div>
       <div class="sidebar-user">
         <button class="sidebar-user-main ${active === 'profile' ? 'active' : ''}" id="sidebar-profile-btn" title="My profile">
           <div class="avatar" style="background: ${avatarColor(profile?.full_name)}">${getInitials(profile?.full_name)}</div>
@@ -135,6 +141,7 @@ export function renderSidebar() {
   `;
 
   mountInstallButton(sidebar.querySelector('#pwa-install-slot'));
+  mountFreshStart(sidebar.querySelector('#freshstart-slot'));
 
   sidebar.querySelectorAll('.nav-item').forEach(btn => {
     btn.addEventListener('click', () => {
