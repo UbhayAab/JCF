@@ -31,7 +31,7 @@ import { validateEmail, validatePassword } from './utils/validators.js';
 import { CONFIG } from './config.js';
 import { initTheme, renderThemeSwitch } from './theme.js';
 import { initPwa, mountInstallButton, mountInstallBar } from './pwa.js';
-import { startUpdateWatch, mountFreshStart } from './freshstart.js';
+import { startUpdateWatch, mountFreshStart, mountFreshStartHeader } from './freshstart.js';
 import './components/anim.js';  // premium motion engine (window.AnimKit)
 
 initTheme();  // apply saved light/dark/colorful before the shell renders
@@ -271,6 +271,13 @@ function renderAppShell() {
             </button>
           </div>
           <div class="header-right">
+            <!-- "Refresh app" first, and labelled. The sidebar copy of this
+                 button was never found by anyone: on a phone it is behind the
+                 hamburger and below the whole nav list. Every "this feature is
+                 broken" message so far has turned out to be a device holding an
+                 old shell, so the cure has to be the most visible control on
+                 the page. See js/freshstart.js. -->
+            <span id="freshstart-header-slot"></span>
             <span id="theme-switch-slot"></span>
             <button class="btn btn-ghost btn-sm" id="header-profile-btn">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -285,6 +292,8 @@ function renderAppShell() {
   `;
 
   renderSidebar();
+
+  mountFreshStartHeader(document.getElementById('freshstart-header-slot'));
 
   // Theme switch (light · dark · colorful): lives in the header, everywhere.
   const themeSlot = document.getElementById('theme-switch-slot');
@@ -465,7 +474,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20260922b';  // bumped on every breaking deploy
+const APP_BUILD = '20260922c';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];

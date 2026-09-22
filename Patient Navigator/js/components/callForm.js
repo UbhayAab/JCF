@@ -150,6 +150,14 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
             <option value="">Choose a patient…</option>
             ${patientOptions.map(p => `<option value="${p.id}">${p.patient_code} · ${sanitize(p.full_name)}</option>`).join('')}
           </select>
+          ${patientOptions.length ? '' : `
+            <p id="lc-nopatients" style="font-size:12.5px;line-height:1.45;color:var(--danger,#B3261E);margin:8px 0 0">
+              <strong>This list is empty, so this form cannot save.</strong>
+              Nobody is visible to you from here. Open the person from the
+              Patients page and use "Log a call" on their own page instead, or
+              ask your manager to put them on your list. Tell the tech pod if
+              this keeps happening; your role is ${sanitize(role || 'unknown')}.
+            </p>`}
         </div>`}
 
       <div class="field" style="margin-bottom:var(--s5)">
@@ -209,7 +217,14 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
       <div class="field" style="margin-top:var(--s4)"><label>A note to hand the next caller</label>
         <textarea class="textarea" id="lc-strategy" placeholder="What helped, what to lead with, best time to reach them…"></textarea></div>
 
+      <!-- A greyed-out Save with no explanation cost the nutrition pod two
+           weeks of logging: the patient dropdown was coming back empty and
+           nothing on screen said so, so it read as "the button is broken".
+           The reason lives INSIDE .form-actions on purpose, because that row
+           is the sticky one; anywhere else in this 1500px form it scrolls out
+           of sight and is no better than no message at all. -->
       <div class="form-actions">
+        <span id="lc-why" style="margin-right:auto;font-size:12.5px;line-height:1.35;color:var(--ink-3,var(--color-text-muted));text-align:left"></span>
         <button type="button" class="btn btn-secondary" id="lc-cancel">Cancel</button>
         <button type="submit" class="btn btn-primary" id="lc-submit" disabled>${icon('check')}Save call</button>
       </div>
@@ -235,8 +250,15 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     else { input.value = ''; auto.style.display = 'none'; }
   }
   function updateSubmit() {
-    const need = !state.dial || (state.dial === 'connected' && !state.recep) || (!patient && !$('#lc-patient')?.value);
-    $('#lc-submit').disabled = need;
+    const missing = [];
+    if (!patient && !$('#lc-patient')?.value) {
+      missing.push(patientOptions.length ? 'pick the patient' : 'no patient is available to pick');
+    }
+    if (!state.dial) missing.push('tap how the call went');
+    if (state.dial === 'connected' && !state.recep) missing.push('tap how they were doing');
+    $('#lc-submit').disabled = missing.length > 0;
+    const why = $('#lc-why');
+    if (why) why.textContent = missing.length ? `Still needed to save: ${missing.join(', ')}.` : '';
   }
 
   $('#lc-patient')?.addEventListener('change', updateSubmit);
@@ -319,6 +341,10 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
 
   $('#lc-followup').addEventListener('input', () => { dateManual = true; $('#lc-auto').style.display = 'none'; });
   $('#lc-cancel').addEventListener('click', () => closeModal());
+
+  // Say what is missing from the moment the form opens, not only after the
+  // first tap. An empty dropdown is then visible immediately.
+  updateSubmit();
 
   $('#lc-form').addEventListener('submit', async (e) => {
     e.preventDefault();

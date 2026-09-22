@@ -129,6 +129,25 @@ function clearCookies(report) {
   } catch (e) { report(`cookies: failed (${e.name})`); }
 }
 
+// The Android wrapper is a WebView, and a WebView keeps an HTTP cache and a
+// cookie jar that JavaScript cannot reach. Clearing only what the page can see
+// leaves the wrapper free to re-serve last week's index.html out of native
+// cache, which is the exact failure this button exists to end. NativeBridge
+// exposes clearAllData() for that. Feature-detected, so an older APK still gets
+// the web-side wipe and reports the gap instead of throwing.
+function nativeWipe(report) {
+  try {
+    const bridge = window.CarcinomeNative;
+    if (!bridge) return;
+    if (typeof bridge.clearAllData !== 'function') {
+      report('native cache: app too old to clear, update the APK');
+      return;
+    }
+    bridge.clearAllData();
+    report('native cache and cookies: cleared');
+  } catch (e) { report(`native cache: failed (${e.name})`); }
+}
+
 /**
  * Empty everything this origin owns, then reload onto the live build.
  * Returns the step-by-step report, which is also logged, so a user on a call
@@ -157,6 +176,7 @@ export async function hardReset({ reload = true } = {}) {
   await clearIndexedDb(report);
   clearWebStorage(report);
   clearCookies(report);
+  nativeWipe(report);
 
   if (reload) {
     // replace(), not assign(), so Back cannot return to the dead shell. The
@@ -192,11 +212,16 @@ function injectStyle() {
   s.textContent = `
     .fs-block { display:flex; flex-direction:column; gap:6px; }
     .fs-build { font-size:11px; opacity:.6; letter-spacing:.02em; text-align:center; }
+    /* --text and --border do not exist in this app's palette: it names them
+       --color-text and --color-border. The old names silently fell through to
+       the hardcoded fallbacks, which painted near-black text on the dark
+       theme's dark surface, so in dark mode this button was invisible. That is
+       part of why nobody ever found it. */
     .fs-btn {
       display:flex; align-items:center; justify-content:center; gap:8px; width:100%;
       padding:10px 12px; border-radius:10px; font:inherit; font-size:13px; font-weight:600;
-      cursor:pointer; border:1px solid var(--border, #d7d7de);
-      background:var(--surface, #fff); color:var(--text, #1b1b1f);
+      cursor:pointer; border:1px solid var(--color-border, #d7d7de);
+      background:var(--color-surface, #fff); color:var(--color-text, #1b1b1f);
       min-height:44px;                      /* a real tap target on a phone */
     }
     .fs-btn:hover { background:var(--surface-2, #f4f4f7); }
@@ -227,6 +252,33 @@ function injectStyle() {
     }
     .fs-doing { position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center;
       background:rgba(12,12,16,.72); color:#fff; font-size:14px; text-align:center; padding:24px; }
+
+    /* The header button. The sidebar copy of this was never found: on a phone
+       it sits behind the hamburger, below the nav list, and in the installed
+       app people do not scroll a drawer looking for maintenance. So the same
+       action also lives in the header of every page, labelled, at full
+       contrast, next to the theme switch. Tinted rather than ghost on purpose:
+       "a feature is not working" is the single most common message the team
+       sends, and the answer has to be the most visible control on the screen. */
+    .fs-hdr {
+      display:inline-flex; align-items:center; gap:7px;
+      padding:8px 13px; border-radius:10px; min-height:40px;
+      font:inherit; font-size:13px; font-weight:700; letter-spacing:.01em;
+      cursor:pointer; white-space:nowrap;
+      color:var(--primary, #006469);
+      background:var(--primary-wash, rgba(0,100,105,.10));
+      border:1.5px solid var(--primary, #006469);
+    }
+    .fs-hdr:hover { background:var(--primary, #006469); color:var(--on-primary, #fff); }
+    .fs-hdr svg { width:16px; height:16px; flex:none; }
+    .fs-hdr[disabled] { opacity:.6; cursor:progress; }
+    /* Narrow phones: keep the word, drop "app". A bare icon is what made the
+       sidebar version invisible, so the label never disappears entirely. */
+    .fs-hdr .fs-hdr-long { display:inline; }
+    @media (max-width:480px) {
+      .fs-hdr { padding:8px 10px; font-size:12.5px; }
+      .fs-hdr .fs-hdr-long { display:none; }
+    }
   `;
   document.head.appendChild(s);
 }
@@ -242,13 +294,35 @@ function overlay(text) {
   return d;
 }
 
+// The calling portal keeps a half-finished call in localStorage under
+// jcf_active_call_<user id> so a mentor can leave the app mid-call and come
+// back to it. A wipe destroys that draft. Say so BEFORE, by name, rather than
+// letting someone lose a call they were in the middle of writing up.
+function unsavedCallDraft() {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith('jcf_active_call_')) continue;
+      const s = JSON.parse(localStorage.getItem(k) || 'null');
+      if (s?.patient?.full_name) return s.patient.full_name;
+      if (s?.queueId) return 'a call';
+    }
+  } catch { /* storage blocked: nothing to lose */ }
+  return null;
+}
+
 async function confirmAndReset(btn) {
+  const draft = unsavedCallDraft();
   const ok = window.confirm(
-    'Reset this app?\n\n'
-    + 'This clears everything Patient Navigator has stored on this device - cached files, '
-    + 'saved settings and your sign-in - and reloads the newest version.\n\n'
-    + 'Nothing on the server is affected. No patient data is deleted. '
-    + 'You will need to sign in again.',
+    'Refresh this app from scratch?\n\n'
+    + 'This deletes everything Patient Navigator has stored on this device: cached files, '
+    + 'cookies, saved settings and your sign-in. Then it reloads the newest version.\n\n'
+    + (draft
+      ? `WARNING: you have an unfinished call log open for ${draft}. It will be lost. `
+        + 'Submit it first if you want to keep it.\n\n'
+      : '')
+    + 'Nothing on the server is touched. No patient record is deleted. '
+    + 'You will have to sign in again.',
   );
   if (!ok) return;
   if (btn) { btn.disabled = true; btn.textContent = 'Resetting...'; }
@@ -269,6 +343,21 @@ export function mountFreshStart(el) {
       <div class="fs-build">Build ${runningBuild()}</div>
     </div>`;
   el.querySelector(`#${el.id}-reset`)?.addEventListener('click', (e) => confirmAndReset(e.currentTarget));
+}
+
+/**
+ * The prominent one: a labelled button in the app header, on every page, on
+ * every screen size. Same action as the sidebar button.
+ */
+export function mountFreshStartHeader(el) {
+  if (!el) return;
+  injectStyle();
+  el.innerHTML = `
+    <button class="fs-hdr" type="button" id="fs-hdr-btn"
+            title="Something not working or out of date? Delete everything stored on this device and reload the newest version. You will need to sign in again.">
+      ${ICON_REFRESH}<span>Refresh<span class="fs-hdr-long"> app</span></span>
+    </button>`;
+  el.querySelector('#fs-hdr-btn')?.addEventListener('click', (e) => confirmAndReset(e.currentTarget));
 }
 
 let barShown = false;
