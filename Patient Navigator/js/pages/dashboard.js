@@ -264,15 +264,21 @@ async function loadBlockedCard() {
 // reviewed, or a read that stopped part way with its pages stored. Two sat for
 // 16 and 26 days in Sep 2026 because nothing told anyone. The view is
 // security_invoker, so each person sees only the families they can open.
+// That is still too wide for "waiting for you": a nutritionist can open the
+// whole nutrition pool, and saw other mentors' uploads here. Managers see
+// every read waiting; everyone else sees the uploads they made.
 // Self-hides when nothing is waiting.
 async function loadDocsWaitingCard() {
   const el = document.getElementById('docs-waiting-card');
   if (!el) return;
   try {
     const sb = getSupabase();
-    const { data, count, error } = await sb.from('v_document_batches_needing_action')
+    let query = sb.from('v_document_batches_needing_action')
       .select('batch_id,patient_id,patient_code,action,days_waiting,page_count', { count: 'exact' })
       .order('days_waiting', { ascending: false }).limit(6);
+    const me = getCurrentProfile();
+    if (!isManagerOrAdmin() && me?.id) query = query.eq('uploaded_by', me.id);
+    const { data, count, error } = await query;
     if (error) throw error;
     const rows = data || [];
     if (!rows.length) { el.innerHTML = ''; return; }
@@ -285,8 +291,8 @@ async function loadDocsWaitingCard() {
         <div class="due-list">${rows.map(r => `
           <div class="due-row clickable" data-patient="${r.patient_id}" style="cursor:pointer">
             <span class="avatar avatar-sm" style="background:var(--warn)">${initials(nameOf[r.patient_id] || '?')}</span>
-            <div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(nameOf[r.patient_id] || r.patient_code || 'Unknown')} <span class="due-meta">${sanitize(r.patient_code || '')}</span></div>
-            <div class="due-meta">${r.action === 'review' ? 'Read, waiting for your review' : 'Reading stopped part way: open Documents, Finish reading'} · ${r.page_count || 0} page(s) · ${r.days_waiting} day(s) waiting</div></div>
+            <div class="grow" style="flex:1;min-width:0"><div class="due-name" style="white-space:normal">${sanitize(nameOf[r.patient_id] || r.patient_code || 'Unknown')} <span class="due-meta">${sanitize(r.patient_code || '')}</span></div>
+            <div class="due-meta" style="white-space:normal">${r.action === 'review' ? 'Read, waiting for your review' : 'Reading stopped part way: open Documents, Finish reading'} · ${r.page_count || 0} page(s) · ${r.days_waiting} day(s) waiting</div></div>
           </div>`).join('')}</div>
       </div>`;
     el.querySelectorAll('[data-patient]').forEach(row => row.addEventListener('click', () => navigate('patients/' + row.dataset.patient)));
