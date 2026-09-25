@@ -19,6 +19,10 @@ import { measureLabel, leverLabel, giLabel } from '../utils/catalog.js';
 import { valueLabel } from '../components/analyticsFilters.js';
 import { exportToXLSX } from '../utils/xlsx.js';
 import { renderAskTab, renderFilesTab } from './dataRoomAsk.js';
+// Past the 800-line soft ceiling by a few lines on purpose: the journeys half
+// lives in its own module. The next addition here should first move the cohort
+// filter (F, roster, FACETS and friends) into a module of its own.
+import { journeyDefs, renderJourneysTab } from './dataRoomJourneys.js';
 
 const DATA_ROOM_ROLES = ['admin', 'manager', 'content'];
 
@@ -76,6 +80,11 @@ const isFiltered = () => FACETS.some((x) => F[x.key]);
 function allowedIds() {
   if (!isFiltered()) return null;
   return new Set(roster.filter((p) => matchesFilter(p, F)).map((p) => p.id));
+}
+// The journey datasets carry patient_code, not the row id.
+function allowedCodes() {
+  if (!isFiltered()) return null;
+  return new Set(roster.filter((p) => matchesFilter(p, F)).map((p) => p.patient_code));
 }
 
 // Options for one dropdown, counted with that dropdown's OWN filter removed:
@@ -378,6 +387,7 @@ function datasetDefs() {
   ];
 
   defs.push(...impactDefs());
+  defs.push(...journeyDefs());
 
   if (!managerish) return defs;
 
@@ -570,6 +580,10 @@ function datasetDefs() {
 // `pid` (there are none today) is left whole rather than silently emptied.
 async function buildDataset(ds, sb) {
   const { rows, columns } = await ds.build(sb);
+  if (ds.code) {
+    const codes = allowedCodes();
+    return { rows: codes ? rows.filter((r) => codes.has(ds.code(r))) : rows, columns };
+  }
   const ids = allowedIds();
   if (!ids || !ds.pid) return { rows, columns };
   return { rows: rows.filter((r) => ids.has(ds.pid(r))), columns };
@@ -586,7 +600,8 @@ export async function renderExports(container) {
 
   const defs = datasetDefs();
   const impact = defs.filter((x) => x.impact);
-  const research = defs.filter((x) => x.research && !x.impact);
+  const journeys = defs.filter((x) => x.journey);
+  const research = defs.filter((x) => x.research && !x.impact && !x.journey);
   const operational = defs.filter((x) => !x.research);
 
   const card = (ds) => `
@@ -628,10 +643,12 @@ export async function renderExports(container) {
 
     <div class="tab-strip" id="dr-tabs" style="display:flex;gap:4px;margin-bottom:var(--s5);border-bottom:1px solid var(--line);overflow-x:auto">
       <button class="btn btn-ghost btn-sm dr-tab is-active" data-tab="datasets">${icon('download')}Datasets</button>
+      <button class="btn btn-ghost btn-sm dr-tab" data-tab="journeys">${icon('activity')}Journeys</button>
       <button class="btn btn-ghost btn-sm dr-tab" data-tab="ask">${icon('search')}Ask in English</button>
       <button class="btn btn-ghost btn-sm dr-tab" data-tab="files">${icon('fileText')}Shared files</button>
     </div>
 
+    <div id="dr-pane-journeys" hidden></div>
     <div id="dr-pane-ask" hidden></div>
     <div id="dr-pane-files" hidden></div>
 
@@ -645,6 +662,8 @@ export async function renderExports(container) {
 
     ${section('Impact report and ASCO GI',
       'The tables people keep asking for over WhatsApp. Registry growth here counts the day a mentor first reached the family, not the day the old registry was migrated in, so it does not show the 504-patient spike the current chart does.', impact)}
+    ${section('Patient journeys (longitudinal)',
+      'Every patient followed from the day a mentor first reached the family: one row per patient, one row per patient per month, and every event on the timeline. Patient codes only. The Journeys tab draws the same data.', journeys)}
     ${section('Research-grade (de-identified)', 'Safe to share with the research team: no names, no phone numbers.', research)}
     ${section('Operational (contains personal data)', 'Names, phones and free-text notes: for internal coordination only.', operational)}
     </div>
@@ -652,7 +671,7 @@ export async function renderExports(container) {
 
   // ---- tabs. Ask and Files are built on first visit, not on page load:
   // most people come here for a CSV and should not pay for the rest. ----
-  const panes = { datasets: '#dr-pane-datasets', ask: '#dr-pane-ask', files: '#dr-pane-files' };
+  const panes = { datasets: '#dr-pane-datasets', journeys: '#dr-pane-journeys', ask: '#dr-pane-ask', files: '#dr-pane-files' };
   const built = { datasets: true };
   container.querySelectorAll('.dr-tab').forEach((tab) => tab.addEventListener('click', () => {
     const want = tab.dataset.tab;
@@ -668,6 +687,7 @@ export async function renderExports(container) {
       try {
         if (want === 'ask') renderAskTab(host);
         if (want === 'files') renderFilesTab(host);
+        if (want === 'journeys') renderJourneysTab(host);
       } catch (e) {
         host.innerHTML = `<div class="card"><p style="font:var(--t-xs);color:var(--ink-3)">This tab failed to load: ${e.message}</p></div>`;
       }
@@ -734,7 +754,7 @@ export async function renderExports(container) {
 
   roster = [];
   renderFilter();
-  fetchAll(() => sb.from('patients').select('id, state, city, cancer_stage, gi_subtype').order('id'))
+  fetchAll(() => sb.from('patients').select('id, patient_code, state, city, cancer_stage, gi_subtype').order('id'))
     .then((rows) => { roster = rows; renderFilter(); })
     .catch((e) => { console.error('Filter roster failed:', e); filterEl.innerHTML =
       '<div style="font:var(--t-xs);color:var(--ink-3)">Filters unavailable. Downloads will cover every patient.</div>'; });
