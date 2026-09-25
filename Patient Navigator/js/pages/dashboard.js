@@ -427,6 +427,15 @@ async function renderSpecialistStats(id) {
       outMine = (data || []).filter(r => r.mine).length;
     } catch (e) { console.warn('outreach count', e); }
   }
+  // Her own saved calls (sql/145). get_specialist_stats counts people and
+  // check-ins only, so a specialist's calls never showed on her own
+  // dashboard: "her work activity is not being reflected" (C1.1b, 22 Sep).
+  let calls = null;
+  try {
+    const { data, error } = await sb.rpc('my_call_counts');
+    if (error) throw error;
+    calls = data;
+  } catch (e) { console.warn('call counts', e); }
   // Fall back gracefully if the DB predates v49 (no mine/pool split yet).
   const mine = s.my_patients ?? s.domain_patients ?? 0;
   const pool = s.domain_patients ?? 0;
@@ -440,6 +449,8 @@ async function renderSpecialistStats(id) {
   const grid = document.getElementById('stats');
   if (grid) grid.innerHTML = [
     { ico: 'users', cls: '', num: mine, lbl: 'People in your care' },
+    ...(calls ? [{ ico: 'phoneCall', cls: 'ok', num: calls.calls_month ?? 0,
+      lbl: `Your calls this month (${calls.calls_today ?? 0} today)`, go: 'calls' }] : []),
     { ico: role === 'nutritionist' ? 'handHeart' : 'heart', cls: 'ok', num: s.unclaimed ?? '…',
       lbl: 'Waiting to be claimed', go: role === 'nutritionist' ? 'nutrition' : null },
     ...(outMine != null ? [{ ico: 'phone', cls: 'warn', num: outMine, lbl: 'To offer nutrition today', go: 'nutrition' }] : []),
