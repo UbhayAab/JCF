@@ -11,7 +11,7 @@
 // rename is the only thing that guarantees a stale index.html - and with it
 // the old ?v= asset URLs it points at - is thrown away rather than served on
 // the next slow connection. v3 -> v4 on 2026-09-10.
-const CACHE = 'jcf-pwa-v16';
+const CACHE = 'jcf-pwa-v17';
 const NET_TIMEOUT_MS = 3500;
 const SHELL = ['./', './index.html', './icons/icon-192.png', './icons/icon-512.png', './manifest.webmanifest'];
 
