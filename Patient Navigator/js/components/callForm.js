@@ -31,10 +31,77 @@ const STATUS_DAYS = { no_answer: 7, busy: 7, voicemail: 7, callback_requested: 7
 
 function addDays(n) { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().split('T')[0]; }
 
+// ---- Save must always be reachable, and must always say what it is waiting for ----
+// Field report, 25 Sep 2026 (a nutrition intern on an iPhone): "Save Call
+// is not getting enabled". The API gateway logs show this form opened 46 times
+// between 07 and 23 Sep on her phone and laptop, and not one call_logs insert.
+// Two different things sat on top of the action row at the bottom of this
+// sheet on her iPhone: from 22 Sep the PWA install bar (position:fixed,
+// z-index 9998, over the modal's 70), and before that the bottom of the sheet
+// itself, because a phone modal was sized 100vh, which on iOS Safari is taller
+// than the space the fixed overlay really has while the toolbar shows, so the
+// sticky Save row sat under the toolbar. Both are fixed where they live
+// (js/pwa.js, js/components/modal.js, css/layout.css). This file makes the form
+// defend itself against the next overlay nobody has thought of yet:
+//   1. Save is never `disabled` for "not ready yet", only aria-disabled. A tap
+//      on it always does something: it says what is missing and takes you there.
+//   2. After opening, and whenever the viewport changes (keyboard, rotation,
+//      toolbar), the form hit-tests Save. If anything covers it or it is off
+//      the visible screen, the action row moves to the top of the sheet.
+const LC_STYLE_ID = 'lc-form-style';
+function injectCallFormStyle() {
+  if (document.getElementById(LC_STYLE_ID)) return;
+  const s = document.createElement('style');
+  s.id = LC_STYLE_ID;
+  s.textContent = `
+    #lc-form .lc-need { outline: 2px solid var(--danger, #B3261E); outline-offset: 6px; border-radius: 10px; }
+    #lc-form .lc-need-msg { color: var(--danger, #B3261E); font-size: 12.5px; font-weight: 600; margin: 8px 0 0; }
+    #lc-why.lc-why-alert { color: var(--danger, #B3261E); font-weight: 700; }
+    .modal #lc-form .form-actions.lc-actions-top {
+      position: sticky; top: 0; bottom: auto;
+      margin: calc(-1 * var(--s6)) calc(-1 * var(--s6)) var(--s5);
+      padding-bottom: var(--s4);
+      border-top: 0; border-bottom: 1px solid var(--line); border-radius: 0;
+    }
+    @media (max-width: 480px) {
+      .modal #lc-form .form-actions { flex-wrap: wrap; }
+      .modal #lc-form #lc-why { flex: 1 1 100%; }
+    }
+  `;
+  document.head.appendChild(s);
+}
+
+function describeEl(node) {
+  if (!node) return 'nothing';
+  if (node.id) return `#${node.id}`;
+  const cls = typeof node.className === 'string' ? node.className.trim().split(/\s+/)[0] : '';
+  const host = node.closest?.('[id]');
+  return `${node.tagName.toLowerCase()}${cls ? '.' + cls : ''}${host ? ` inside #${host.id}` : ''}`;
+}
+
+// Is the button inside the visible screen, and is it the topmost thing at
+// three points along its middle? elementFromPoint is what a tap hits, so a bar
+// painted over the button fails this even though the button is "visible".
+function hitTestButton(btn) {
+  if (!btn || !btn.isConnected) return { ok: true };
+  const r = btn.getBoundingClientRect();
+  if (!r.width || !r.height) return { ok: false, why: 'not laid out' };
+  const vv = window.visualViewport;
+  const top = vv ? vv.offsetTop : 0;
+  const bottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+  if (r.top < top - 1 || r.bottom > bottom + 1) return { ok: false, why: 'outside the visible screen' };
+  for (const fx of [0.5, 0.15, 0.85]) {
+    const hit = document.elementFromPoint(r.left + r.width * fx, r.top + r.height / 2);
+    if (hit && hit !== btn && !btn.contains(hit)) return { ok: false, why: `covered by ${describeEl(hit)}` };
+  }
+  return { ok: true };
+}
+
 // opts: { patient: {id, full_name} | null, onSaved: fn | null }
 export async function openCallForm({ patient = null, onSaved = null } = {}) {
   const sb = getSupabase();
   const me = getCurrentProfile() || { id: getCurrentUser()?.id };
+  injectCallFormStyle();
 
   // Patient choices when not pre-selected. Care roles (mentors, nutrition,
   // therapy) read through RLS can_care_for_patient, which already covers
@@ -222,18 +289,24 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
            nothing on screen said so, so it read as "the button is broken".
            The reason lives INSIDE .form-actions on purpose, because that row
            is the sticky one; anywhere else in this 1500px form it scrolls out
-           of sight and is no better than no message at all. -->
+           of sight and is no better than no message at all.
+           aria-disabled, NOT disabled: a disabled button swallows the tap, so
+           a person who cannot see the reason gets nothing at all. This one
+           answers every tap with what is missing (see explainMissing). -->
       <div class="form-actions">
-        <span id="lc-why" style="margin-right:auto;font-size:12.5px;line-height:1.35;color:var(--ink-3,var(--color-text-muted));text-align:left"></span>
+        <span id="lc-why" role="status" aria-live="polite" style="margin-right:auto;font-size:12.5px;line-height:1.35;color:var(--ink-3,var(--color-text-muted));text-align:left"></span>
         <button type="button" class="btn btn-secondary" id="lc-cancel">Cancel</button>
-        <button type="submit" class="btn btn-primary" id="lc-submit" disabled>${icon('check')}Save call</button>
+        <button type="submit" class="btn btn-primary" id="lc-submit" aria-disabled="true">${icon('check')}Save call</button>
       </div>
     </form>
   `;
 
+  // Set by guardSaveReachable() below; every way out of the sheet calls it, so
+  // the guard's resize listeners never outlive the form.
+  let stopGuard = () => {};
   showModal({
     title: patient ? `Log a call · ${sanitize(patient.full_name)}` : 'Log a call',
-    content: el, size: 'lg',
+    content: el, size: 'lg', onClose: () => stopGuard(),
   });
 
   const $ = (sel) => el.querySelector(sel);
@@ -249,16 +322,60 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     if (days != null) { input.value = addDays(days); auto.style.display = ''; }
     else { input.value = ''; auto.style.display = 'none'; }
   }
-  function updateSubmit() {
+  // One list of what is missing, used by the reason text, by the button's
+  // state and by a tap on the button, so the three can never disagree.
+  // `anchor` is the control a person has to touch to clear the item.
+  function missingItems() {
     const missing = [];
     if (!patient && !$('#lc-patient')?.value) {
-      missing.push(patientOptions.length ? 'pick the patient' : 'no patient is available to pick');
+      missing.push({ text: patientOptions.length ? 'pick the patient' : 'no patient is available to pick', anchor: '#lc-patient' });
     }
-    if (!state.dial) missing.push('tap how the call went');
-    if (state.dial === 'connected' && !state.recep) missing.push('tap how they were doing');
-    $('#lc-submit').disabled = missing.length > 0;
+    if (!state.dial) missing.push({ text: 'tap how the call went', anchor: '#lc-outcome' });
+    if (state.dial === 'connected' && !state.recep) missing.push({ text: 'tap how they were doing', anchor: '#lc-recep' });
+    return missing;
+  }
+  function reasonText(missing) {
+    return missing.length ? `Still needed to save: ${missing.map(m => m.text).join(', ')}.` : '';
+  }
+  function updateSubmit() {
+    const missing = missingItems();
+    const btn = $('#lc-submit');
+    btn.setAttribute('aria-disabled', missing.length ? 'true' : 'false');
+    btn.title = missing.length ? reasonText(missing) : 'Save this call';
     const why = $('#lc-why');
-    if (why) why.textContent = missing.length ? `Still needed to save: ${missing.join(', ')}.` : '';
+    if (why) {
+      why.textContent = reasonText(missing);
+      if (!missing.length) why.classList.remove('lc-why-alert');
+    }
+    // A field that was flagged and is now answered stops shouting.
+    $$('.lc-need').forEach(f => {
+      if (!missing.some(m => f.contains($(m.anchor)))) {
+        f.classList.remove('lc-need');
+        f.querySelector('.lc-need-msg')?.remove();
+      }
+    });
+  }
+  // A tap on Save while something is missing: say it next to the button, in
+  // a toast, and at the field itself, then bring that field into view.
+  function explainMissing(missing) {
+    const why = $('#lc-why');
+    if (why) { why.textContent = reasonText(missing); why.classList.add('lc-why-alert'); }
+    const first = missing[0];
+    const control = first ? $(first.anchor) : null;
+    const field = control?.closest('.field') || control;
+    if (field) {
+      field.classList.add('lc-need');
+      if (!field.querySelector('.lc-need-msg')) {
+        const msg = document.createElement('p');
+        msg.className = 'lc-need-msg';
+        msg.textContent = `Needed to save: ${first.text}.`;
+        field.appendChild(msg);
+      }
+      field.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      const focusable = control.matches?.('select, button, input') ? control : control.querySelector?.('button, select, input');
+      focusable?.focus({ preventScroll: true });
+    }
+    showToast(reasonText(missing), 'warning', 6000);
   }
 
   $('#lc-patient')?.addEventListener('change', updateSubmit);
@@ -340,21 +457,67 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   });
 
   $('#lc-followup').addEventListener('input', () => { dateManual = true; $('#lc-auto').style.display = 'none'; });
-  $('#lc-cancel').addEventListener('click', () => closeModal());
+  $('#lc-cancel').addEventListener('click', () => { stopGuard(); closeModal(); });
 
   // Say what is missing from the moment the form opens, not only after the
   // first tap. An empty dropdown is then visible immediately.
   updateSubmit();
+  stopGuard = guardSaveReachable();
+
+  // After the sheet has animated in, and again whenever the visible screen
+  // changes size (keyboard, rotation, a browser toolbar showing or hiding),
+  // check that a tap on Save would actually land on Save. If it would not,
+  // move the whole action row, reason included, to the top of the sheet,
+  // which no bottom bar, toolbar or keyboard can reach. Once moved it stays
+  // moved for the life of this form, so it cannot flicker.
+  function guardSaveReachable() {
+    const overlay = el.closest('.modal-overlay');
+    let moved = false;
+    let tries = 0;
+    const check = () => {
+      if (!el.isConnected) { detach(); return; }
+      // The overlay ignores pointer events until it is .active, so a hit test
+      // before that would blame the page underneath. Wait for it.
+      if (overlay && !overlay.classList.contains('active')) {
+        if (++tries < 20) setTimeout(check, 150);
+        return;
+      }
+      const res = hitTestButton($('#lc-submit'));
+      if (res.ok || moved) {
+        if (!res.ok) console.warn(`[callForm] Save call is still not reachable at the top of the sheet (${res.why}).`);
+        return;
+      }
+      moved = true;
+      const actions = $('.form-actions');
+      const form = $('#lc-form');
+      if (actions && form) {
+        form.insertBefore(actions, form.firstChild);
+        actions.classList.add('lc-actions-top');
+        el.closest('.modal')?.scrollTo({ top: 0 });
+      }
+      console.warn(`[callForm] Save call was not reachable (${res.why}); moved the action row to the top of the sheet.`);
+      setTimeout(check, 250);
+    };
+    const onResize = () => setTimeout(check, 200);
+    const detach = () => {
+      window.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('resize', onResize);
+    };
+    window.addEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('resize', onResize);
+    setTimeout(check, 450);
+    return detach;
+  }
 
   $('#lc-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const patientId = patient?.id || $('#lc-patient')?.value;
-    if (!patientId) { showToast('Please choose a patient', 'warning'); return; }
-    if (!state.dial) { showToast('Please choose how the call went', 'warning'); return; }
-    const connected = state.dial === 'connected';
-    if (connected && !state.recep) { showToast('Please note how they were doing', 'warning'); return; }
-
     const btn = $('#lc-submit');
+    if (btn.disabled) return;   // a save is already in flight
+    const missing = missingItems();
+    if (missing.length) { explainMissing(missing); return; }
+    const patientId = patient?.id || $('#lc-patient')?.value;
+    const connected = state.dial === 'connected';
+
     btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:17px;height:17px;border-width:2.5px"></span>Saving…';
 
     const customReq = $('#lc-customreq')?.value.trim() || '';
@@ -442,6 +605,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
         if (e3) { console.error('assessment save:', e3.message); scoreFailed = e3.message; }
       }
 
+      stopGuard();
       closeModal();
       const savedLevers = leverRows.length - leverFailures.length;
       const extras = (savedLevers ? ` · ${savedLevers} support` : '')

@@ -82,6 +82,7 @@ export async function renderDashboard(container) {
       <div id="saturday-card"></div>
       <div id="resource-replies"></div>
       <div id="blocked-card"></div>
+      <div id="docs-waiting-card"></div>
 
       <div class="hero-metrics" id="hero-metrics">
         <div class="hero-card teal"><span class="hc-ico">${icon('handHeart')}</span><div class="hc-label">Reached today</div><div class="hc-num">…</div><div class="hc-sub">Loading…</div></div>
@@ -147,7 +148,7 @@ export async function renderDashboard(container) {
   const tasks = [loadStats(),
     isSpecialist ? loadRecentCheckins() : loadRecentCalls(),
     isSpecialist ? loadSpecialistPeople(role) : loadDueToday(isIntake),
-    loadSaturdayCard(role), loadResourceReplies()];
+    loadSaturdayCard(role), loadResourceReplies(), loadDocsWaitingCard()];
   if (isAdmin) { tasks.push(loadIntakeSummary(), loadInsights(), loadBlockedCard()); }
   else if (isCaller) tasks.push(loadCallerAvailability());
   await Promise.all(tasks);
@@ -256,6 +257,39 @@ async function loadBlockedCard() {
       </div>`;
     el.querySelectorAll('[data-patient]').forEach(row => row.addEventListener('click', () => navigate('patients/' + row.dataset.patient)));
     document.getElementById('open-blocked')?.addEventListener('click', () => navigate('team'));
+  } catch { el.innerHTML = ''; }
+}
+
+// Document reads waiting for a person (sql/143): a finished read nobody has
+// reviewed, or a read that stopped part way with its pages stored. Two sat for
+// 16 and 26 days in Sep 2026 because nothing told anyone. The view is
+// security_invoker, so each person sees only the families they can open.
+// Self-hides when nothing is waiting.
+async function loadDocsWaitingCard() {
+  const el = document.getElementById('docs-waiting-card');
+  if (!el) return;
+  try {
+    const sb = getSupabase();
+    const { data, count, error } = await sb.from('v_document_batches_needing_action')
+      .select('batch_id,patient_id,patient_code,action,days_waiting,page_count', { count: 'exact' })
+      .order('days_waiting', { ascending: false }).limit(6);
+    if (error) throw error;
+    const rows = data || [];
+    if (!rows.length) { el.innerHTML = ''; return; }
+    const ids = [...new Set(rows.map(r => r.patient_id))];
+    const { data: people } = await sb.from('patients').select('id,full_name').in('id', ids);
+    const nameOf = Object.fromEntries((people || []).map(p => [p.id, p.full_name]));
+    el.innerHTML = `
+      <div class="card card-flush" style="border-left:3px solid var(--warn)">
+        <div class="card-head"><h3>Documents waiting for you</h3><span class="badge badge-warn">${count ?? rows.length}</span></div>
+        <div class="due-list">${rows.map(r => `
+          <div class="due-row clickable" data-patient="${r.patient_id}" style="cursor:pointer">
+            <span class="avatar avatar-sm" style="background:var(--warn)">${initials(nameOf[r.patient_id] || '?')}</span>
+            <div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(nameOf[r.patient_id] || r.patient_code || 'Unknown')} <span class="due-meta">${sanitize(r.patient_code || '')}</span></div>
+            <div class="due-meta">${r.action === 'review' ? 'Read, waiting for your review' : 'Reading stopped part way: open Documents, Finish reading'} · ${r.page_count || 0} page(s) · ${r.days_waiting} day(s) waiting</div></div>
+          </div>`).join('')}</div>
+      </div>`;
+    el.querySelectorAll('[data-patient]').forEach(row => row.addEventListener('click', () => navigate('patients/' + row.dataset.patient)));
   } catch { el.innerHTML = ''; }
 }
 

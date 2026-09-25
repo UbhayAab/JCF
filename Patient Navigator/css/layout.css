@@ -575,10 +575,21 @@
   .quick-actions { flex-direction: column; }
   .quick-action-btn { width: 100%; min-width: 0; }
   .data-table { min-width: 600px; }
-  .modal { max-height: 100vh; border-radius: var(--r-lg) var(--r-lg) 0 0; margin-top: auto; }
+  /* 100%, not 100vh. On iOS Safari 100vh is the LARGE viewport (toolbar
+     retracted) while this fixed overlay ends at the toolbar, so any sheet taller
+     than the screen (the Log-a-call form always is) overflowed downward: an
+     auto margin resolves to 0 when the item does not fit, the sheet top-aligns,
+     and its bottom strip, which is exactly where the sticky Save row sits, went
+     under Safari's toolbar. A nutritionist on an iPhone could open the form and
+     never find Save (field reports 08/09 and 22/09). 100% of the overlay is the
+     space the browser really gives us. Safe-area padding keeps the action row
+     out of the home-indicator strip (index.html sets viewport-fit=cover) and
+     the sheet top out from under the status bar of the installed app. */
+  .modal { max-height: 100%; border-radius: var(--r-lg) var(--r-lg) 0 0; margin-top: auto; }
   .modal::before { content: ""; display: block; width: 40px; height: 4px; border-radius: var(--r-pill); background: var(--line-strong); margin: 10px auto 0; }
-  .modal-overlay { padding: 0; align-items: flex-end; }
+  .modal-overlay { padding: env(safe-area-inset-top, 0px) 0 0; align-items: flex-end; }
   .modal-footer { border-radius: 0; }
+  .modal .form-actions, .modal-footer { padding-bottom: calc(var(--s4) + env(safe-area-inset-bottom, 0px)); }
 }
 @media (max-width: 760px) {
   .greet h1 { font-size: 29px; }

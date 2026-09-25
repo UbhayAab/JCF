@@ -45,6 +45,16 @@
 //   existing rollup trigger turns it into availability, visit_required and
 //   phone_reachable for everyone.
 //
+//   SAYS WHO DID NOT ANSWER (sql/142, 25 Sep 2026). A family told intern
+//   Vaishnavi that two organisations from the old financial PDF never picked
+//   up, and nothing in the portal could hear it. Mentors now record that from
+//   the patient record (js/components/resourceReport.js). An organisation a
+//   family could not reach, or that turned them away, is held back from every
+//   WhatsApp send, carries a banner here, and sits on "Needs re-check" until
+//   somebody rings it and gets an answer. That list downloads as the CSV that
+//   corrects the Sheet the PDF is built from, and a family matched here can
+//   be sent from here, so the PDF stops being the way help goes out.
+//
 // The three patient-facing columns docs/FIELD_FEEDBACK_TRIAGE_2026-09-03.md
 // section 7 said had to be settled first are settled and rendered here:
 // how_to_apply, documents_needed and who_to_ask. sql/121 explains the
@@ -59,6 +69,11 @@ import { icon } from '../components/icons.js';
 import { RESOURCE_CATEGORIES } from '../utils/catalog.js';
 import { reasonLabels } from '../utils/matchReasons.js';
 import { navigate } from '../router.js';
+import { exportToCSV } from '../utils/formatters.js';
+import { openWhatsappShare, recipientsFromPatient } from '../components/whatsappShare.js';
+import {
+  openResourceReport, reportSummary, loadRecheck, recheckHTML, wireRecheck, recheckCsvColumns,
+} from '../components/resourceReport.js';
 
 // ------------------------------------------------------------
 // the shelves, in the order an intern needs them
@@ -116,10 +131,22 @@ const TAG_LABELS = {
   phone_gets_answered: 'Phone gets answered', no_phone_number: 'No phone number',
   never_phoned_by_us: 'Never phoned by us', too_little_known: 'Too little known',
   has_steps: 'Steps written down', smallprint_read: 'Small print read',
+  family_got_no_answer: 'A family could not get through',
+  family_said_it_did_not_help: 'A family said it did not help',
 };
 // The ones that must be read before anything else on the card.
 const LOUD_TAGS = new Set(['attendant_charged', 'children_only', 'needs_ration_card',
-  'must_go_in_person', 'not_taking_anyone', 'phone_never_answered', 'one_gender_only']);
+  'must_go_in_person', 'not_taking_anyone', 'phone_never_answered', 'one_gender_only',
+  'family_got_no_answer', 'family_said_it_did_not_help']);
+
+// sql/142: the two reasons a row is HELD BACK rather than ruled out for one
+// family. They are about the organisation, so they apply to everybody.
+const HOLD_LABELS = {
+  family_got_no_answer: 'Held back: a family could not get through',
+  family_said_it_did_not_help: 'Held back: a family said it did not help',
+};
+const isHeld = (r) => (r.why_not || []).some((k) => HOLD_LABELS[k]);
+const whyLabel = (k) => HOLD_LABELS[k] || reasonLabels([k])[0] || k;
 
 const KIND_BADGE = {
   charitable_stay: { label: 'Free stay', tone: 'ok' },
@@ -154,6 +181,12 @@ const S = {
   scope: null,
   loading: false,
   error: null,
+  // sql/142. Empty, not an error, until the migration is live.
+  flags: new Map(),     // resource_id -> row of v_resource_flags
+  view: 'shelf',        // 'shelf' | 'recheck'
+  recheck: [],
+  recheckCount: null,   // null = the re-check list does not exist yet
+  recheckError: null,
 };
 let containerEl = null;
 let reqSeq = 0;
@@ -175,6 +208,8 @@ export async function renderResources(container, params = {}) {
   const shelfKey = parts[0] || null;
 
   S.category = null; S.aid = null;
+  // #resources/recheck opens straight onto the list the maintainers work from.
+  S.view = shelfKey === 'recheck' ? 'recheck' : 'shelf';
   if (shelfKey && COMBO[shelfKey]) { S.category = COMBO[shelfKey].category; S.aid = COMBO[shelfKey].aid; }
   else if (shelfKey && SHELVES.some(s => s.key === shelfKey)) {
     S.aid = shelfKey === 'all' ? null : shelfKey;
@@ -188,10 +223,16 @@ export async function renderResources(container, params = {}) {
         <h1>Resource Library</h1>
         <p class="header-subtitle" style="margin:4px 0 0">Real help you can offer on a call. Free stays and grants come first; the rented rooms are behind their own chip.</p>
       </div>
-      ${isManagerOrAdmin() ? `<button class="btn btn-primary btn-sm" id="rs-add">${icon('plus')}Add resource</button>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" id="rs-recheck" hidden>${icon('alertTriangle')}<span>Needs re-check</span></button>
+        ${isManagerOrAdmin() ? `<button class="btn btn-primary btn-sm" id="rs-add">${icon('plus')}Add resource</button>` : ''}
+      </div>
     </div>
     <div id="rs-body"><div class="card" style="padding:28px;text-align:center;color:var(--ink-3)">Opening the shelf…</div></div>`;
   container.querySelector('#rs-add')?.addEventListener('click', () => openResourceModal(null));
+  container.querySelector('#rs-recheck')?.addEventListener('click', () => {
+    navigate(S.view === 'recheck' ? 'resources' : 'resources/recheck');
+  });
 
   // The URL is the source of truth for who this shelf is matched to. S is a
   // module-level object that outlives one render, so leaving the previous
@@ -237,19 +278,28 @@ async function load() {
   };
 
   try {
-    const [browse, facets] = await Promise.all([
-      sb.rpc('browse_resources', args),
+    const [browse, facets, flags, recheck] = await Promise.all([
+      S.view === 'shelf' ? sb.rpc('browse_resources', args) : Promise.resolve({ data: S.rows }),
       // p_category is deliberately NULL: the shelf chips are the primary
       // navigation and their counts must not change when you click one.
-      sb.rpc('resource_shelf_facets', {
+      S.view === 'shelf' ? sb.rpc('resource_shelf_facets', {
         p_patient: args.p_patient, p_category: null, p_q: S.query || null,
-      }),
+      }) : Promise.resolve({ data: S.facets }),
+      // What families reported (sql/142). A handful of rows, not 617. Before
+      // the migration is live this errors, and the shelf simply shows no flags.
+      sb.from('v_resource_flags')
+        .select('resource_id, held_back, flag, open_reports, open_reasons, recent_reports, last_open_at, last_answered_at'),
+      loadRecheck().then((rows) => ({ rows }), (error) => ({ error })),
     ]);
     if (seq !== reqSeq) return;              // a newer keystroke already won
     if (browse.error) throw browse.error;
     S.rows = browse.data || [];
     S.facets = facets.error ? null : facets.data;
     S.scope = S.rows.length ? S.rows[0].scope : (S.facets?.scope || null);
+    S.flags = new Map((flags.error ? [] : flags.data || []).map((f) => [f.resource_id, f]));
+    S.recheck = recheck.rows || [];
+    S.recheckCount = recheck.error ? null : S.recheck.length;
+    S.recheckError = recheck.error ? recheck.error.message : null;
   } catch (e) {
     if (seq !== reqSeq) return;
     S.error = e.message;
@@ -265,6 +315,8 @@ async function load() {
 function paint() {
   const body = containerEl?.querySelector('#rs-body');
   if (!body) return;
+  paintRecheckButton();
+  if (S.view === 'recheck') { paintRecheck(body); return; }
 
   if (S.error) {
     body.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div>
@@ -282,7 +334,10 @@ function paint() {
     return true;
   });
   const fit = visible.filter(r => r.eligible);
-  const out = visible.filter(r => !r.eligible);
+  // Held back (sql/142) is about the organisation, not this family, so it
+  // gets its own section, open, instead of hiding in "ruled out".
+  const held = visible.filter(r => !r.eligible && isHeld(r));
+  const out = visible.filter(r => !r.eligible && !isHeld(r));
   const f = S.facets || {};
 
   body.innerHTML = `
@@ -303,9 +358,20 @@ function paint() {
       .rs-slot b{color:var(--ink-1);font-weight:700}
       .rs-fresh{font-size:11px;color:var(--ink-3);display:flex;align-items:center;gap:5px}
       .rs-price{font:var(--t-body-strong);font-size:14px;color:var(--ink-1)}
+      .rs-card.held{border-color:var(--danger)}
+      .rs-hold{font:var(--t-xs);color:var(--ink-1);padding:8px 10px;border-radius:var(--r-sm);background:var(--danger-soft);border-left:3px solid var(--danger);line-height:1.5}
+      .rs-hold b{color:var(--danger)}
+      .rs-told{font:var(--t-xs);color:var(--ink-2);padding:6px 10px;border-radius:var(--r-sm);background:var(--surface-2);line-height:1.5}
     </style>
 
     ${patientBarHTML()}
+
+    ${S.recheckCount ? `
+      <div class="rs-hold" style="margin-bottom:var(--s4);display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span style="flex:1;min-width:240px"><b>${S.recheckCount} organisation${S.recheckCount === 1 ? '' : 's'} need${S.recheckCount === 1 ? 's' : ''} a re-check.</b>
+          Families could not get through, or were turned away. They are not sent to anyone until somebody rings them and gets an answer.</span>
+        <button class="btn btn-secondary btn-sm" id="rs-open-recheck">${icon('phoneCall')}Open the re-check list</button>
+      </div>` : ''}
 
     <div class="rs-chips" id="rs-shelves">
       ${SHELVES.map(s => {
@@ -345,7 +411,8 @@ function paint() {
 
     <div class="due-meta" style="margin-bottom:var(--s4)">
       ${S.loading ? 'Working out the shelf…'
-        : `<strong>${fit.length}</strong> to read out${out.length ? ` &nbsp;|&nbsp; ${out.length} ruled out for this family` : ''}${
+        : `<strong>${fit.length}</strong> to read out${held.length ? ` &nbsp;|&nbsp; <span style="color:var(--danger)">${held.length} held back</span>` : ''}${
+            out.length ? ` &nbsp;|&nbsp; ${out.length} ruled out${S.patient ? ' for this family' : ''}` : ''}${
             totalMatching() > S.rows.length ? ` &nbsp;|&nbsp; showing ${S.rows.length} of ${totalMatching()}, narrow it with a chip` : ''}`}
     </div>
 
@@ -353,15 +420,22 @@ function paint() {
       <div class="empty" style="padding:40px 20px">
         <div class="ico-wrap">${icon('search')}</div>
         <h4>Nothing on this shelf</h4>
-        <p>${out.length ? 'Everything here was ruled out for this family. Open the ruled-out list below and override if you know better.' : 'Try a different chip, or clear the search.'}</p>
+        <p>${out.length || held.length ? 'Everything here was ruled out or is held back. Look at the lists below.' : 'Try a different chip, or clear the search.'}</p>
       </div>` : `
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:var(--s4)">
         ${fit.map(r => card(r, false)).join('')}
       </div>`}
 
+    ${held.length ? `
+      <h3 style="font:var(--t-body-strong);font-size:15px;margin:var(--s5) 0 4px;color:var(--danger)">Held back from WhatsApp: ${held.length}</h3>
+      <div class="rr-note" style="margin-bottom:var(--s3)">A family could not get through to these, or was turned away. They are not sent to anyone until somebody rings them and gets an answer.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:var(--s4)">
+        ${held.map(r => card(r, true)).join('')}
+      </div>` : ''}
+
     ${out.length ? `
       <button class="btn btn-ghost btn-sm" id="rs-toggle-out" style="margin-top:var(--s4)">
-        ${S.showRuledOut ? 'Hide' : 'Show'} ${out.length} ruled out for this family</button>
+        ${S.showRuledOut ? 'Hide' : 'Show'} ${out.length} ruled out${S.patient ? ' for this family' : ''}</button>
       ${S.showRuledOut ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:var(--s4);margin-top:var(--s4)">
         ${out.map(r => card(r, true)).join('')}</div>` : ''}` : ''}`;
 
@@ -409,7 +483,7 @@ function patientBarHTML() {
   const note = SCOPE_NOTE[S.scope];
   const why = S.facets?.by_why_not || {};
   const whyLine = Object.entries(why).sort((a, b) => b[1] - a[1])
-    .map(([k, n]) => `${esc(reasonLabels([k])[0] || k)} ${n}`).join(' &middot; ');
+    .map(([k, n]) => `${esc(whyLabel(k))} ${n}`).join(' &middot; ');
 
   return `<div class="card" style="padding:12px 15px;margin-bottom:var(--s4);border-left:4px solid var(--primary)">
     <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
@@ -421,7 +495,28 @@ function patientBarHTML() {
     </div>
     ${whyLine ? `<div class="due-meta" style="margin-top:6px">Ruled out: ${whyLine}</div>` : ''}
     ${note ? `<div class="due-meta" style="margin-top:6px;color:var(--warn)">${note}</div>` : ''}
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:9px;padding-top:9px;border-top:1px solid var(--line)">
+      <button class="btn btn-gold btn-sm" id="rs-send">${icon('phone')}Send on WhatsApp</button>
+      <button class="btn btn-secondary btn-sm" id="rs-report">${icon('message')}Report an NGO</button>
+      <span class="rr-note" style="flex:1;min-width:220px">Send from here, not from the old PDF: organisations a family could not reach are left out automatically.</span>
+    </div>
   </div>`;
+}
+
+// What families reported about this organisation (sql/142), in the mentor's
+// words. Held back: loud, with the way out. Otherwise: what was said in the
+// last six months, because "asks for a ration card" stays true after the
+// phone is answered.
+function reportedHTML(r) {
+  const fl = S.flags.get(r.resource_id);
+  if (!fl) return '';
+  if (fl.held_back) {
+    const when = fl.last_open_at ? ` Latest ${esc(shortDay(fl.last_open_at))}.` : '';
+    return `<div class="rs-hold"><b>Held back from WhatsApp.</b> ${esc(reportSummary(fl.open_reasons).join('; '))}.${when}
+      Ring them: if they answer, record it below and the hold lifts for everyone.</div>`;
+  }
+  const said = reportSummary(fl.recent_reports);
+  return said.length ? `<div class="rs-told"><b>Families told us (last 6 months):</b> ${esc(said.join('; '))}.</div>` : '';
 }
 
 // ------------------------------------------------------------
@@ -429,11 +524,14 @@ function patientBarHTML() {
 // ------------------------------------------------------------
 function card(r, isOut) {
   const badge = KIND_BADGE[r.aid_kind] || { label: r.aid_kind || 'Help', tone: 'neutral' };
-  const place = [r.city, r.state].filter(Boolean).join(', ');
-  const tags = (r.tags || []).filter(t => TAG_LABELS[t]);
+  const place = clean([r.city, r.state].filter(Boolean).join(', '));
+  const held = isHeld(r) || S.flags.get(r.resource_id)?.held_back === true;
+  // The hold is said once, in the banner, not again as a tag.
+  const tags = (r.tags || []).filter(t => TAG_LABELS[t] && !HOLD_LABELS[t]);
+  const why = (r.why_not || []).filter(k => !HOLD_LABELS[k]);
 
   return `
-    <div class="card rs-card ${isOut ? 'out' : ''}">
+    <div class="card rs-card ${isOut && !held ? 'out' : ''} ${held ? 'held' : ''}">
       <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
         <span class="badge badge-${badge.tone}">${badge.label}</span>
         <span class="rs-price">${priceLine(r)}</span>
@@ -447,7 +545,9 @@ function card(r, isOut) {
           <span style="width:13px;height:13px;display:inline-flex;flex:none">${icon('mapPin')}</span>${esc(place)}</div>` : ''}
       </div>
 
-      ${isOut ? `<div class="rs-tags">${reasonLabels(r.why_not).map(x => `<span class="bad">${esc(x)}</span>`).join('')}</div>` : ''}
+      ${reportedHTML(r)}
+
+      ${isOut && why.length ? `<div class="rs-tags">${why.map(k => `<span class="bad">${esc(whyLabel(k))}</span>`).join('')}</div>` : ''}
 
       ${tags.length ? `<div class="rs-tags">${tags
         .sort((a, b) => (LOUD_TAGS.has(b) ? 1 : 0) - (LOUD_TAGS.has(a) ? 1 : 0))
@@ -456,9 +556,9 @@ function card(r, isOut) {
       ${whoLine(r) ? `<div class="rs-slot"><b>Who it is for:</b> ${whoLine(r)}</div>` : ''}
       ${r.summary ? `<p style="font:var(--t-sm);color:var(--ink-2);margin:0">${esc(clean(r.summary))}</p>` : ''}
 
-      ${r.documents_needed ? `<div class="rs-slot"><b>Papers to carry:</b> ${esc(r.documents_needed)}</div>` : ''}
+      ${r.documents_needed ? `<div class="rs-slot"><b>Papers to carry:</b> ${esc(clean(r.documents_needed))}</div>` : ''}
       ${r.how_to_apply ? `<div class="rs-slot"><b>How to apply:</b>\n${esc(clean(r.how_to_apply))}</div>` : ''}
-      ${r.who_to_ask ? `<div class="rs-slot"><b>Ask for:</b> ${esc(r.who_to_ask)}</div>` : ''}
+      ${r.who_to_ask ? `<div class="rs-slot"><b>Ask for:</b> ${esc(clean(r.who_to_ask))}</div>` : ''}
       ${r.smallprint ? `<div class="rs-slot" style="border-left:3px solid var(--line)"><b>What their own page says:</b> ${esc(clean(r.smallprint))}</div>` : ''}
       ${(!r.how_to_apply && !r.documents_needed && !r.who_to_ask) ? `
         <div class="due-meta" style="color:var(--warn)">Nobody has written down how a family actually applies to this one.${
@@ -468,10 +568,11 @@ function card(r, isOut) {
         ${r.contact_phone ? `<a href="tel:${esc(String(r.contact_phone).replace(/\s/g, ''))}" class="btn btn-ghost btn-sm" style="gap:6px;padding:4px 8px">${icon('phone')}<span class="tnum">${esc(r.contact_phone)}</span></a>` : ''}
         ${r.link ? `<a href="${esc(r.link)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="gap:6px;padding:4px 8px">${icon('arrowRight')}Details</a>` : ''}
         <span style="flex:1"></span>
-        <button class="btn btn-ghost btn-sm" data-check="${r.resource_id}" style="padding:4px 8px;font-size:11.5px">${icon('phoneCall')}Somebody rang them</button>
+        ${S.patient ? `<button class="btn btn-ghost btn-sm" data-tried="${r.resource_id}" style="padding:4px 8px;font-size:11.5px" title="Record what happened when this family tried them">${icon('message')}Family tried this</button>` : ''}
+        <button class="btn ${held ? 'btn-primary' : 'btn-ghost'} btn-sm" data-check="${r.resource_id}" style="padding:4px 8px;font-size:11.5px">${icon('phoneCall')}${held ? 'Ring them to lift the hold' : 'Somebody rang them'}</button>
       </div>
       <div class="rs-fresh">${freshLine(r)}</div>
-      ${r.address ? `<div class="due-meta">${esc(r.address)}</div>` : ''}
+      ${r.address ? `<div class="due-meta">${esc(clean(r.address))}</div>` : ''}
     </div>`;
 }
 
@@ -566,6 +667,78 @@ function wire(body) {
     const row = S.rows.find(r => r.resource_id === b.dataset.check);
     if (row) openCheckModal(row);
   }));
+
+  // sql/142: the family on this shelf, sent from here, and reported from here.
+  body.querySelector('#rs-open-recheck')?.addEventListener('click', () => navigate('resources/recheck'));
+  body.querySelector('#rs-send')?.addEventListener('click', openSendForPatient);
+  body.querySelector('#rs-report')?.addEventListener('click', () =>
+    openResourceReport({ patient: S.patient, onSaved: load }));
+  body.querySelectorAll('[data-tried]').forEach(b => b.addEventListener('click', () => {
+    const row = S.rows.find(r => r.resource_id === b.dataset.tried);
+    if (row) openResourceReport({ patient: S.patient, resource: { id: row.resource_id, title: row.title, category: row.category, city: row.city, state: row.state }, onSaved: load });
+  }));
+}
+
+// The WhatsApp send, from the shelf. The same component and the same Edge
+// Function as the patient record, so there is one send path and it is the
+// one that leaves held-back organisations out.
+async function openSendForPatient() {
+  if (!S.patient) return;
+  const { data, error } = await getSupabase().from('patients')
+    .select('id, patient_code, full_name, phone_full, caregiver_phone_full, caregiver_name')
+    .eq('id', S.patient.id).maybeSingle();
+  if (error || !data) { showToast('Could not open this family: ' + (error?.message || 'not found'), 'error'); return; }
+  openWhatsappShare({ patient: data, recipients: recipientsFromPatient(data) });
+}
+
+// ------------------------------------------------------------
+// "Needs re-check" (sql/142)
+// ------------------------------------------------------------
+function paintRecheckButton() {
+  const b = containerEl?.querySelector('#rs-recheck');
+  if (!b) return;
+  // Hidden until the list exists (the migration is live), then always shown,
+  // with the count, so an empty list reads as good news rather than absence.
+  b.hidden = S.recheckCount == null && S.view !== 'recheck';
+  b.querySelector('span').textContent = S.view === 'recheck'
+    ? 'Back to the shelf'
+    : `Needs re-check${S.recheckCount ? ` · ${S.recheckCount}` : ''}`;
+  b.classList.toggle('btn-danger', !!S.recheckCount && S.view !== 'recheck');
+  b.classList.toggle('btn-secondary', !S.recheckCount || S.view === 'recheck');
+}
+
+function paintRecheck(body) {
+  const rows = S.recheck || [];
+  const onShelf = rows.filter(x => x.kind === 'on_shelf').length;
+  body.innerHTML = `
+    <div class="card" style="padding:14px 16px;margin-bottom:var(--s4);display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;border-left:4px solid var(--danger)">
+      <div style="flex:1;min-width:260px">
+        <h3 style="margin:0 0 4px;font:var(--t-body-strong);font-size:16px">Needs re-check</h3>
+        <div class="rr-note">Organisations a family could not reach, or that turned them away. None of them is sent to anyone until somebody rings and gets an answer.
+          Ring each one and record it: an answer lifts the hold for everyone. The ones marked "not on our shelf" come from the old PDF and the Sheet it is built from; download the list, fix the Sheet, then close them here.</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" id="rc-csv" ${rows.length ? '' : 'disabled'}>${icon('download')}Download for the Sheet (CSV)</button>
+      </div>
+    </div>
+    ${S.loading ? '<div class="due-meta">Loading…</div>' : ''}
+    ${S.recheckError ? `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>The re-check list is not available yet</h4>
+      <p>${esc(S.recheckError)}</p><p class="due-meta">It arrives with sql/142.</p></div>` : `
+      <div class="rr-note" style="margin-bottom:var(--s3)">${onShelf} held back on the shelf &nbsp;|&nbsp; ${rows.length - onShelf} named by families but not on our shelf</div>
+      ${recheckHTML(rows, { isManager: isManagerOrAdmin() })}`}`;
+
+  body.querySelector('#rc-csv')?.addEventListener('click', () =>
+    exportToCSV(S.recheck, 'organisations_to_fix_in_the_sheet', recheckCsvColumns()));
+  wireRecheck(body, rows, {
+    onRing: (x) => openCheckModal({ resource_id: x.resource_id, title: x.organisation, contact_phone: x.contact_phone,
+      tags: [], held: true }, load),
+    onEdit: async (x) => {
+      const { data } = await getSupabase().from('resources').select('*').eq('id', x.resource_id).maybeSingle();
+      if (data) openResourceModal(data);
+    },
+    onAdd: (x) => openResourceModal(null, { title: x.organisation, category: 'financial_aid' }),
+    onChanged: load,
+  });
 }
 
 function focusSearch() {
@@ -628,12 +801,17 @@ function openPatientPicker() {
 // availability is 'unknown' everywhere and three of the seven filters the
 // 24/08 report asked for cannot exist. Four seconds of an intern's time,
 // once, is the whole fix, so the form is four fields and nothing else.
-function openCheckModal(row) {
+function openCheckModal(row, onDone = null) {
+  const fl = S.flags.get(row.resource_id);
+  const heldNow = row.held || fl?.held_back || isHeld(row);
   const el = document.createElement('div');
   el.innerHTML = `
     <div style="font:var(--t-sm);color:var(--ink-2);margin-bottom:var(--s4)">
       <strong>${esc(clean(row.title))}</strong>${row.contact_phone ? ` &middot; <span class="tnum">${esc(row.contact_phone)}</span>` : ''}
     </div>
+    ${heldNow ? `<div class="rs-hold" style="margin-bottom:var(--s4);font:var(--t-xs);padding:8px 10px;border-radius:var(--r-sm);background:var(--danger-soft);border-left:3px solid var(--danger)">
+      <b style="color:var(--danger)">Held back from WhatsApp.</b> ${esc(fl ? reportSummary(fl.open_reasons).join('; ') : 'A family could not get through.')}
+      If they answer now, the hold lifts for every family. If a family was turned away for an age limit, an office visit or papers, a manager should add that with Edit so the matcher filters it.</div>` : ''}
     <div class="form-group"><label class="form-label">Did anyone answer?</label>
       <div class="chip-row" id="ck-ans">
         <button type="button" class="fchip on" data-ans="yes">Yes, we spoke to them</button>
@@ -694,17 +872,22 @@ function openCheckModal(row) {
       return;
     }
     closeModal();
-    showToast(answered ? 'Recorded. Everyone sees this now.' : 'Recorded as no answer', 'success');
-    await load();
+    showToast(answered
+      ? (heldNow ? 'Recorded. They answered, so the hold is lifted for every family.' : 'Recorded. Everyone sees this now.')
+      : (heldNow ? 'Recorded as no answer. It stays held back.' : 'Recorded as no answer'), 'success');
+    await (onDone ? onDone() : load());
   });
 }
 
 // ------------------------------------------------------------
 // Add / edit (managers & admins)
 // ------------------------------------------------------------
-function openResourceModal(existing) {
+// `prefill` seeds a NEW entry, e.g. an organisation a family named from the
+// old PDF: adding it under the same name carries the family's report onto it
+// (sql/142 matches by name), so it arrives held back until someone rings it.
+function openResourceModal(existing, prefill = null) {
   const me = getCurrentProfile();
-  const r = existing || {};
+  const r = existing || prefill || {};
   const el = document.createElement('div');
   el.innerHTML = `
     <div class="form-row">
@@ -842,9 +1025,10 @@ function openResourceModal(existing) {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const attr = (s) => esc(s ?? '');
-// Registered organisation names carry en dashes in the database (sql/82
-// explains why they are not rewritten there). They are still not going on
-// screen.
-const clean = (s) => String(s ?? '').replace(/[\u2013\u2014]/g, '-');
+// sql/142 rewrote the dash characters sql/82 had left in organisation names
+// and addresses, and a trigger keeps them out. This still covers any row
+// written before that ran, and every dash-like character, not just two.
+const clean = (s) => String(s ?? '').replace(/[\u2010-\u2015\u2212]/g, '-');
+const shortDay = (d) => new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 const numOrNull = (v) => { const n = Number(v); return (v === '' || v == null || !isFinite(n)) ? null : n; };
 const intOrNull = (v) => { const n = parseInt(String(v).trim(), 10); return isFinite(n) ? n : null; };

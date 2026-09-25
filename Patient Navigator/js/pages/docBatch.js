@@ -35,6 +35,25 @@
 //     different ages across three sheets. The UI shows the disagreement rather
 //     than silently picking a side, except where the disagreement is a
 //     birthday, which is marked benign and shown quietly.
+//
+// WHAT 25 SEPTEMBER 2026 TAUGHT IT
+//
+//   - Hospital and lab report PDFs are often locked with a password. pdf.js
+//     answers a locked file with "No password given", and nothing here asked
+//     for one, so the whole batch aborted and the raw message went to a toast.
+//     A mentor and then a manager picked the same files again and again and
+//     got the same toast every time. A locked PDF now asks for its password
+//     inside the progress window, and can be skipped on its own.
+//
+//   - Each of those tries left a batch row saying 'uploading' forever,
+//     because the row was created before a single page had been drawn. Pages
+//     are drawn first now, and nothing is written until there are some.
+//
+//   - The pipeline is driven from this browser tab, one call per step, so a
+//     closed tab or a locked phone strands a batch mid read, and a batch that
+//     finished reading could only be reviewed in the session that read it.
+//     Upload documents now lists earlier uploads that stopped or are waiting
+//     for a review, and finishes or opens them. See findUnfinishedBatches.
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
@@ -59,6 +78,33 @@ const MAX_PAGES = 80;
 const PDFJS = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs';
 const PDFJS_WORKER = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs';
 const STEP_TIMEOUT_MS = 300000;
+// A batch whose last step started or finished longer ago than this is not
+// being read by anyone. The longest single step is one Gemini call, capped at
+// 240 s in supabase/functions/doc-parse/index.ts, so ten quiet minutes is
+// never a batch that is merely slow.
+const STALLED_AFTER_MS = 10 * 60 * 1000;
+
+// What a stranded batch says in the patient's Documents tab. They all start
+// with a word resumeBatch recognises, so a finished resume can clear them.
+const NOTE_UPLOAD_STOPPED = 'Stopped before every page was stored, so nothing was read. '
+  + 'Pick the files again.';
+const NOTE_SEGMENT_STOPPED = 'Stopped while sorting the pages. Nothing is lost: open Upload '
+  + 'documents on this patient and choose Finish reading.';
+const NOTE_READ_STOPPED = 'Stopped before any document was read. Nothing is lost: open Upload '
+  + 'documents on this patient and choose Finish reading.';
+const NOTE_MERGE_STOPPED = 'Stopped before the documents were compared. Nothing is lost: open '
+  + 'Upload documents on this patient and choose Finish reading.';
+const NOTE_NO_DOCUMENT = 'Stopped: the reader found no document it could read on these pages. '
+  + 'Upload a clearer photo, or discard this.';
+const RETRY_HINT = 'The pages are saved. Open Upload documents on this patient to finish reading them.';
+
+// Finishing a stopped batch CLAIMS it first, by writing this note in the same
+// conditional UPDATE that moves its status (see claimBatch). The note carries
+// the time, readable in the Documents tab and parsed back by claimTime, so a
+// claim counts as activity and nobody else is offered the batch meanwhile.
+const CLAIM_PREFIX = 'Being finished now, started ';
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const IST_MS = 330 * 60 * 1000;
 
 const CORRECTED_NEVER_AUTO = true;
 
@@ -189,15 +235,146 @@ function isBenignAgeDrift(recordAge, docAge) {
 // ============================================================
 // Rendering pages in the browser
 // ============================================================
+/**
+ * Why one picked file cannot go into the batch, in words a mentor can act on.
+ *
+ * Every per file failure used to be a plain Error thrown out of the render
+ * loop, which aborted the WHOLE batch and showed the raw message. A problem is
+ * about one file unless `fatal` is set: the batch carries on without that file
+ * and the reason is listed, while it runs and again on the review screen.
+ */
+export class FileProblem extends Error {
+  constructor(kind, message, { fatal = false } = {}) {
+    super(message);
+    this.name = 'FileProblem';
+    this.kind = kind;
+    this.fatal = fatal;
+  }
+}
+
 let pdfLibPromise = null;
 async function loadPdfLib() {
   if (!pdfLibPromise) {
     pdfLibPromise = import(/* @vite-ignore */ PDFJS).then((lib) => {
       lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
       return lib;
+    }).catch(() => {
+      // Cached as a rejection, one failed CDN fetch would fail every later PDF
+      // in this tab until a reload, with nothing to say that a reload helps.
+      pdfLibPromise = null;
+      throw readerUnavailable();
     });
   }
   return pdfLibPromise;
+}
+
+function readerUnavailable() {
+  return new FileProblem('reader_unavailable',
+    'The PDF reader did not load, so nothing was uploaded. Check the internet connection '
+    + 'and try again.', { fatal: true });
+}
+
+/** A PDF, including one handed over with no type and no .pdf name, which some
+ *  Android file managers do with a document saved out of WhatsApp. */
+async function looksLikePdf(file) {
+  if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) return true;
+  if (file.type.startsWith('image/')) return false;
+  const head = new Uint8Array(await file.slice(0, 1024).arrayBuffer());
+  const sig = [0x25, 0x50, 0x44, 0x46, 0x2d];   // %PDF-
+  for (let i = 0; i + sig.length <= head.length; i++) {
+    if (sig.every((b, k) => head[i + k] === b)) return true;
+  }
+  return false;
+}
+
+/**
+ * Open one PDF, asking for its password when it is locked.
+ *
+ * pdf.js reports a PDF locked with a user password as a PasswordException,
+ * "No password given" (NEED_PASSWORD) and, after a wrong one, "Incorrect
+ * Password" (INCORRECT_PASSWORD). It only raises it for a file whose trailer
+ * carries an /Encrypt dictionary that the empty password does not open, so an
+ * ordinary PDF, or one with only an owner password (printing or copying
+ * restrictions), never reaches this. Hospital and lab reports in India very
+ * often are locked, usually with a date of birth or a phone number.
+ *
+ * Until 25 Sep 2026 the loading task had no onPassword, so that exception came
+ * straight out of getDocument, aborted the batch, and was shown raw. onPassword
+ * keeps the one loading task open while the mentor answers, so a wrong
+ * password is asked again with the reason, and the file is never re-read.
+ *
+ * `asker` is null when there is nobody to ask (tools/pdf_split_check.html calls
+ * renderFile with no options); a locked file then fails with a sentence.
+ * `known` holds passwords that opened an earlier file in THIS upload, in memory
+ * for the length of one upload and never written anywhere. They are tried
+ * first, silently, because a family often sends several reports from the same
+ * lab locked with the same date of birth.
+ */
+async function openPdf(pdfjs, file, { asker = null, known = [] } = {}) {
+  const { INCORRECT_PASSWORD } = pdfjs.PasswordResponses;
+  const task = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+  const untried = [...known];
+  let typed = false;          // the mentor has typed a password for THIS file
+  let usedEarlier = false;    // a password that opened an earlier file was tried
+  let lastTried = null;
+  let answer = null;          // 'skip' | 'stop' | 'nobody'
+
+  task.onPassword = (updatePassword, reason) => {
+    if (untried.length) {
+      usedEarlier = true;
+      lastTried = untried.shift();
+      updatePassword(lastTried);
+      return;
+    }
+    if (!asker) { answer = 'nobody'; updatePassword(new Error('locked')); return; }
+    asker.ask({
+      fileName: file.name,
+      wrong: typed && reason === INCORRECT_PASSWORD,
+      usedEarlier: usedEarlier && !typed,
+    }).then((reply) => {
+      if (reply?.password) {
+        typed = true;
+        lastTried = reply.password;
+        updatePassword(reply.password);
+        return;
+      }
+      answer = reply?.stop ? 'stop' : 'skip';
+      updatePassword(new Error(answer));
+    }, () => { answer = 'skip'; updatePassword(new Error('skip')); });
+  };
+
+  try {
+    const doc = await task.promise;
+    if (lastTried !== null && !known.includes(lastTried)) known.unshift(lastTried);
+    return doc;
+  } catch (err) {
+    task.destroy().catch(() => {});
+    throw pdfProblem(file, err, answer);
+  } finally {
+    asker?.settle();
+  }
+}
+
+/** Every way opening a PDF can fail, as the sentence the mentor reads. The raw
+ *  pdf.js message is never shown: it is written for developers. */
+function pdfProblem(file, err, answer) {
+  if (answer === 'stop') return new FileProblem('stopped', 'Stopped. Nothing was uploaded.', { fatal: true });
+  if (answer === 'skip') {
+    return new FileProblem('skipped', `${file.name} is locked with a password and you skipped it.`);
+  }
+  if (answer === 'nobody' || err?.name === 'PasswordException') {
+    return new FileProblem('locked', `${file.name} is locked with a password, so it was left out.`);
+  }
+  if (err instanceof FileProblem) return err;
+  if (['InvalidPDFException', 'FormatError', 'MissingPDFException'].includes(err?.name)) {
+    return new FileProblem('damaged', `${file.name} could not be opened. The file looks damaged, `
+      + 'or it is not really a PDF. Ask the family to send it again.');
+  }
+  // pdf.js runs in a worker loaded from the CDN; when that fails, every PDF
+  // fails the same way and the file itself is not the problem
+  if (/worker/i.test(String(err?.message))) return readerUnavailable();
+  return new FileProblem('unreadable', `${file.name} could not be opened as a PDF. Ask the family `
+    + 'to send it again, or to send a photo of each page.');
 }
 
 function canvasToBlob(canvas, quality) {
@@ -221,56 +398,237 @@ async function sha256Hex(blob) {
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** One picked file to one or more page records, each with a full render and a
- *  thumbnail. A PDF becomes as many pages as it has; an image becomes one. */
-export async function renderFile(file, onPage) {
+/** One PDF page to a page record: rendered once at the resolution the full
+ *  JPEG needs, then downscaled for the thumbnail. Rendering twice is the slow
+ *  way to get the same pixels. */
+async function renderPdfPage(doc, pageNo, fileName) {
+  const page = await doc.getPage(pageNo);
+  try {
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(3, MAX_EDGE / Math.max(base.width, base.height));
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    const full = await drawScaled(canvas, canvas.width, canvas.height, MAX_EDGE, JPEG_Q);
+    const thumb = await drawScaled(canvas, canvas.width, canvas.height, THUMB_EDGE, THUMB_Q);
+    return { source_name: fileName, source_kind: 'pdf_page', source_page_no: pageNo, full, thumb };
+  } finally {
+    page.cleanup();
+  }
+}
+
+/** A page that cannot be drawn costs that page, not the file: the rest are
+ *  kept and the missing page numbers are reported through onNote. */
+async function renderPdfFile(file, onPage, { asker = null, known = [], onNote = null,
+                                            isCancelled = null } = {}) {
+  const pdfjs = await loadPdfLib();
+  const doc = await openPdf(pdfjs, file, { asker, known });
   const pages = [];
-  if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
-    const pdfjs = await loadPdfLib();
-    const doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  const broken = [];
+  try {
     for (let i = 1; i <= doc.numPages; i++) {
-      const page = await doc.getPage(i);
-      const base = page.getViewport({ scale: 1 });
-      // render once at the resolution the full JPEG needs, then downscale for
-      // the thumbnail. Rendering twice is the slow way to get the same pixels.
-      const scale = Math.min(3, MAX_EDGE / Math.max(base.width, base.height));
-      const viewport = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(viewport.width);
-      canvas.height = Math.round(viewport.height);
-      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-      const full = await drawScaled(canvas, canvas.width, canvas.height, MAX_EDGE, JPEG_Q);
-      const thumb = await drawScaled(canvas, canvas.width, canvas.height, THUMB_EDGE, THUMB_Q);
-      pages.push({ source_name: file.name, source_kind: 'pdf_page', source_page_no: i,
-                   full, thumb });
-      onPage?.(pages.length);
-      page.cleanup();
+      if (isCancelled?.()) throw pdfProblem(file, null, 'stop');
+      try {
+        pages.push(await renderPdfPage(doc, i, file.name));
+        onPage?.(pages.length);
+      } catch {
+        broken.push(i);
+      }
     }
+  } finally {
     doc.destroy();
-  } else if (file.type.startsWith('image/')) {
-    const bitmap = await createImageBitmap(file).catch(() => null);
-    if (!bitmap) {
-      // The commonest cause by a distance is HEIC off an iPhone, which the
-      // file picker accepts as image/* and which no browser here can decode.
-      // "Could not read IMG_4821.HEIC" tells a mentor nothing she can act on;
-      // the fix is one setting on the phone that sent it.
-      const heic = /\.(heic|heif)$/i.test(file.name) || /hei[cf]/i.test(file.type);
-      throw new Error(heic
-        ? `${file.name} is an iPhone HEIC photo, which this browser cannot open. `
-          + `Ask for it again from WhatsApp, or set the phone's camera to `
-          + `"Most Compatible" and re-take it.`
-        : `Could not read ${file.name}. It may be corrupted, or not really a photo.`);
-    }
-    const full = await drawScaled(bitmap, bitmap.width, bitmap.height, MAX_EDGE, JPEG_Q);
-    const thumb = await drawScaled(bitmap, bitmap.width, bitmap.height, THUMB_EDGE, THUMB_Q);
-    bitmap.close();
-    pages.push({ source_name: file.name, source_kind: 'image', source_page_no: null,
-                 full, thumb });
-    onPage?.(1);
-  } else {
-    throw new Error(`${file.name} is not a photo or a PDF`);
+  }
+  if (!pages.length) {
+    throw new FileProblem('damaged', `${file.name} opened, but none of its pages could be drawn. `
+      + 'Ask the family to send it again.');
+  }
+  if (broken.length) {
+    const many = broken.length > 1;
+    onNote?.(`${file.name}: page${many ? 's' : ''} ${broken.join(', ')} could not be drawn and `
+      + `${many ? 'were' : 'was'} left out.`);
   }
   return pages;
+}
+
+async function renderImageFile(file, onPage) {
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) {
+    // The commonest cause by a distance is HEIC off an iPhone, which the
+    // file picker accepts as image/* and which no browser here can decode.
+    // "Could not read IMG_4821.HEIC" tells a mentor nothing she can act on;
+    // the fix is one setting on the phone that sent it.
+    const heic = /\.(heic|heif)$/i.test(file.name) || /hei[cf]/i.test(file.type);
+    throw new FileProblem(heic ? 'heic' : 'unreadable', heic
+      ? `${file.name} is an iPhone HEIC photo, which this browser cannot open. `
+        + `Ask for it again from WhatsApp, or set the phone's camera to `
+        + `"Most Compatible" and re-take it.`
+      : `Could not read ${file.name}. It may be corrupted, or not really a photo.`);
+  }
+  const full = await drawScaled(bitmap, bitmap.width, bitmap.height, MAX_EDGE, JPEG_Q);
+  const thumb = await drawScaled(bitmap, bitmap.width, bitmap.height, THUMB_EDGE, THUMB_Q);
+  bitmap.close();
+  onPage?.(1);
+  return [{ source_name: file.name, source_kind: 'image', source_page_no: null, full, thumb }];
+}
+
+/** One picked file to one or more page records, each with a full render and a
+ *  thumbnail. A PDF becomes as many pages as it has; an image becomes one.
+ *  `opts.asker` asks for a locked PDF's password. Without it a locked PDF
+ *  throws a FileProblem that says so, never the raw pdf.js message. */
+export async function renderFile(file, onPage, opts = {}) {
+  if (!file.size) {
+    throw new FileProblem('empty', `${file.name} is empty. It probably did not finish `
+      + 'downloading. Ask the family to send it again.');
+  }
+  if (await looksLikePdf(file)) return renderPdfFile(file, onPage, opts);
+  if (file.type.startsWith('image/')) return renderImageFile(file, onPage);
+  throw new FileProblem('unsupported', `${file.name} is not a photo or a PDF, so it was left out.`);
+}
+
+/**
+ * Draw every picked file, BEFORE anything is written anywhere.
+ *
+ * The batch row used to be inserted first, so every render failure left a row
+ * saying 'uploading' forever: PAT-2026-01106 collected four on 25 Sep 2026,
+ * one per try at the same locked PDF. Nothing is created now until there are
+ * pages to store.
+ *
+ * A file that cannot be drawn is left out with its reason and the rest carry
+ * on. Only a fatal problem (the mentor stopped, the PDF reader did not load,
+ * too many pages) ends the upload, and at this point that costs nothing.
+ * The passwords that opened files are forgotten when this returns.
+ */
+export async function prepareFiles(files, { stage = () => {}, asker = null, onLeftOut = null,
+                                            isCancelled = null } = {}) {
+  const pages = [];
+  const leftOut = [];
+  const notes = [];
+  const known = [];
+  try {
+    for (const [i, file] of files.entries()) {
+      if (isCancelled?.()) throw pdfProblem(file, null, 'stop');
+      const at = (i / files.length) * 0.3;
+      stage(`Preparing ${file.name} (${i + 1} of ${files.length})…`, at);
+      try {
+        const rendered = await renderFile(file, (n) => {
+          stage(`Preparing ${file.name}: ${n} page(s) so far…`, at);
+        }, { asker, known, isCancelled, onNote: (m) => notes.push(m) });
+        pages.push(...rendered);
+      } catch (err) {
+        if (err instanceof FileProblem && err.fatal) throw err;
+        const item = {
+          name: file.name,
+          reason: err instanceof FileProblem ? err.message
+            : `${file.name} could not be read, so it was left out.`,
+        };
+        leftOut.push(item);
+        onLeftOut?.(item);
+        continue;
+      }
+      if (pages.length > MAX_PAGES) {
+        throw new FileProblem('too_many', `That is more than ${MAX_PAGES} pages. Send it in two goes.`,
+          { fatal: true });
+      }
+    }
+  } finally {
+    known.length = 0;
+  }
+  return { pages, leftOut, notes, filesUsed: files.length - leftOut.length };
+}
+
+/**
+ * The password question, asked inside the progress window rather than in a
+ * second dialog, so a mentor on a phone does not lose her place.
+ *
+ * The field is plain text on purpose. These are not the mentor's own
+ * passwords: they are a date of birth or a phone number read out by a family,
+ * and the usual failure is a typo she cannot see. A password type field would
+ * also invite the browser to offer to SAVE it, which would put a patient's
+ * document password into a shared phone's password manager. The value leaves
+ * the field the moment it is submitted and is never logged, stored or sent;
+ * only the unlocked pages are uploaded.
+ *
+ * ask() resolves { password } | { skip: true } | { stop: true }.
+ */
+export function makePasswordAsker(host) {
+  let pending = null;
+  const clear = () => { host.hidden = true; host.innerHTML = ''; };
+
+  const ask = ({ fileName, wrong = false, usedEarlier = false }) => new Promise((resolve) => {
+    pending = resolve;
+    host.hidden = false;
+    host.innerHTML = `
+      <div class="doc-callout doc-callout-warn" role="group" aria-labelledby="dbp-pw-title"
+           style="margin-top:12px;text-align:left">
+        <strong id="dbp-pw-title">${icon('lock')} This PDF is locked with a password</strong>
+        <p style="overflow-wrap:anywhere">${sanitize(fileName)}</p>
+        ${wrong ? `<p role="alert" data-pw-wrong style="color:var(--danger);font-weight:600">That
+          password did not open it. Check it and try again.</p>` : ''}
+        ${usedEarlier ? `<p data-pw-earlier>The password that opened an earlier file did not
+          open this one.</p>` : ''}
+        <div class="form-group" style="margin:12px 0 8px">
+          <label class="form-label" for="dbp-pw-input">Password</label>
+          <input class="form-input" id="dbp-pw-input" type="text" autocomplete="off"
+                 autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" />
+          <p class="form-hint" data-pw-error role="alert" hidden style="color:var(--danger)"></p>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <button type="button" class="btn btn-primary btn-sm" data-pw-open>Open this file</button>
+          <button type="button" class="btn btn-secondary btn-sm" data-pw-skip>Skip this file</button>
+        </div>
+        <p>Skipping leaves out only this file. The others carry on.</p>
+        <p>The password is usually in the SMS or email the report came with. If not, try the
+          patient's date of birth (such as 15081965), their mobile number, or the first four
+          letters of their name in capitals and their birth year (such as RAME1965). If none of
+          these work, ask the family.</p>
+        <p>Only the pages are kept. The password is not saved anywhere.</p>
+      </div>`;
+    const input = host.querySelector('#dbp-pw-input');
+    const err = host.querySelector('[data-pw-error]');
+    const finish = (reply) => {
+      if (pending !== resolve) return;
+      pending = null;
+      input.value = '';
+      if (reply.password) {
+        host.innerHTML = '<p class="form-hint" data-pw-checking style="margin:8px 0">Checking the password…</p>';
+      } else {
+        clear();
+      }
+      resolve(reply);
+    };
+    const submit = () => {
+      const value = input.value.trim();
+      if (!value) {
+        err.textContent = 'Type the password first, or skip this file.';
+        err.hidden = false;
+        input.focus();
+        return;
+      }
+      finish({ password: value });
+    };
+    host.querySelector('[data-pw-open]').addEventListener('click', submit);
+    host.querySelector('[data-pw-skip]').addEventListener('click', () => finish({ skip: true }));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    });
+    input.focus();
+  });
+
+  return {
+    ask,
+    /** The file opened or failed: take the question (or "Checking") away. */
+    settle: () => { if (!pending) clear(); },
+    /** The window was closed while a question was open: that means stop. */
+    cancel: () => {
+      if (!pending) return;
+      const resolve = pending;
+      pending = null;
+      clear();
+      resolve({ stop: true });
+    },
+  };
 }
 
 // ============================================================
@@ -298,7 +656,7 @@ async function callParser(payload) {
     });
   } catch (err) {
     throw new Error(err?.name === 'AbortError'
-      ? 'That step took too long. The pages are saved, so you can try reading them again.'
+      ? 'That step took too long.'
       : 'Could not reach the reader. Check your connection.');
   } finally {
     clearTimeout(timer);
@@ -311,8 +669,7 @@ async function callParser(payload) {
   // again, which is the one thing that cannot possibly help.
   if (res.status === 404) {
     throw new Error('The document reader has not been switched on for this site yet. '
-                  + 'Your photos were not wasted, nothing has been uploaded. Tell whoever '
-                  + 'set up the portal that doc-parse still needs deploying.');
+                  + 'Tell whoever set up the portal that doc-parse still needs deploying.');
   }
   if (!res.ok) throw new Error(out.error || 'The reader could not finish');
   return out;
@@ -321,29 +678,54 @@ async function callParser(payload) {
 // ============================================================
 // Upload and parse the whole batch
 // ============================================================
-async function uploadBatch(patientId, files, stage) {
+
+/** Status and note together. Best effort: the caller is already reporting a
+ *  failure, and a second failure here must not replace its message. */
+async function setBatchState(sb, batchId, status, note) {
+  const { error } = await sb.from('document_batches').update({ status, note }).eq('id', batchId);
+  return !error;
+}
+
+/** A failure the mentor can recover from without picking a single file again. */
+function retryable(err) {
+  return new Error(`${err?.message || 'The reader could not finish.'} ${RETRY_HINT}`);
+}
+
+async function uploadBatch(patientId, files, stage, { asker = null, onLeftOut = null,
+                                                      isCancelled = null, onDrawn = null } = {}) {
+  // ---- draw every page first; nothing is written until there are some ----
+  const prep = await prepareFiles(files, { stage, asker, onLeftOut, isCancelled });
+  if (!prep.pages.length) {
+    throw new FileProblem('nothing', prep.leftOut.length
+      ? `Nothing was uploaded. ${prep.leftOut.map((x) => x.reason).join(' ')}`
+      : 'Nothing readable in those files', { fatal: true });
+  }
+  onDrawn?.();
+  const { pages } = prep;
+
   const sb = getSupabase();
   const uid = (await sb.auth.getUser()).data?.user?.id;
-
   const { data: batch, error: bErr } = await sb.from('document_batches').insert({
-    patient_id: patientId, uploaded_by: uid, source_files: files.length, status: 'uploading',
+    patient_id: patientId, uploaded_by: uid, source_files: prep.filesUsed, status: 'uploading',
   }).select('id').single();
   if (bErr) throw new Error('Could not start the upload: ' + bErr.message);
 
-  // ---- render ------------------------------------------------------------
-  const pages = [];
-  for (const [i, file] of files.entries()) {
-    stage(`Preparing ${file.name} (${i + 1} of ${files.length})…`, i / files.length * 0.3);
-    const rendered = await renderFile(file, () => {
-      stage(`Preparing ${file.name}: ${pages.length + 1} page(s) so far…`, i / files.length * 0.3);
-    });
-    pages.push(...rendered);
-    if (pages.length > MAX_PAGES) {
-      throw new Error(`That is more than ${MAX_PAGES} pages. Send it in two goes.`);
-    }
+  let dupes;
+  try {
+    dupes = await storePages(sb, patientId, batch.id, pages, stage);
+  } catch (err) {
+    // never a row that says 'still uploading' about an upload that stopped
+    await setBatchState(sb, batch.id, 'failed', NOTE_UPLOAD_STOPPED);
+    throw err;
   }
-  if (!pages.length) throw new Error('Nothing readable in those files');
 
+  const read = await readBatch(sb, batch.id, stage);
+  return { ...read, dupes, pageCount: pages.length, leftOut: prep.leftOut, notes: prep.notes };
+}
+
+/** Hash, upload and record every page, unchanged from before the drawing moved
+ *  ahead of it. Returns how many pages were byte identical duplicates. */
+async function storePages(sb, patientId, batchId, pages, stage) {
   // ---- drop byte identical duplicates before spending anything -----------
   const seen = new Map();
   for (const p of pages) {
@@ -357,7 +739,7 @@ async function uploadBatch(patientId, files, stage) {
   const rows = [];
   for (const [i, p] of pages.entries()) {
     stage(`Uploading page ${i + 1} of ${pages.length}…`, 0.3 + (i / pages.length) * 0.25);
-    const stem = `${patientId}/${batch.id}/p${String(i).padStart(3, '0')}`;
+    const stem = `${patientId}/${batchId}/p${String(i).padStart(3, '0')}`;
     const bytes = new Uint8Array(await p.full.blob.arrayBuffer());
     const { error: e1 } = await sb.storage.from('patient-docs')
       .upload(`${stem}.jpg`, bytes, { contentType: 'image/jpeg', upsert: false });
@@ -367,7 +749,7 @@ async function uploadBatch(patientId, files, stage) {
       .upload(`${stem}_t.jpg`, tbytes, { contentType: 'image/jpeg', upsert: false });
 
     rows.push({
-      batch_id: batch.id, patient_id: patientId, page_index: i,
+      batch_id: batchId, patient_id: patientId, page_index: i,
       source_name: p.source_name, source_kind: p.source_kind,
       source_page_no: p.source_page_no,
       storage_path: `${stem}.jpg`, thumb_path: `${stem}_t.jpg`,
@@ -387,8 +769,22 @@ async function uploadBatch(patientId, files, stage) {
   }
 
   await sb.from('document_batches')
-    .update({ status: 'segmenting', page_count: pages.length }).eq('id', batch.id);
+    .update({ status: 'segmenting', page_count: pages.length }).eq('id', batchId);
+  return dupes;
+}
 
+/**
+ * Sort, read, check and compare a batch whose pages are already stored.
+ *
+ * Every step is one Edge Function call made from this tab, and a batch's
+ * status only moves when a step finishes. So a closed tab, a locked phone or a
+ * call that times out strands the batch wherever it was: on 25 Sep 2026 one had
+ * sat at 'segmenting' since 29 Aug and two at 'extracting' since 3 and 12 Sep.
+ * With `resume`, documents that already exist are not sorted again and a
+ * document that already has a parsed reading is not read again, so finishing a
+ * batch spends only what the stopped run did not.
+ */
+async function readBatch(sb, batchId, stage, { resume = false } = {}) {
   // Whether the second reading runs at all is a row in parser_config, not a
   // constant here: it roughly doubles the token cost of a batch, so it is a
   // decision about money that an admin makes without a deploy. Read once, and
@@ -399,14 +795,30 @@ async function uploadBatch(patientId, files, stage) {
   const auditOn = cfgRow?.audit_enabled === true;
 
   // ---- segment -----------------------------------------------------------
-  stage('Working out which pages belong to which document…', 0.6);
-  const seg = await callParser({ action: 'segment', batch_id: batch.id });
-  const docs = seg.documents ?? [];
-  if (!docs.length) throw new Error('None of those pages looked like a document we can read');
+  let docs = resume ? await existingDocuments(sb, batchId) : [];
+  if (!docs.length) {
+    stage('Working out which pages belong to which document…', 0.6);
+    try {
+      const seg = await callParser({ action: 'segment', batch_id: batchId });
+      docs = seg.documents ?? [];
+    } catch (err) {
+      await setBatchState(sb, batchId, 'failed', NOTE_SEGMENT_STOPPED);
+      throw retryable(err);
+    }
+  }
+  if (!docs.length) {
+    // segment has already moved the batch to 'extracting', where it would
+    // otherwise say "being read" for ever (PAT-2026-01462, since 12 Sep)
+    await setBatchState(sb, batchId, 'failed', NOTE_NO_DOCUMENT);
+    throw new Error('None of those pages looked like a document we can read. The pages are '
+      + 'saved: upload a clearer photo, or discard them from Upload documents.');
+  }
 
   // ---- extract, one call per document ------------------------------------
+  const readAlready = resume ? await parsedReadings(sb, batchId) : {};
   const failures = [];
   for (const [i, d] of docs.entries()) {
+    if (readAlready[d.document_id]) { d.extraction_id = readAlready[d.document_id]; continue; }
     stage(`Reading ${label(d.doc_class)} (${i + 1} of ${docs.length})…`,
           0.65 + (i / docs.length) * 0.3);
     try {
@@ -433,10 +845,23 @@ async function uploadBatch(patientId, files, stage) {
   // Best effort by design. If the check fails, every field simply arrives
   // unchecked and the mentor reviews the way she did before phase 3 existed.
   // A reader that stops working must not stop the reading.
+  // Not one document read: merging now would mark the batch ready for a
+  // review that has nothing in it, and that review would say "Nothing
+  // readable came back" every time anyone opened it.
+  if (!docs.some((d) => d.extraction_id)) {
+    await setBatchState(sb, batchId, 'failed', NOTE_READ_STOPPED);
+    const why = [...new Set(failures)].slice(0, 3).join('. ');
+    throw retryable(new Error(`None of the documents could be read. ${why}`.trim()));
+  }
+
   const audits = {};
   if (auditOn) {
+    const checked = resume ? await finishedAudits(sb, batchId) : {};
     for (const [i, d] of docs.entries()) {
-      if (!d.extraction_id && !d.document_id) continue;
+      // a document that was not read has nothing to check; asking anyway only
+      // added a second, more confusing failure line for the same document
+      if (!d.extraction_id) continue;
+      if (checked[d.extraction_id]) { audits[d.document_id] = checked[d.extraction_id]; continue; }
       stage(`Checking what we read off ${label(d.doc_class)} (${i + 1} of ${docs.length})…`,
             0.9 + (i / docs.length) * 0.06);
       try {
@@ -450,9 +875,162 @@ async function uploadBatch(patientId, files, stage) {
 
   // ---- reconcile the documents against each other ------------------------
   stage('Checking the documents against each other…', 0.97);
-  const merged = await callParser({ action: 'merge', batch_id: batch.id });
+  let merged;
+  try {
+    merged = await callParser({ action: 'merge', batch_id: batchId });
+  } catch (err) {
+    await setBatchState(sb, batchId, 'failed', NOTE_MERGE_STOPPED);
+    throw retryable(err);
+  }
+  return { batchId, docs, merged, audits, failures };
+}
 
-  return { batchId: batch.id, docs, merged, audits, dupes, failures, pageCount: pages.length };
+// ============================================================
+// What an earlier run already left in the database
+// ============================================================
+
+/** The documents a batch was already cut into, in the shape segment returns. */
+async function existingDocuments(sb, batchId) {
+  const { data } = await sb.from('patient_documents')
+    .select('id, doc_type, page_count, doc_index')
+    .eq('batch_id', batchId).is('deleted_at', null).order('doc_index');
+  return (data || []).map((d) => ({ document_id: d.id, doc_class: d.doc_type, pages: d.page_count }));
+}
+
+/** document_id -> the id of its LATEST reading, when that reading parsed.
+ *  v_batch_documents already picks the latest per document. */
+async function parsedReadings(sb, batchId) {
+  const { data } = await sb.from('v_batch_documents')
+    .select('document_id, extraction_id, extraction_status').eq('batch_id', batchId);
+  const out = {};
+  for (const r of data || []) {
+    if (r.extraction_status === 'parsed' && r.extraction_id) out[r.document_id] = r.extraction_id;
+  }
+  return out;
+}
+
+/** extraction_id -> a finished second reading, rebuilt from sql/98's tables in
+ *  the shape the audit call returns, so a resumed or reopened review marks the
+ *  same disputes and never pre ticks a field the second reading disputed. */
+async function finishedAudits(sb, batchId) {
+  const { data: rows } = await sb.from('document_audits')
+    .select('id, extraction_id, document_id, status, items, confirmed, disputed, unchecked, '
+          + 'pages_checked, page_count')
+    .eq('batch_id', batchId).in('status', ['ok', 'partial']);
+  if (!rows?.length) return {};
+  const { data: disputes } = await sb.from('document_field_audits')
+    .select('audit_id, field_key, question, answer_shown, verdict, correct_value, evidence, '
+          + 'page_no, certainty, audit_note')
+    .in('audit_id', rows.map((r) => r.id)).eq('disputed', true);
+  const out = {};
+  for (const a of rows) {
+    out[a.extraction_id] = {
+      audit_id: a.id, extraction_id: a.extraction_id, status: a.status,
+      summary: { items: a.items, confirmed: a.confirmed, disputed: a.disputed, unchecked: a.unchecked },
+      pages_checked: a.pages_checked, page_count: a.page_count,
+      disputes: (disputes || []).filter((x) => x.audit_id === a.id).map((x) => ({
+        field_key: x.field_key, question: x.question,
+        // stored as "(blank)" for display; the live call returns null
+        answer_shown: /^\(blank/.test(x.answer_shown || '') ? null : x.answer_shown,
+        verdict: x.verdict, correct_value: x.correct_value, evidence: x.evidence,
+        page: x.page_no, certainty: x.certainty, audit_note: x.audit_note,
+      })),
+    };
+  }
+  return out;
+}
+
+/** Everything the review screen needs for a batch that finished reading in
+ *  some earlier session, read back without calling the reader at all. */
+async function loadBatchState(sb, batch) {
+  const docs = await existingDocuments(sb, batch.id);
+  const readings = await parsedReadings(sb, batch.id);
+  const checked = await finishedAudits(sb, batch.id);
+  const audits = {};
+  for (const d of docs) {
+    d.extraction_id = readings[d.document_id] ?? null;
+    if (d.extraction_id && checked[d.extraction_id]) audits[d.document_id] = checked[d.extraction_id];
+  }
+  const { data: conflicts } = await sb.from('document_field_conflicts')
+    .select('field_key, candidates, preferred_value, preferred_document_id, reason, benign')
+    .eq('batch_id', batch.id);
+  const { count: dupes } = await sb.from('document_pages')
+    .select('id', { count: 'exact', head: true })
+    .eq('batch_id', batch.id).not('duplicate_of', 'is', null);
+  return {
+    batchId: batch.id, docs, audits, merged: { conflicts: conflicts || [] },
+    dupes: dupes || 0, pageCount: batch.page_count,
+    failures: docs.filter((d) => !d.extraction_id)
+      .map((d) => `${label(d.doc_class)}: this document was not read`),
+    leftOut: [], notes: [],
+  };
+}
+
+/** The claim note for `now`, in IST to the minute, e.g.
+ *  "Being finished now, started 25 Sep 2026 17:42 IST." */
+export function claimNote(now = Date.now()) {
+  const t = new Date(now + IST_MS);
+  const hh = String(t.getUTCHours()).padStart(2, '0');
+  const mm = String(t.getUTCMinutes()).padStart(2, '0');
+  return `${CLAIM_PREFIX}${t.getUTCDate()} ${MONTHS[t.getUTCMonth()]} ${t.getUTCFullYear()} ${hh}:${mm} IST.`;
+}
+
+/** When a claim note was written, in ms, or 0 for any other note. */
+export function claimTime(note) {
+  const m = /^Being finished now, started (\d{1,2}) ([A-Z][a-z]{2}) (\d{4}) (\d{2}):(\d{2}) IST\.$/
+    .exec(note || '');
+  if (!m || MONTHS.indexOf(m[2]) < 0) return 0;
+  return Date.UTC(+m[3], MONTHS.indexOf(m[2]), +m[1], +m[4], +m[5]) - IST_MS;
+}
+
+/**
+ * Take a stopped batch for this session, or learn that someone else has.
+ *
+ * The check "is anyone reading it" and the act of reading it were two steps,
+ * so two people pressing Finish reading on the same batch at the same moment
+ * could both sort its pages again, which duplicates its documents and pays for
+ * the reading twice. One UPDATE that moves the status and writes a claim note
+ * ONLY WHERE the status and note are still what this session saw is atomic in
+ * Postgres: the second session's UPDATE matches no row.
+ */
+async function claimBatch(sb, batch, nextStatus) {
+  let q = sb.from('document_batches')
+    .update({ status: nextStatus, note: claimNote() })
+    .eq('id', batch.id).eq('status', batch.status);
+  q = batch.note === null || batch.note === undefined ? q.is('note', null) : q.eq('note', batch.note);
+  const { data, error } = await q.select('id');
+  return !error && (data || []).length === 1;
+}
+
+/** Pick a stopped batch up from wherever it stopped. */
+async function resumeBatch(sb, batch, stage) {
+  // someone may be driving it right now, in another tab or on another phone
+  const { data: runs } = await sb.from('document_parse_runs')
+    .select('status, started_at').eq('batch_id', batch.id);
+  const live = (runs || []).some((r) => r.status === 'pending'
+    && Date.now() - Date.parse(r.started_at) < STALLED_AFTER_MS);
+  if (live) throw new Error('This upload is still being read somewhere else. Try again in a few minutes.');
+
+  const { count } = await sb.from('document_pages')
+    .select('id', { count: 'exact', head: true }).eq('batch_id', batch.id);
+  if (!count) {
+    await setBatchState(sb, batch.id, 'failed', NOTE_UPLOAD_STOPPED);
+    throw new Error('This upload has no stored pages, so there is nothing to finish. Pick the files again.');
+  }
+
+  const hasDocs = (await existingDocuments(sb, batch.id)).length > 0;
+  if (!(await claimBatch(sb, batch, hasDocs ? 'extracting' : 'segmenting'))) {
+    throw new Error('Someone else is finishing this upload right now. Try again in a few minutes.');
+  }
+
+  const read = await readBatch(sb, batch.id, stage, { resume: true });
+  // the claim is over; segment has already cleared it when it ran
+  await sb.from('document_batches').update({ note: null })
+    .eq('id', batch.id).like('note', `${CLAIM_PREFIX}%`);
+  const { count: dupes } = await sb.from('document_pages')
+    .select('id', { count: 'exact', head: true })
+    .eq('batch_id', batch.id).not('duplicate_of', 'is', null);
+  return { ...read, dupes: dupes || 0, pageCount: count, leftOut: [], notes: [] };
 }
 
 // ============================================================
@@ -1003,24 +1581,413 @@ export function collect(root, docs) {
 // looked at is how a mentor ends up unable to reject a field.
 
 // ============================================================
+// The progress window, shared by a new upload and a resumed one.
+// Exported for tools/pdf_password_check.html, which drives it at phone width.
+// ============================================================
+export function openProgress(title, fileCount, onUserClose = null) {
+  const busy = document.createElement('div');
+  busy.innerHTML = `
+    <div class="doc-progress">
+      <div class="doc-progress-bar"><span id="dbp-bar" style="width:2%"></span></div>
+      <p id="dbp-stage">Getting ready…</p>
+      ${fileCount ? `<p class="form-hint">${fileCount} file(s). This can take a couple of minutes
+      for a long PDF. You can leave this open.</p>` : ''}
+    </div>
+    <div data-pw-host hidden></div>
+    <div class="doc-callout" data-left-out hidden style="margin-top:12px;text-align:left">
+      <strong>${icon('info')} Left out of this upload</strong>
+      <ul style="margin:6px 0 0 18px;list-style:disc;display:grid;gap:4px"></ul>
+    </div>`;
+  const overlay = showModal({ title, content: busy, size: 'md', onClose: onUserClose });
+  if (onUserClose) {
+    // Another dialog opening removes this one WITHOUT onClose. While a
+    // password question may be open, losing the window has to mean stop, or
+    // the upload would wait for ever for an answer nobody can give.
+    const watch = new MutationObserver(() => {
+      if (!overlay.isConnected) { watch.disconnect(); onUserClose(); }
+    });
+    watch.observe(document.body, { childList: true });
+  }
+  const stage = (msg, frac) => {
+    const n = document.getElementById('dbp-stage');
+    const b = document.getElementById('dbp-bar');
+    if (n) n.textContent = msg;
+    if (b && frac != null) b.style.width = `${Math.round(Math.min(1, frac) * 100)}%`;
+  };
+  const box = busy.querySelector('[data-left-out]');
+  const leftOut = (item) => {
+    box.hidden = false;
+    const li = document.createElement('li');
+    li.textContent = item.reason;
+    box.querySelector('ul').appendChild(li);
+  };
+  return { stage, leftOut, asker: makePasswordAsker(busy.querySelector('[data-pw-host]')) };
+}
+
+// ============================================================
+// The review, for a batch read just now or in an earlier session
+// ============================================================
+const PATIENT_COLUMNS = 'id, full_name, hospital_case_no, age, date_of_birth, city, state, pin_code, '
+  + 'occupation, marital_status, gi_subtype, cancer_stage, tnm_stage, diagnosis_date, '
+  + 'trajectory, treating_hospital, treating_doctor, hospital_unit, '
+  + 'registration_category, caregiver_name, caregiver_relationship, nominee_name, '
+  + 'nominee_relationship, railway_concession_from, railway_concession_to, '
+  + 'family_income_annual_inr, '
+  // v97
+  + 'primary_site, histology, metastatic_sites, comorbidities, allergies, '
+  + 'follow_up_date, follow_up_instruction';
+
+async function loadPatient(sb, patientId) {
+  const { data, error } = await sb.from('patients').select(PATIENT_COLUMNS)
+    .eq('id', patientId).single();
+  return error ? null : data;
+}
+
+/** The files and pages that did not make it in, so "Everything was read" is
+ *  never what a mentor assumes about an upload that dropped a file. */
+function renderLeftOut(result) {
+  const items = [...(result.leftOut || []).map((x) => x.reason), ...(result.notes || [])];
+  if (!items.length) return '';
+  return `<div class="doc-callout doc-callout-warn" data-left-out-summary>
+    <strong>${icon('alertTriangle')} ${items.length} thing${items.length > 1 ? 's' : ''} left out of
+      this upload</strong>
+    <ul style="margin:6px 0 0 18px;list-style:disc;display:grid;gap:4px">${
+      items.map((m) => `<li>${sanitize(m)}</li>`).join('')}</ul>
+    <p class="form-hint">Everything else was read. Upload a left out file on its own once you have it.</p>
+  </div>`;
+}
+
+async function showBatchReview(sb, patient, patientId, result) {
+  // ---- load everything the review needs -------------------------------
+  const { data: view } = await sb.from('v_batch_documents')
+    .select('*').eq('batch_id', result.batchId).order('doc_index');
+  const { data: extractions } = await sb.from('document_extractions')
+    .select('id, document_id, status, fields, summary_text, identity_check, legibility, doc_class')
+    .eq('batch_id', result.batchId);
+  const { data: validations } = await sb.from('document_validations')
+    .select('extraction_id, code, severity, message, fields, detail')
+    .eq('batch_id', result.batchId);
+  const { data: pages } = await sb.from('document_pages')
+    .select('id, document_id, page_index, thumb_path, storage_path')
+    .eq('batch_id', result.batchId).order('page_index');
+
+  // signed URLs for the thumbnails, so a mentor can see the field in context
+  const signed = {};
+  for (const p of pages || []) {
+    const { data } = await sb.storage.from('patient-docs')
+      .createSignedUrl(p.thumb_path || p.storage_path, 3600).catch(() => ({ data: null }));
+    if (data?.signedUrl) signed[p.id] = data.signedUrl;
+  }
+
+  const docs = (view || []).map((v) => {
+    // The reading v_batch_documents calls the latest. A document read twice
+    // (a resumed batch) also has an older failed reading, and taking whichever
+    // came back first could hide the one that parsed.
+    const ex = (extractions || []).find((e) => e.id === v.extraction_id)
+      || (extractions || []).find((e) => e.document_id === v.document_id) || null;
+    const myPages = (pages || []).filter((p) => p.document_id === v.document_id)
+      .sort((a, b) => a.page_index - b.page_index);
+    const thumbs = {};
+    myPages.forEach((p, i) => { thumbs[i + 1] = signed[p.id]; });
+    return {
+      document_id: v.document_id, doc_class: v.doc_type, pages: v.page_count,
+      extraction: ex && ex.status === 'parsed' ? ex : null,
+      validations: (validations || []).filter((x) => x.extraction_id === ex?.id),
+      // The second reading's disagreements, keyed by document. Undefined
+      // when phase 3 did not run or failed, and every field then renders
+      // exactly as it did before phase 3 existed.
+      audit: result.audits?.[v.document_id] || null,
+      thumbs,
+    };
+  }).filter((d) => d.extraction);
+
+  if (!docs.length) {
+    closeModal();
+    // Left at 'ready_for_review' it would ask for a review with nothing in it
+    // every time anyone opened it. As 'failed' it offers Finish reading.
+    await setBatchState(sb, result.batchId, 'failed', NOTE_READ_STOPPED);
+    showToast('Nothing readable came back. The pages are still on file, and Upload documents '
+      + 'on this patient can try reading them again.', 'error', 10000);
+    return;
+  }
+
+  const el = document.createElement('div');
+  el.className = 'doc-review doc-batch';
+  el.innerHTML = `
+    <div class="doc-batch-head">
+      <div>
+        <strong>${docs.length} document${docs.length > 1 ? 's' : ''}</strong>
+        from ${result.pageCount} page${result.pageCount > 1 ? 's' : ''}
+        ${result.dupes ? ` · ${result.dupes} duplicate page(s) skipped` : ''}
+      </div>
+      <button class="btn btn-ghost btn-sm" id="db-accept-high">
+        Tick everything we are sure about</button>
+    </div>
+    ${renderLeftOut(result)}
+    ${result.failures.length ? `<div class="doc-callout doc-callout-warn">
+      <strong>${icon('alertTriangle')} ${result.failures.length} document(s) could not be read.</strong>
+      <p>${result.failures.map(sanitize).join('. ')}. The pages are saved either way.</p></div>` : ''}
+    ${renderAuditSummary(docs)}
+    ${renderConflicts(result.merged?.conflicts)}
+    ${docs.map((d, i) => docCard(d, patient, d.thumbs, i, d.audit)).join('')}`;
+
+  closeModal();
+  showModal({
+    title: 'What we read', content: el, size: 'xl',
+    footer: `<button class="btn btn-ghost" id="db-discard">Discard all</button>
+             <button class="btn btn-primary" id="db-save">Save what I ticked</button>`,
+    // Closing this used to be the end of the read: the batch stayed 'ready for
+    // review' and nothing anywhere opened it again. Two sat for 16 and 26 days.
+    onClose: () => showToast('Not saved yet. Nothing is lost: Upload documents on this patient '
+      + 'opens this review again.', 'info', 8000),
+  });
+
+  document.getElementById('db-accept-high').addEventListener('click', () => {
+    let n = 0;
+    let skipped = 0;
+    el.querySelectorAll('input[data-field]').forEach((cb) => {
+      if (cb.disabled || cb.checked) return;
+      // never auto tick a value the pen corrected, at any confidence, and
+      // never one that contradicts what the record already says
+      if (cb.dataset.corrected) return;
+      if (cb.dataset.conf !== 'high') return;
+      if (cb.closest('.doc-field')?.classList.contains('doc-field-conflict')) return;
+      // and never one the second reading disagreed with. `conf` is the FIRST
+      // reading's opinion of itself, and it was high on both of the real
+      // errors in the frozen regression corpus, so on its own it is exactly
+      // the wrong thing to gate a bulk tick on.
+      if (cb.dataset.disputed) { skipped++; return; }
+      cb.checked = true; n++;
+    });
+    showToast(n ? `Ticked ${n} field(s) we are confident about. Nothing corrected by hand, `
+                + `nothing that disagrees with the record`
+                + (skipped ? `, and ${skipped} that the second reading disputed.` : '.')
+                : 'Nothing left that is safe to tick automatically', n ? 'success' : 'info');
+  });
+
+  document.getElementById('db-discard').addEventListener('click', async () => {
+    await sb.from('document_batches')
+      .update({ status: 'discarded', reviewed_at: new Date().toISOString() })
+      .eq('id', result.batchId);
+    closeModal();
+    showToast('Discarded. The pages are still on file.', 'info');
+  });
+
+  document.getElementById('db-save').addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    btn.innerHTML = '<div class="spinner"></div> Saving…';
+    const accepted = collect(el, docs);
+    const { data, error: applyErr } = await sb.rpc('apply_document_batch', {
+      p_batch_id: result.batchId, p_accepted: accepted,
+    });
+    if (applyErr) {
+      btn.disabled = false; btn.textContent = 'Save what I ticked';
+      showToast(sanitize(applyErr.message), 'error');
+      return;
+    }
+    closeModal();
+    const parts = [];
+    const say = (k, one, many) => {
+      const n = Number(data?.[k] || 0);
+      if (n) parts.push(`${n} ${n > 1 ? (many || one + 's') : one}`);
+    };
+    say('patient_fields', 'field');
+    say('cycles', 'cycle'); say('medications', 'medicine');
+    say('lab_results', 'lab result'); say('biomarkers', 'biomarker');
+    say('anthropometry', 'measurement'); say('cost_certificates', 'cost certificate');
+    say('imaging', 'imaging report'); say('pathology', 'pathology report');
+    say('devices', 'device'); say('endoscopy', 'endoscopy report'); say('schemes', 'scheme');
+    say('red_flags', 'flag for the concerns queue', 'flags for the concerns queue');
+    showToast(parts.length ? `Saved ${parts.join(', ')}` : 'Nothing was ticked',
+              parts.length ? 'success' : 'info');
+    window.dispatchEvent(new CustomEvent('patient-updated', { detail: { patientId } }));
+  });
+}
+
+// ============================================================
+// Earlier uploads that stopped, or are waiting for a person
+// ============================================================
+
+/**
+ * Until 25 Sep 2026 nothing ever came back for a batch once the tab that
+ * started it was gone. Live that day: one batch 'segmenting' since 29 Aug, two
+ * 'extracting' since 3 and 12 Sep, and two 'ready_for_review' for 16 and 26
+ * days, because the review screen only existed at the end of the session that
+ * read the pages. The patient's Documents tab said "read, waiting for you" and
+ * offered nothing to click.
+ *
+ * So Upload documents lists them first. A batch is listed when it is waiting
+ * for a review, when it failed after its pages were stored, or when it has
+ * been quiet mid read for longer than STALLED_AFTER_MS.
+ */
+export async function findUnfinishedBatches(sb, patientId, now = Date.now()) {
+  const { data: batches, error } = await sb.from('document_batches')
+    .select('id, status, page_count, note, uploaded_at')
+    .eq('patient_id', patientId).is('deleted_at', null)
+    .in('status', ['uploading', 'segmenting', 'extracting', 'failed', 'ready_for_review'])
+    .order('uploaded_at', { ascending: false }).limit(10);
+  if (error || !batches?.length) return [];
+  const { data: runs } = await sb.from('document_parse_runs')
+    .select('batch_id, started_at, completed_at').in('batch_id', batches.map((b) => b.id));
+  return batches
+    .map((b) => classifyBatch(b, (runs || []).filter((r) => r.batch_id === b.id), now))
+    .filter(Boolean);
+}
+
+/** What a batch needs, or null when it needs nothing from this screen. Pure,
+ *  so tools/pdf_password_check.html can test the rules without a database. */
+export function classifyBatch(batch, runs = [], now = Date.now()) {
+  if (batch.status === 'ready_for_review') return { ...batch, action: 'review' };
+  // no page was ever stored, so there is nothing to finish: pick the files again
+  if (!(batch.page_count > 0)) return null;
+  if (batch.status === 'failed') return { ...batch, action: 'resume' };
+  if (!['uploading', 'segmenting', 'extracting'].includes(batch.status)) return null;
+  // a claim is activity: someone pressed Finish reading and is on it
+  const last = Math.max(Date.parse(batch.uploaded_at) || 0, claimTime(batch.note), ...runs.map((r) =>
+    Math.max(Date.parse(r.started_at) || 0, Date.parse(r.completed_at) || 0)));
+  return now - last > STALLED_AFTER_MS ? { ...batch, action: 'resume' } : null;
+}
+
+const STOPPED_WHERE = {
+  uploading: 'before the pages were sorted',
+  segmenting: 'while sorting the pages',
+  extracting: 'while reading the documents',
+};
+
+function unfinishedRow(b) {
+  const when = new Date(b.uploaded_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  const pages = `${b.page_count} page${b.page_count === 1 ? '' : 's'}`;
+  const review = b.action === 'review';
+  // A stop note ends with how to reach this very list; here only its first
+  // sentence, where it stopped, is news.
+  const stoppedAt = b.status === 'failed' && b.note
+    ? (b.note.match(/^.*?\.(\s|$)/)?.[0] || b.note).trim()
+    : `Stopped ${STOPPED_WHERE[b.status] || 'before it finished'}.`;
+  const why = review
+    ? 'Read and waiting for someone to check it. Nothing from it is on the record yet.'
+    : `${stoppedAt} Nothing is lost: the pages are saved.`;
+  return `<div class="doc-callout ${review ? 'doc-callout-warn' : 'doc-callout-danger'}"
+               data-unfinished="${b.id}">
+    <strong>${icon(review ? 'fileText' : 'alertTriangle')} ${pages} uploaded on ${sanitize(when)}</strong>
+    <p>${sanitize(why)}</p>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+      <button type="button" class="btn btn-primary btn-sm" data-go="${b.action}"
+              data-batch="${b.id}">${review ? 'Review now' : 'Finish reading'}</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-go="discard"
+              data-batch="${b.id}">Discard</button>
+    </div>
+  </div>`;
+}
+
+/** Resolves with the batch to continue, { action: 'upload' }, or null when
+ *  the window was closed. Discard happens here and the list repaints. */
+function chooseUnfinished(sb, list) {
+  return new Promise((resolve) => {
+    let open = [...list];
+    let settled = false;
+    const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
+    const el = document.createElement('div');
+    const paint = () => {
+      el.innerHTML = `<p style="margin:0 0 12px">${open.length
+        ? 'Some documents uploaded earlier for this patient are not finished. Pick up where they '
+          + 'stopped, or upload new ones.'
+        : 'Nothing earlier is left unfinished.'}</p>${open.map(unfinishedRow).join('')}`;
+    };
+    paint();
+    el.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('[data-go]');
+      const batch = btn && open.find((b) => b.id === btn.dataset.batch);
+      if (!batch) return;
+      if (btn.dataset.go !== 'discard') { closeModal(); finish(batch); return; }
+      btn.disabled = true;
+      const { error } = await sb.from('document_batches')
+        .update({ status: 'discarded', reviewed_at: new Date().toISOString() }).eq('id', batch.id);
+      if (error) { btn.disabled = false; showToast(sanitize(error.message), 'error'); return; }
+      open = open.filter((b) => b.id !== batch.id);
+      showToast('Discarded. The pages are still on file.', 'info');
+      paint();
+    });
+    showModal({
+      title: 'Earlier uploads for this patient', content: el, size: 'md',
+      footer: '<button class="btn btn-primary" id="dbu-new">Upload new documents</button>',
+      onClose: () => finish(null),
+    });
+    document.getElementById('dbu-new').addEventListener('click', () => {
+      closeModal();
+      finish({ action: 'upload' });
+    });
+  });
+}
+
+async function continueBatch(sb, patient, patientId, batch) {
+  const ui = openProgress(batch.action === 'review' ? 'Opening the review' : 'Finishing the read', 0);
+  try {
+    const result = batch.action === 'review'
+      ? await loadBatchState(sb, batch)
+      : await resumeBatch(sb, batch, ui.stage);
+    await showBatchReview(sb, patient, patientId, result);
+  } catch (e) {
+    closeModal();
+    showToast(sanitize(e.message || 'Could not finish reading those documents'), 'error', 12000);
+  }
+}
+
+/**
+ * Finish or review ONE earlier upload, for a button on a batch in the
+ * patient's Documents tab (js/pages/patients.js renderDocumentsTab), which
+ * lists these batches but has nothing to click on them.
+ */
+export async function openExistingBatch(batchId) {
+  const sb = getSupabase();
+  const { data: batch } = await sb.from('document_batches')
+    .select('id, patient_id, status, page_count, note, uploaded_at').eq('id', batchId).single();
+  if (!batch) { showToast('Could not find that upload', 'error'); return; }
+  const { data: runs } = await sb.from('document_parse_runs')
+    .select('batch_id, started_at, completed_at').eq('batch_id', batchId);
+  const item = classifyBatch(batch, runs || [], Date.now());
+  if (!item) {
+    showToast(batch.status === 'reviewed' || batch.status === 'discarded'
+      ? 'This upload is already closed.'
+      : 'This upload is still being read. Try again in a few minutes.', 'info');
+    return;
+  }
+  const patient = await loadPatient(sb, batch.patient_id);
+  if (!patient) { showToast('Could not load the patient', 'error'); return; }
+  await continueBatch(sb, patient, batch.patient_id, item);
+}
+
+// ============================================================
 // Entry point
 // ============================================================
-export async function openDocumentBatch(patientId) {
-  const sb = getSupabase();
-  const { data: patient, error } = await sb.from('patients')
-    .select('id, full_name, hospital_case_no, age, date_of_birth, city, state, pin_code, '
-          + 'occupation, marital_status, gi_subtype, cancer_stage, tnm_stage, diagnosis_date, '
-          + 'trajectory, treating_hospital, treating_doctor, hospital_unit, '
-          + 'registration_category, caregiver_name, caregiver_relationship, nominee_name, '
-          + 'nominee_relationship, railway_concession_from, railway_concession_to, '
-          + 'family_income_annual_inr, '
-          // v97
-          + 'primary_site, histology, metastatic_sites, comorbidities, allergies, '
-          + 'follow_up_date, follow_up_instruction')
-    .eq('id', patientId).single();
-  if (error || !patient) { showToast('Could not load the patient', 'error'); return; }
+let drawingNow = false;   // an upload is drawing its files, and may be asking a question
 
-  if (!(await hasDocumentConsent(patientId).catch(() => false))) {
+export async function openDocumentBatch(patientId) {
+  if (drawingNow) {
+    showToast('An upload is still being prepared. Finish it or close it first.', 'info');
+    return;
+  }
+  const sb = getSupabase();
+  // In parallel: the file picker only opens while the click that asked for it
+  // still counts as recent, so every round trip in front of it is a risk on a
+  // slow phone.
+  const [patient, consented, unfinished] = await Promise.all([
+    loadPatient(sb, patientId),
+    hasDocumentConsent(patientId).catch(() => false),
+    findUnfinishedBatches(sb, patientId).catch(() => []),
+  ]);
+  if (!patient) { showToast('Could not load the patient', 'error'); return; }
+
+  if (unfinished.length) {
+    const choice = await chooseUnfinished(sb, unfinished);
+    if (!choice) return;
+    if (choice.action !== 'upload') {
+      await continueBatch(sb, patient, patientId, choice);
+      return;
+    }
+  }
+
+  if (!consented) {
     const method = await askConsent(patientId, patient.full_name);
     if (!method) { showToast('Recorded that they did not agree', 'info'); return; }
     await recordConsent(patientId, true, method);
@@ -1030,171 +1997,47 @@ export async function openDocumentBatch(patientId) {
   picker.type = 'file';
   picker.accept = 'image/*,application/pdf';
   picker.multiple = true;
-  picker.addEventListener('change', async () => {
-    const files = [...(picker.files || [])];
-    if (!files.length) return;
-    if (files.length > MAX_FILES) {
-      showToast(`That is more than ${MAX_FILES} files. Send them in two goes.`, 'error');
-      return;
-    }
-
-    const busy = document.createElement('div');
-    busy.innerHTML = `
-      <div class="doc-progress">
-        <div class="doc-progress-bar"><span id="dbp-bar" style="width:2%"></span></div>
-        <p id="dbp-stage">Getting ready…</p>
-        <p class="form-hint">${files.length} file(s). This can take a couple of minutes for a
-        long PDF. You can leave this open.</p>
-      </div>`;
-    showModal({ title: 'Reading the documents', content: busy, size: 'md' });
-    const stage = (msg, frac) => {
-      const n = document.getElementById('dbp-stage');
-      const b = document.getElementById('dbp-bar');
-      if (n) n.textContent = msg;
-      if (b && frac != null) b.style.width = `${Math.round(Math.min(1, frac) * 100)}%`;
-    };
-
-    let result;
-    try {
-      result = await uploadBatch(patientId, files, stage);
-    } catch (e) {
-      closeModal();
-      showToast(e.message || 'Could not read those documents', 'error');
-      return;
-    }
-
-    // ---- load everything the review needs -------------------------------
-    const { data: view } = await sb.from('v_batch_documents')
-      .select('*').eq('batch_id', result.batchId).order('doc_index');
-    const { data: extractions } = await sb.from('document_extractions')
-      .select('id, document_id, status, fields, summary_text, identity_check, legibility, doc_class')
-      .eq('batch_id', result.batchId);
-    const { data: validations } = await sb.from('document_validations')
-      .select('extraction_id, code, severity, message, fields, detail')
-      .eq('batch_id', result.batchId);
-    const { data: pages } = await sb.from('document_pages')
-      .select('id, document_id, page_index, thumb_path, storage_path')
-      .eq('batch_id', result.batchId).order('page_index');
-
-    // signed URLs for the thumbnails, so a mentor can see the field in context
-    const signed = {};
-    for (const p of pages || []) {
-      const { data } = await sb.storage.from('patient-docs')
-        .createSignedUrl(p.thumb_path || p.storage_path, 3600).catch(() => ({ data: null }));
-      if (data?.signedUrl) signed[p.id] = data.signedUrl;
-    }
-
-    const docs = (view || []).map((v) => {
-      const ex = (extractions || []).find((e) => e.document_id === v.document_id) || null;
-      const myPages = (pages || []).filter((p) => p.document_id === v.document_id)
-        .sort((a, b) => a.page_index - b.page_index);
-      const thumbs = {};
-      myPages.forEach((p, i) => { thumbs[i + 1] = signed[p.id]; });
-      return {
-        document_id: v.document_id, doc_class: v.doc_type, pages: v.page_count,
-        extraction: ex && ex.status === 'parsed' ? ex : null,
-        validations: (validations || []).filter((x) => x.extraction_id === ex?.id),
-        // The second reading's disagreements, keyed by document. Undefined
-        // when phase 3 did not run or failed, and every field then renders
-        // exactly as it did before phase 3 existed.
-        audit: result.audits?.[v.document_id] || null,
-        thumbs,
-      };
-    }).filter((d) => d.extraction);
-
-    if (!docs.length) {
-      closeModal();
-      showToast('Nothing readable came back. The photos are still on file.', 'error');
-      return;
-    }
-
-    const el = document.createElement('div');
-    el.className = 'doc-review doc-batch';
-    el.innerHTML = `
-      <div class="doc-batch-head">
-        <div>
-          <strong>${docs.length} document${docs.length > 1 ? 's' : ''}</strong>
-          from ${result.pageCount} page${result.pageCount > 1 ? 's' : ''}
-          ${result.dupes ? ` · ${result.dupes} duplicate page(s) skipped` : ''}
-        </div>
-        <button class="btn btn-ghost btn-sm" id="db-accept-high">
-          Tick everything we are sure about</button>
-      </div>
-      ${result.failures.length ? `<div class="doc-callout doc-callout-warn">
-        <strong>${icon('alertTriangle')} ${result.failures.length} document(s) could not be read.</strong>
-        <p>${result.failures.map(sanitize).join('. ')}. The pages are saved either way.</p></div>` : ''}
-      ${renderAuditSummary(docs)}
-      ${renderConflicts(result.merged?.conflicts)}
-      ${docs.map((d, i) => docCard(d, patient, d.thumbs, i, d.audit)).join('')}`;
-
-    closeModal();
-    showModal({
-      title: 'What we read', content: el, size: 'xl',
-      footer: `<button class="btn btn-ghost" id="db-discard">Discard all</button>
-               <button class="btn btn-primary" id="db-save">Save what I ticked</button>`,
-    });
-
-    document.getElementById('db-accept-high').addEventListener('click', () => {
-      let n = 0;
-      let skipped = 0;
-      el.querySelectorAll('input[data-field]').forEach((cb) => {
-        if (cb.disabled || cb.checked) return;
-        // never auto tick a value the pen corrected, at any confidence, and
-        // never one that contradicts what the record already says
-        if (cb.dataset.corrected) return;
-        if (cb.dataset.conf !== 'high') return;
-        if (cb.closest('.doc-field')?.classList.contains('doc-field-conflict')) return;
-        // and never one the second reading disagreed with. `conf` is the FIRST
-        // reading's opinion of itself, and it was high on both of the real
-        // errors in the frozen regression corpus, so on its own it is exactly
-        // the wrong thing to gate a bulk tick on.
-        if (cb.dataset.disputed) { skipped++; return; }
-        cb.checked = true; n++;
-      });
-      showToast(n ? `Ticked ${n} field(s) we are confident about. Nothing corrected by hand, `
-                  + `nothing that disagrees with the record`
-                  + (skipped ? `, and ${skipped} that the second reading disputed.` : '.')
-                  : 'Nothing left that is safe to tick automatically', n ? 'success' : 'info');
-    });
-
-    document.getElementById('db-discard').addEventListener('click', async () => {
-      await sb.from('document_batches')
-        .update({ status: 'discarded', reviewed_at: new Date().toISOString() })
-        .eq('id', result.batchId);
-      closeModal();
-      showToast('Discarded. The pages are still on file.', 'info');
-    });
-
-    document.getElementById('db-save').addEventListener('click', async (ev) => {
-      const btn = ev.currentTarget;
-      btn.disabled = true;
-      btn.innerHTML = '<div class="spinner"></div> Saving…';
-      const accepted = collect(el, docs);
-      const { data, error: applyErr } = await sb.rpc('apply_document_batch', {
-        p_batch_id: result.batchId, p_accepted: accepted,
-      });
-      if (applyErr) {
-        btn.disabled = false; btn.textContent = 'Save what I ticked';
-        showToast(applyErr.message, 'error');
-        return;
-      }
-      closeModal();
-      const parts = [];
-      const say = (k, one, many) => {
-        const n = Number(data?.[k] || 0);
-        if (n) parts.push(`${n} ${n > 1 ? (many || one + 's') : one}`);
-      };
-      say('patient_fields', 'field');
-      say('cycles', 'cycle'); say('medications', 'medicine');
-      say('lab_results', 'lab result'); say('biomarkers', 'biomarker');
-      say('anthropometry', 'measurement'); say('cost_certificates', 'cost certificate');
-      say('imaging', 'imaging report'); say('pathology', 'pathology report');
-      say('devices', 'device'); say('endoscopy', 'endoscopy report'); say('schemes', 'scheme');
-      say('red_flags', 'flag for the concerns queue', 'flags for the concerns queue');
-      showToast(parts.length ? `Saved ${parts.join(', ')}` : 'Nothing was ticked',
-                parts.length ? 'success' : 'info');
-      window.dispatchEvent(new CustomEvent('patient-updated', { detail: { patientId } }));
-    });
+  picker.addEventListener('change', () => {
+    uploadPicked(sb, patient, patientId, [...(picker.files || [])]);
   });
   picker.click();
+}
+
+async function uploadPicked(sb, patient, patientId, files) {
+  if (!files.length) return;
+  if (files.length > MAX_FILES) {
+    showToast(`That is more than ${MAX_FILES} files. Send them in two goes.`, 'error');
+    return;
+  }
+
+  // Closing the window while the files are still being drawn stops the
+  // upload: nothing has been written yet, so stopping costs nothing, and a
+  // question on screen cannot be answered once the window is gone. After the
+  // drawing, it carries on in the background exactly as it always did.
+  let drawing = true;
+  let stopped = false;
+  const ui = openProgress('Reading the documents', files.length, () => {
+    if (!drawing) return;
+    stopped = true;
+    ui.asker.cancel();
+  });
+
+  let result;
+  drawingNow = true;
+  try {
+    result = await uploadBatch(patientId, files, ui.stage, {
+      asker: ui.asker, onLeftOut: ui.leftOut,
+      isCancelled: () => stopped, onDrawn: () => { drawing = false; drawingNow = false; },
+    });
+  } catch (e) {
+    drawingNow = false;
+    if (!stopped) closeModal();
+    if (e instanceof FileProblem && e.kind === 'stopped') {
+      showToast('Stopped. Nothing was uploaded.', 'info');
+      return;
+    }
+    showToast(sanitize(e.message || 'Could not read those documents'), 'error', 12000);
+    return;
+  }
+  await showBatchReview(sb, patient, patientId, result);
 }

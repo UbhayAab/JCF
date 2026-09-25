@@ -32,6 +32,10 @@ export function showModal({ title, content, size = '', footer = '', onClose = nu
 
   document.body.appendChild(overlay);
   activeModal = overlay;
+  // Lets page-level bars step out of the way while a sheet is open. The PWA
+  // install bar sat on top of every modal's action row on iPhones from 22 Sep
+  // (it was z-index 9998, modals are 70) and hid "Save call" completely.
+  document.body.classList.add('modal-open');
 
   requestAnimationFrame(() => overlay.classList.add('active'));
 
@@ -52,6 +56,7 @@ export function closeModal(onClose = null) {
   activeModal.classList.remove('active');
   const m = activeModal;
   activeModal = null;
+  document.body.classList.remove('modal-open');
   setTimeout(() => m.remove(), 250);
   if (typeof onClose === 'function') onClose();
 }

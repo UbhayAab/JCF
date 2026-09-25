@@ -106,6 +106,11 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
     content: el, size: 'xl',
   });
 
+  // Declared before the first paint(): paint() calls refreshExact(), which
+  // reads exactTimer, and a `let` further down is still in its temporal dead
+  // zone here. That threw on every open, so the exact preview never ran.
+  let exactTimer = null;
+
   await loadEverything();
   paint();
 
@@ -186,7 +191,7 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
   // The preview used to be composed locally while the function composed its
   // own flat line, so the mentor read one thing and the family got another.
   // Exact by construction now; the local render is only the instant fallback.
-  let exactTimer = null;
+  // exactTimer is declared above the first paint(); see there.
   function refreshExact() {
     clearTimeout(exactTimer);
     exactTimer = setTimeout(async () => {

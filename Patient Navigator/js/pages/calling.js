@@ -1238,7 +1238,10 @@ function renderLogForm(p) {
           <input type="file" accept="audio/*,.m4a,.mp3,.wav,.ogg,.aac" hidden id="f-recording" /></label>
         ${renderLeversPanel(p)}
       </div>
-      <div class="lf-actions">
+      <!-- #f-why: a greyed Submit always says what it is waiting for, same
+           rule as "Save call" in components/callForm.js (field report 25/09). -->
+      <div class="lf-actions" style="flex-wrap:wrap">
+        <div id="f-why" role="status" aria-live="polite" style="flex:1 1 100%;font-size:12.5px;line-height:1.35;color:var(--ink-3)"></div>
         <button class="btn btn-ghost" id="f-skip">${icon('skip')}Skip for now</button>
         <button class="btn btn-primary grow" id="f-submit" style="flex:1" disabled>${icon('check')}Submit &amp; next call</button>
       </div>
@@ -1491,6 +1494,7 @@ function wireActive(p) {
     { onDone: () => { try { stopTimer(); } catch {} clearActive(); getNextCall(); } }));
   document.getElementById('f-skip')?.addEventListener('click', skipPatient);
   document.getElementById('f-submit')?.addEventListener('click', submitCallLog);
+  updateSubmit();   // the reason shows from the first paint, not after the first tap
 }
 
 // ---- Raise a concern: saves IMMEDIATELY, independent of the call log.
@@ -1685,7 +1689,16 @@ function suggestFollowup() {
   if (days != null) { form.followupDate = addDays(days); if (input) input.value = form.followupDate; if (autoEl) autoEl.style.display = ''; }
   else { form.followupDate = ''; if (input) input.value = ''; if (autoEl) autoEl.style.display = 'none'; }
 }
-function updateSubmit() { const btn = document.getElementById('f-submit'); if (!btn) return; const connected = form.dialStatus === 'connected'; btn.disabled = !form.dialStatus || (connected && !form.receptiveness); }
+function updateSubmit() {
+  const btn = document.getElementById('f-submit'); if (!btn) return;
+  const missing = [];
+  if (!form.dialStatus) missing.push('tap how the call went');
+  else if (form.dialStatus === 'connected' && !form.receptiveness) missing.push('tap how they were doing');
+  btn.disabled = missing.length > 0;
+  btn.title = missing.length ? `Still needed to submit: ${missing.join(', ')}.` : '';
+  const why = document.getElementById('f-why');
+  if (why) { why.textContent = missing.length ? `Still needed to submit: ${missing.join(', ')}.` : ''; why.hidden = !missing.length; }
+}
 
 // Duration is derived from a wall-clock anchor (timerStartEpoch), never from
 // counting ticks, so it stays correct even if the WebView reloads or sleeps

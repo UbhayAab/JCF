@@ -698,6 +698,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
           <button class="btn btn-secondary" id="edit-patient-btn">${icon('edit')}Edit</button>
           <button class="btn btn-secondary" id="read-docs-btn">${icon('upload')}Upload documents</button>
           <button class="btn btn-secondary" id="assess-btn">${icon('activity')}Record wellbeing</button>
+          ${!deceased ? `<button class="btn btn-secondary" id="org-report-btn" title="Record what happened when this family contacted an NGO or organisation">${icon('message')}Report an NGO</button>` : ''}
           ${!deceased ? `<button class="btn btn-gold" id="wa-share-btn">${icon('phone')}WhatsApp</button>` : ''}
           ${!deceased ? `<button class="btn btn-primary" id="log-call-btn">${icon('phoneCall')}Log a call</button>` : ''}
         </div>
@@ -743,6 +744,8 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       openCallForm({ patient: { id: patient.id, full_name: patient.full_name }, onSaved: reload }));
     container.querySelector('#wa-share-btn')?.addEventListener('click', () =>
       openWhatsappShare({ patient, recipients: recipientsFromPatient(patient) }));
+    container.querySelector('#org-report-btn')?.addEventListener('click', () =>
+      import('../components/resourceReport.js').then((m) => m.openResourceReport({ patient: { id: patient.id, patient_code: patient.patient_code } })));
     container.querySelector('#escalate-btn')?.addEventListener('click', () =>
       openEscalateModal({ id: patient.id, full_name: patient.full_name }, { onDone: (handedOver) => {
         // A hand-over that went through means she no longer holds them, so
@@ -1670,11 +1673,19 @@ export async function renderDocumentsTab(el, p, sb, reload) {
         </div>`
       : `<div>${batches.map((b) => {
           const mine = byBatch[b.id] || [];
-          const cls = b.status === 'failed' ? 'doc-callout-danger'
-                    : b.status === 'ready_for_review' ? 'doc-callout-warn' : '';
+          // sql/143 marks a read that stopped part way as failed but keeps its
+          // pages, and docBatch.openExistingBatch can pick it up where it
+          // stopped. Before this, the card said "could not be read" and had
+          // nothing to click, so a stalled read stayed stalled for weeks.
+          const stopped = b.status === 'failed' && b.page_count > 0;
+          const action = b.status === 'ready_for_review' ? 'Review now'
+                       : (stopped || b.status === 'segmenting' || b.status === 'extracting') ? 'Finish reading' : '';
+          const cls = b.status === 'failed' && !stopped ? 'doc-callout-danger'
+                    : (b.status === 'ready_for_review' || stopped) ? 'doc-callout-warn' : '';
           return `<div class="doc-callout ${cls}">
             <strong>${icon('fileText')} ${b.page_count || mine.length} page(s),
-              ${BATCH_STATUS[b.status] || sanitize(b.status)}</strong>
+              ${stopped ? 'stopped part way' : BATCH_STATUS[b.status] || sanitize(b.status)}</strong>
+            ${action ? `<button class="btn btn-primary btn-sm" data-open-batch="${b.id}" style="float:right">${action}</button>` : ''}
             <p>${new Date(b.uploaded_at).toLocaleString()}${
               b.reviewed_at ? ' &middot; reviewed ' + new Date(b.reviewed_at).toLocaleDateString() : ''}</p>
             ${b.note ? `<p class="form-hint">${sanitize(b.note)}</p>` : ''}
@@ -1692,6 +1703,12 @@ export async function renderDocumentsTab(el, p, sb, reload) {
     await openDocumentBatch(p.id);
     reload();
   });
+  el.querySelectorAll('[data-open-batch]').forEach((btn) => btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    const { openExistingBatch } = await import('./docBatch.js');
+    await openExistingBatch(btn.dataset.openBatch);
+    reload();
+  }));
 }
 
 /** The same class labels the batch reader uses, without importing the whole

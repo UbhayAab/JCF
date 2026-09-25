@@ -161,6 +161,14 @@ function injectStyle() {
     #pwa-ios-sheet .pwa-steps svg{width:15px;height:15px;vertical-align:-3px;margin-left:2px}
     #pwa-ios-sheet .pwa-sheet-btn{width:100%;padding:11px;font-family:inherit;font-size:14px;font-weight:600;
       color:var(--ink-inv,#fff);background:var(--ink,#12201f);border:none;border-radius:var(--r-sm,9px);cursor:pointer}
+
+    /* Never over a sheet or a sticky Save/Submit bar. !important because the
+       bar is styled inline. The calling portal's .lf-actions is not a modal
+       but is pinned to the same bottom edge, so it gets the same rule. The
+       :has() rule stands alone on purpose: a browser that does not know
+       :has() drops the whole rule, and must not take the class rule with it. */
+    body.modal-open #pwa-install-bar{display:none !important}
+    body:has(.modal-overlay, .lf-actions) #pwa-install-bar{display:none !important}
   `;
   document.head.appendChild(s);
 }
@@ -200,8 +208,14 @@ function paintBar() {
   const bar = document.createElement('div');
   bar.id = BAR_ID;
   bar.setAttribute('role', 'status');
+  // z-index 65: above the header (50) and the phone dock (40), BELOW the modal
+  // overlay (--z-modal: 70). It shipped at 9998 on 22 Sep and on an iPhone it
+  // then sat on top of the sticky action row of every sheet: "Save call" and
+  // the reason next to it were under this bar, untappable, and a nutritionist
+  // could not log a call for days. It is also hidden outright while a sheet is
+  // open (body.modal-open, set by components/modal.js; rule in injectStyle).
   bar.style.cssText = [
-    'position:fixed', 'left:0', 'right:0', 'bottom:0', 'z-index:9998',
+    'position:fixed', 'left:0', 'right:0', 'bottom:0', 'z-index:65',
     'display:flex', 'align-items:center', 'gap:10px', 'flex-wrap:wrap',
     'padding:10px 14px calc(10px + env(safe-area-inset-bottom,0px))',
     'background:var(--surface,#fff)', 'color:var(--text,#1b1b1f)',

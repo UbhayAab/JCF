@@ -26,6 +26,9 @@ const EXCLUDED = {
   not_taking_anyone:         'Full or closed',
   costs_more_than_they_have: 'Costs more than the family said they have',
   not_enough_known_about_it: 'Too little known about this row to send it safely',
+  // sql/142: held back until someone rings them and gets an answer.
+  family_got_no_answer:        'A family rang and nobody answered; not reached since',
+  family_said_it_did_not_help: 'A family was turned away; not re-checked since',
 };
 
 // Warnings. The family should be told, but this may still be the right answer.
