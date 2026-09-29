@@ -1653,7 +1653,7 @@ const BATCH_STATUS = {
 export async function renderDocumentsTab(el, p, sb, reload) {
   el.innerHTML = '<div class="card"><div class="spinner"></div></div>';
 
-  const [bRes, dRes] = await Promise.all([
+  const [bRes, dRes, cRes] = await Promise.all([
     // uploaded_at, NOT created_at. Both of these tables stamp uploaded_at and
     // neither has created_at, so the first version of this tab rendered its
     // error state on every patient with
@@ -1667,6 +1667,9 @@ export async function renderDocumentsTab(el, p, sb, reload) {
       .select('id, batch_id, doc_type, document_date, page_count, uploaded_at')
       .eq('patient_id', p.id).is('deleted_at', null)
       .order('uploaded_at', { ascending: false }).limit(200),
+    // WhatsApp papers waiting and the last HopeBot invite (sql/148). A failure
+    // here only hides those two lines; the documents themselves still show.
+    sb.rpc('get_call_context', { p_patient_ids: [p.id] }).then((r) => r, () => ({ data: null })),
   ]);
 
   // An error and an empty list look identical on screen unless this is checked,
@@ -1694,18 +1697,27 @@ export async function renderDocumentsTab(el, p, sb, reload) {
   for (const d of docs) (byBatch[d.batch_id] ??= []).push(d);
 
   const viewable = batches.filter((b) => b.status !== 'discarded' && (b.page_count || 0) > 0);
+  const summary = (cRes?.data || [])[0]?.documents || {};
+  const waWaiting = Number(summary.whatsapp_waiting || 0);
+  const canInvite = getUserRole() !== 'content' && p.patient_status !== 'deceased';
   el.innerHTML = `
     <div class="card">
       <div class="card-header">
         <div class="card-title">Documents the family has sent</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           ${viewable.length ? `<button class="btn btn-secondary btn-sm" id="doc-view-all">${icon('eye')}View all pages</button>` : ''}
+          ${canInvite ? `<button class="btn btn-ghost btn-sm" id="doc-hopebot" title="Send the family HopeBot on WhatsApp, so they can send their hospital papers there">${icon('message')}Send HopeBot</button>` : ''}
           ${upload}
         </div>
       </div>
       <p class="form-hint">Photos, screenshots or a PDF, in any order. We read them,
       check every answer back against the page, and show you what to confirm before
-      anything is saved. Nothing goes onto the record until you tick it.</p>
+      anything is saved. Nothing goes onto the record until you tick it.${summary.hopebot_invited_at
+        ? ` HopeBot was sent ${sanitize(fmtDayTime(summary.hopebot_invited_at))}${summary.hopebot_invited_by ? ' by ' + sanitize(summary.hopebot_invited_by) : ''}.` : ''}</p>
+      ${waWaiting ? `<div class="doc-callout doc-callout-ok" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <strong style="flex:1;min-width:200px">${icon('message')} ${waWaiting} ${waWaiting === 1 ? 'page' : 'pages'} sent on WhatsApp, not read yet</strong>
+          <button class="btn btn-primary btn-sm" id="doc-read-wa">Read them now</button>
+        </div>` : ''}
       ${!batches.length ? `<div class="empty">
           <div class="ico-wrap">${icon('fileText')}</div>
           <h4>Nothing uploaded yet</h4>
@@ -1765,6 +1777,19 @@ export async function renderDocumentsTab(el, p, sb, reload) {
     openDocumentViewer({ patientId: p.id, patientName: p.full_name || p.patient_code || '', onUpload: uploadMore }));
   el.querySelectorAll('[data-view-batch]').forEach((btn) => btn.addEventListener('click', () =>
     openDocumentViewer({ patientId: p.id, patientName: p.full_name || p.patient_code || '', batchId: btn.dataset.viewBatch })));
+  el.querySelector('#doc-read-wa')?.addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    const { readWhatsappDocuments } = await import('../components/whatsappDocs.js');
+    await readWhatsappDocuments(p.id);
+    reload();
+  });
+  el.querySelector('#doc-hopebot')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const { sendHopeBotInvite } = await import('../components/whatsappDocs.js');
+    if (await sendHopeBotInvite(p.id, p.full_name || p.patient_code || '')) reload();
+    else btn.disabled = false;
+  });
 }
 
 /** The class labels, now shared with the viewer and the portal (utils/docClasses.js). */

@@ -146,21 +146,33 @@ export function wirePhoneList(root, patientId, onChanged) {
   }));
 }
 
-/** Documents in one line, with View and Upload. */
-export function docStripHTML(documents, { canUpload = true } = {}) {
+/**
+ * Documents in one line, with View and Upload. With canInvite it also carries
+ * HopeBot (sql/148): papers the family sent on WhatsApp waiting to be read,
+ * when HopeBot was last sent and by whom, and the button that sends it.
+ */
+export function docStripHTML(documents, { canUpload = true, canInvite = false } = {}) {
   const d = documents || {};
+  const wa = Number(d.whatsapp_waiting || 0);
   const extra = [
     d.waiting_review ? `${d.waiting_review} waiting for review` : '',
     d.still_reading ? `${d.still_reading} still being read` : '',
   ].filter(Boolean).join(' · ');
+  const sent = d.hopebot_invited_at
+    ? `HopeBot sent ${fmtDay(d.hopebot_invited_at)} (${daysAgo(d.hopebot_invited_at)})${d.hopebot_invited_by ? ' by ' + d.hopebot_invited_by : ''}`
+    : '';
   return `<div class="docstrip" data-docstrip>
-    <span class="stat-ico ${d.uploads ? 'info' : 'neutral'}" style="width:32px;height:32px;border-radius:9px">${icon('fileText')}</span>
+    <span class="stat-ico ${d.uploads || wa ? 'info' : 'neutral'}" style="width:32px;height:32px;border-radius:9px">${icon('fileText')}</span>
     <div class="docstrip-text">
       <div class="info-label">Documents</div>
       <div class="info-value">${esc(describeDocuments(d))}</div>
+      ${wa ? `<div class="due-meta" style="color:var(--ok);font-weight:600">${wa} ${wa === 1 ? 'page' : 'pages'} sent on WhatsApp, not read yet</div>` : ''}
       ${extra ? `<div class="due-meta">${esc(extra)}</div>` : ''}
+      ${canInvite && sent ? `<div class="due-meta">${esc(sent)}</div>` : ''}
     </div>
+    ${wa ? `<button type="button" class="btn btn-primary btn-sm" data-doc-wa>${icon('message')}Read WhatsApp papers</button>` : ''}
     ${d.uploads ? `<button type="button" class="btn btn-secondary btn-sm" data-doc-view>${icon('eye')}View documents</button>` : ''}
     ${canUpload ? `<button type="button" class="btn btn-ghost btn-sm" data-doc-upload>${icon('upload')}Upload</button>` : ''}
+    ${canInvite ? `<button type="button" class="btn btn-ghost btn-sm" data-hb-invite title="Send the family HopeBot on WhatsApp, so they can send their hospital papers there">${icon('message')}Send HopeBot</button>` : ''}
   </div>`;
 }

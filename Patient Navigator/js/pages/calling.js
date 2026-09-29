@@ -811,7 +811,7 @@ function mountActive(p, history) {
           <div id="dial-order-mount">${renderDialOrder(p)}</div>
           <!-- sql/146: when the last document arrived and by whom, and the pages
                themselves one tap away, without leaving the call. -->
-          <div id="doc-strip-mount">${currentContext ? docStripHTML(currentContext.documents) : ''}</div>
+          <div id="doc-strip-mount">${currentContext ? docStripHTML(currentContext.documents, { canInvite: true }) : ''}</div>
           ${renderPriorityBanner()}
           ${renderStageGuide(p)}
           ${p.followup_strategy_notes ? `
@@ -942,15 +942,37 @@ function wireDialArea(p) {
 function wireDocStrip(p) {
   const mount = document.getElementById('doc-strip-mount');
   if (!mount) return;
+  const name = p.full_name || p.patient_code || '';
+  // Redraw the strip from a fresh context: after an invite, or once WhatsApp
+  // papers have gone to the reader.
+  const refresh = async () => {
+    await loadContextFor(p.patient_id);
+    const m = document.getElementById('doc-strip-mount');
+    if (m && currentContext) { m.innerHTML = docStripHTML(currentContext.documents, { canInvite: true }); wireDocStrip(p); }
+  };
   const upload = async () => {
     saveActive();
     const { openDocumentBatch } = await import('./docBatch.js');
     await openDocumentBatch(p.patient_id);
   };
   mount.querySelector('[data-doc-view]')?.addEventListener('click', () => openDocumentViewer({
-    patientId: p.patient_id, patientName: p.full_name || p.patient_code || '', onUpload: upload,
+    patientId: p.patient_id, patientName: name, onUpload: upload,
   }));
   mount.querySelector('[data-doc-upload]')?.addEventListener('click', upload);
+  mount.querySelector('[data-doc-wa]')?.addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    saveActive();
+    const { readWhatsappDocuments } = await import('../components/whatsappDocs.js');
+    await readWhatsappDocuments(p.patient_id);
+    await refresh();
+  });
+  mount.querySelector('[data-hb-invite]')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const { sendHopeBotInvite } = await import('../components/whatsappDocs.js');
+    const sent = await sendHopeBotInvite(p.patient_id, name);
+    if (sent) await refresh(); else btn.disabled = false;
+  });
 }
 
 // Every previous conversation (everyone's notes, newest first) so the

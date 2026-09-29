@@ -81,7 +81,8 @@ export async function renderUploads(container) {
     if (!list.length) return;
     exportToCSV(list, 'document_uploads', [
       { label: 'Uploaded at (IST)', accessor: (r) => fmtDayTime(r.uploaded_at) },
-      { label: 'Uploaded by', accessor: (r) => r.uploader_name || (r.uploaded_by ? 'Unknown' : 'WhatsApp') },
+      { label: 'Source', accessor: (r) => (r.source === 'whatsapp' ? 'Family on WhatsApp (HopeBot)' : 'Uploaded by staff') },
+      { label: 'Uploaded or read in by', accessor: (r) => r.uploader_name || 'Unknown' },
       { label: 'Role', accessor: (r) => (r.uploader_role ? roleLabel(r.uploader_role) : '') },
       { label: 'Patient code', key: 'patient_code' },
       { label: 'Patient', key: 'patient_name' },
@@ -139,8 +140,9 @@ function paint(container) {
 
   // One line per person: the question Aadrika asked, answered at a glance.
   const byPerson = [...list.reduce((m, r) => {
-    const k = r.uploaded_by || 'whatsapp';
-    const p = m.get(k) || { name: r.uploader_name || (r.uploaded_by ? 'Unknown' : 'Sent on WhatsApp'), role: r.uploader_role, uploads: 0, pages: 0, fams: new Set(), last: null, waiting: 0 };
+    const wa = r.source === 'whatsapp';
+    const k = wa ? 'whatsapp' : (r.uploaded_by || 'unknown');
+    const p = m.get(k) || { name: wa ? 'Families, on WhatsApp' : (r.uploader_name || 'Unknown'), role: wa ? null : r.uploader_role, uploads: 0, pages: 0, fams: new Set(), last: null, waiting: 0 };
     p.uploads++; p.pages += r.page_count || 0; p.fams.add(r.patient_id);
     if (!p.last || r.uploaded_at > p.last) p.last = r.uploaded_at;
     if (r.status === 'ready_for_review') p.waiting++;
@@ -175,7 +177,9 @@ function paint(container) {
         <thead><tr><th>When</th><th>Uploaded by</th><th>Patient</th><th>Pages</th><th>What was in it</th><th>Status</th><th></th></tr></thead>
         <tbody>${list.map(r => `<tr>
           <td style="white-space:nowrap">${sanitize(fmtDayTime(r.uploaded_at))}<div class="due-meta">${sanitize(daysAgo(r.uploaded_at))}</div></td>
-          <td><strong>${sanitize(r.uploader_name || (r.uploaded_by ? 'Unknown' : 'WhatsApp'))}</strong>${r.uploader_role ? `<div class="due-meta">${sanitize(roleLabel(r.uploader_role))}</div>` : ''}</td>
+          <td>${r.source === 'whatsapp'
+            ? `<strong>Family, on WhatsApp</strong><div class="due-meta">read in by ${sanitize(r.uploader_name || 'the team')}</div>`
+            : `<strong>${sanitize(r.uploader_name || 'Unknown')}</strong>${r.uploader_role ? `<div class="due-meta">${sanitize(roleLabel(r.uploader_role))}</div>` : ''}`}</td>
           <td><a href="#patients/${sanitize(r.patient_id)}" data-open="${sanitize(r.patient_id)}">${sanitize(r.patient_name || 'Patient')}</a><div class="due-meta">${sanitize(r.patient_code || '')}</div></td>
           <td class="tnum">${r.page_count || 0}</td>
           <td>${(r.doc_types || []).length ? sanitize(r.doc_types.map(docClassLabel).join(', ')) : `<span class="due-meta">${r.documents ? r.documents + ' document(s)' : 'not sorted yet'}</span>`}</td>

@@ -692,7 +692,7 @@ function retryable(err) {
 }
 
 async function uploadBatch(patientId, files, stage, { asker = null, onLeftOut = null,
-                                                      isCancelled = null, onDrawn = null } = {}) {
+                                                      isCancelled = null, onDrawn = null, onBatch = null } = {}) {
   // ---- draw every page first; nothing is written until there are some ----
   const prep = await prepareFiles(files, { stage, asker, onLeftOut, isCancelled });
   if (!prep.pages.length) {
@@ -718,6 +718,10 @@ async function uploadBatch(patientId, files, stage, { asker = null, onLeftOut = 
     await setBatchState(sb, batch.id, 'failed', NOTE_UPLOAD_STOPPED);
     throw err;
   }
+  // The pages are stored, so the batch exists whatever the read does next.
+  // WhatsApp papers link themselves here (whatsappDocs.js), before the long
+  // read, so a closed tab can never leave them offered as unread twice.
+  if (onBatch) { try { await onBatch(batch.id); } catch (e) { console.warn('[docBatch] onBatch failed:', e.message); } }
 
   const read = await readBatch(sb, batch.id, stage);
   return { ...read, dupes, pageCount: pages.length, leftOut: prep.leftOut, notes: prep.notes };
@@ -2012,7 +2016,7 @@ export async function openDocumentBatch(patientId) {
  * is no picker to open. A patient added a moment ago has no earlier uploads,
  * so the unfinished-upload chooser in openDocumentBatch is not needed here.
  */
-export async function uploadDocumentsFor(patientId, files, { consentMethod = null } = {}) {
+export async function uploadDocumentsFor(patientId, files, { consentMethod = null, onBatch = null } = {}) {
   const list = [...(files || [])];
   if (!patientId || !list.length) return false;
   if (drawingNow) {
@@ -2030,11 +2034,11 @@ export async function uploadDocumentsFor(patientId, files, { consentMethod = nul
     if (!method) { showToast('Recorded that they did not agree. Nothing was uploaded.', 'info'); return false; }
     await recordConsent(patientId, true, method);
   }
-  await uploadPicked(sb, patient, patientId, list);
+  await uploadPicked(sb, patient, patientId, list, { onBatch });
   return true;
 }
 
-async function uploadPicked(sb, patient, patientId, files) {
+async function uploadPicked(sb, patient, patientId, files, { onBatch = null } = {}) {
   if (!files.length) return;
   if (files.length > MAX_FILES) {
     showToast(`That is more than ${MAX_FILES} files. Send them in two goes.`, 'error');
@@ -2057,7 +2061,7 @@ async function uploadPicked(sb, patient, patientId, files) {
   drawingNow = true;
   try {
     result = await uploadBatch(patientId, files, ui.stage, {
-      asker: ui.asker, onLeftOut: ui.leftOut,
+      asker: ui.asker, onLeftOut: ui.leftOut, onBatch,
       isCancelled: () => stopped, onDrawn: () => { drawing = false; drawingNow = false; },
     });
   } catch (e) {
