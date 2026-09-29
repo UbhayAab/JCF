@@ -21,6 +21,10 @@ import { AVATAR_COLORS, avatarColor, initials } from '../utils/avatar.js';
 // whole footprint, and removing those three lines removes the feature cleanly.
 import { renderNotesPanel } from '../components/patientNotes.js';
 import { openDisinterestModal, openBlacklistModal } from '../components/escalate.js';
+// sql/146: why a family is flagged, their documents and their main number,
+// shown BEFORE the call (today's list preview) and at the top of the call.
+import { loadCallContext, flagCardHTML, flagChipsHTML, phoneListHTML, wirePhoneList, docStripHTML } from '../components/callContext.js';
+import { openDocumentViewer, fmtDay, daysAgo } from '../components/docViewer.js';
 
 // ---- module state ----
 let me = null;                 // current profile
@@ -38,6 +42,8 @@ let currentServices = {};       // patient_services rows by lever, for the in-ca
 let currentOpenLoops = [];      // "still to ask", read through the call claim
 let lastLoggedCall = null;      // { id, name, at } - powers "Fix that log" after submit
 let availableToday = true;
+let currentContext = null;      // get_call_context row for the family on the call (sql/146)
+let listContext = new Map();    // patient_id -> get_call_context row, for today's list
 const form = blankForm();
 
 // --- active-call persistence: survive a WebView reload, leaving the site to
@@ -101,8 +107,10 @@ async function restoreActive(s) {
   // reloads the WebView), recover the TRUE elapsed time from the wall clock
   // instead of the stale snapshot. This is what was wiping the duration.
   if (timerRunning && timerStartEpoch) timerSeconds = Math.floor((Date.now() - timerStartEpoch) / 1000);
-  await Promise.all([loadPatientPitches(s.patient.patient_id), loadPatientSessions(s.patient.patient_id), loadPatientPriority(s.patient.patient_id)]);
-  mountActive(s.patient, currentHistory);
+  await Promise.all([loadPatientPitches(s.patient.patient_id), loadPatientSessions(s.patient.patient_id),
+                     loadPatientPriority(s.patient.patient_id), loadContextFor(s.patient.patient_id)]);
+  currentPatient = withContextPhones(s.patient);
+  mountActive(currentPatient, currentHistory);
   applySavedForm(s.form);
   if (timerRunning) resumeRunningTimer();
 }
@@ -188,28 +196,59 @@ function dialablePhones(p) {
   return flat;
 }
 
-// The one number the big "Tap to call" button dials.
+// The one number the big "Tap to call" button dials. A number someone marked
+// as the family's main one wins (sql/146); otherwise the patient's own line,
+// then the first number in dial order, exactly as before.
 function primaryPhone(p) {
   const all = dialablePhones(p);
+  const main = all.find(ph => ph.is_primary);
+  if (main) return main;
   if (p.phone_full) return { phone: p.phone_full, label: 'patient' };
   return all[0] || null;
 }
 
+// The numbers as get_call_context returns them carry an id and the main-number
+// mark, which the queue JSON from get_next_call does not. Same numbers, same
+// order apart from the mark, so they simply replace the queue's list.
+function withContextPhones(p) {
+  const phones = currentContext && Array.isArray(currentContext.phones) ? currentContext.phones : [];
+  return phones.length ? { ...p, phones } : p;
+}
+
+async function loadContextFor(patientId) {
+  try {
+    const m = await loadCallContext([patientId]);
+    currentContext = m.get(patientId) || null;
+  } catch (e) {
+    // An older deploy of the database, or a network blip: the call still works,
+    // it just opens without the flags and documents cards.
+    console.warn('[portal] call context unavailable:', e.message);
+    currentContext = null;
+  }
+}
+
 function renderDialOrder(p) {
-  const phones = Array.isArray(p.phones) ? p.phones : [];
+  const phones = (Array.isArray(p.phones) ? p.phones : []).filter(ph => ph && ph.phone);
   if (phones.length <= 1) return '';
-  const LABELS = PHONE_LABELS;
+  const canMark = phones.every(ph => ph.id);
   return `
     <div class="dial-order" style="margin-top:10px;border:1px solid var(--line);border-radius:var(--r-md);padding:11px 13px">
       <div class="info-label" style="margin-bottom:7px">No pickup? Try in this order</div>
-      ${phones.map((ph, i) => `
-        <a class="cg-call" href="tel:${String(ph.phone).replace(/\s/g, '')}" style="display:flex;align-items:center;gap:9px;margin-top:${i ? 7 : 0}px">
-          <span class="badge badge-${i === 0 ? 'primary' : 'neutral'}" style="min-width:24px;justify-content:center">${i + 1}</span>
-          <span class="tnum" style="font-weight:600">${ph.phone}</span>
-          <span class="faint" style="font-size:12px;color:var(--ink-3)">${LABELS[ph.label] || ph.label}${ph.contact_name && ph.label !== 'patient' ? ' · ' + ph.contact_name : ''}${ph.relationship ? ' (' + ph.relationship + ')' : ''}</span>
-        </a>`).join('')}
-      <div class="faint" style="font-size:11.5px;color:var(--ink-3);margin-top:9px">One family, one conversation: once anyone answers, log it and stop dialling the other numbers.</div>
+      ${phoneListHTML(phones, { canEdit: canMark })}
+      <div class="faint" style="font-size:11.5px;color:var(--ink-3);margin-top:9px">One family, one conversation: once anyone answers, log it and stop dialling the other numbers.${canMark ? ' If the family says which number to use, tap <strong>Make main</strong> on it and everyone rings that one first.' : ''}</div>
     </div>`;
+}
+
+// Where the call came from, in words a mentor recognises. A queue row raised
+// by an open flag (source 'concern') used to read "New", which is why a flagged
+// family looked like a fresh lead until the call was open.
+function sourceBadge(source, long = false) {
+  switch (source) {
+    case 'followup':        return badge('primary', 'Follow-up');
+    case 'concern':         return badge('danger', long ? 'Flag follow-up' : 'Flag');
+    case 'nutrition_pitch': return badge('ok', 'Nutrition');
+    default:                return badge('gold', long ? 'New lead' : 'New');
+  }
 }
 
 function overdueBadge(days) {
@@ -361,17 +400,23 @@ async function loadTodayList() {
     const noNumber = rows.filter(r => r.no_number);
     const later = rows.length - servable.length - resting.length - noNumber.length;
     if (countEl) countEl.textContent = servable.length ? `${servable.length} to call` : 'none to call';
+    // What each family is flagged for, their documents and numbers, in one
+    // round trip for the whole list (sql/146). If it fails the list still
+    // renders exactly as it did before, just without the chips.
+    try { listContext = await loadCallContext(rows.map(r => r.patient_id)); }
+    catch (e) { console.warn('[worklist] context unavailable:', e.message); listContext = new Map(); }
+    const flaggedN = servable.filter(r => (listContext.get(r.patient_id)?.flags || []).length).length;
     body.innerHTML = `
+      ${flaggedN ? `<div class="due-meta wraps" style="padding:var(--s3) var(--s5) 0;color:var(--ink-2)">${flaggedN} of today's ${servable.length === 1 ? 'call is' : 'calls are'} flagged. Tap anyone to read why before you ring.</div>` : `<div class="due-meta wraps" style="padding:var(--s3) var(--s5) 0;color:var(--ink-3)">Tap anyone to see their details before you ring.</div>`}
       <div class="due-list">
-        ${servable.map(r => worklistRowHTML(r, true)).join('')}
-        ${resting.map(r => worklistRowHTML(r, false)).join('')}
-        ${noNumber.map(r => worklistRowHTML(r, false)).join('')}
+        ${servable.map(r => worklistRowHTML(r, 'servable')).join('')}
+        ${resting.map(r => worklistRowHTML(r, 'resting')).join('')}
+        ${noNumber.map(r => worklistRowHTML(r, 'nonumber')).join('')}
       </div>
-      ${noNumber.length ? `<div class="due-meta" style="padding:0 var(--s5) var(--s4);color:var(--ink-3)">
+      ${noNumber.length ? `<div class="due-meta wraps" style="padding:0 var(--s5) var(--s4);color:var(--ink-3)">
         ${noNumber.length} ${noNumber.length === 1 ? 'person has' : 'people have'} no phone number on file, so they are held out of the call order instead of blocking it. Open the profile to add a number and they come back into the list.</div>` : ''}
-      ${later > 0 ? `<div class="due-meta" style="padding:0 var(--s5) var(--s4);color:var(--ink-3)">+ ${later} more scheduled for the coming days.</div>` : ''}`;
-    body.querySelectorAll('[data-qid]').forEach(row => row.addEventListener('click', () => startFromList(row.dataset.qid, row)));
-    body.querySelectorAll('[data-pid]').forEach(row => row.addEventListener('click', () => navigate('patients/' + row.dataset.pid)));
+      ${later > 0 ? `<div class="due-meta wraps" style="padding:0 var(--s5) var(--s4);color:var(--ink-3)">+ ${later} more scheduled for the coming days.</div>` : ''}`;
+    body.querySelectorAll('[data-wl]').forEach(row => wireWorklistRow(row, rows.find(r => r.patient_id === row.dataset.wl && String(r.queue_id) === row.dataset.q)));
   } catch (err) {
     // RPC not deployed yet or a network blip: the Start button still works.
     console.warn('Worklist error:', err);
@@ -379,32 +424,103 @@ async function loadTodayList() {
   }
 }
 
-function worklistRowHTML(r, servable) {
+// A row used to START the call the moment it was tapped, so the only way to
+// learn why someone was flagged was to take them. Reported 28 Sep: "before
+// taking the call, the patient is not visible at all in the list". A tap now
+// opens the row to show the flags, the family and the last call, and the call
+// starts from the button inside it.
+function worklistRowHTML(r, kind) {
   const name = r.full_name || r.patient_code || 'Patient';
-  const srcBadge = r.source === 'followup' ? badge('primary', 'Follow-up') : badge('gold', 'New');
-  const meta = servable
+  const ctx = listContext.get(r.patient_id);
+  const meta = kind === 'servable'
     ? (r.last_call_date ? `Last call ${formatRelativeTime(r.last_call_date)}` : 'First conversation')
-    : r.no_number
+    : kind === 'nonumber'
       ? 'No phone number on file: add one to bring them back into the list'
       : `Resting: resurfaces ${fmtDayIN(r.resting_until)}`;
-  // An un-callable row opens the profile instead of the call flow: the only
-  // useful action on it is filling in the number.
-  const attrs = servable
-    ? `data-qid="${r.queue_id}" style="cursor:pointer" title="Call ${name} now"`
-    : r.no_number
-      ? `data-pid="${r.patient_id}" style="cursor:pointer;opacity:.75" title="Open ${name} and add a number"`
-      : 'style="opacity:.55"';
   return `
-    <div class="due-row${servable || r.no_number ? ' clickable' : ''}" ${attrs}>
-      <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span>
-      <div class="grow" style="flex:1;min-width:0">
-        <div class="due-name">${name}</div>
-        <div class="due-meta">${meta}</div>
+    <div class="due-row wl-row" data-wl="${sanitizeText(r.patient_id)}" data-q="${sanitizeText(r.queue_id)}" data-kind="${kind}">
+      <div class="wl-main" role="button" tabindex="0" aria-expanded="false" title="See ${sanitizeText(name)} before you call"${kind === 'resting' ? ' style="opacity:.6"' : ''}>
+        <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span>
+        <div class="grow" style="flex:1;min-width:0">
+          <div class="due-name">${sanitizeText(name)}</div>
+          <div class="due-meta">${meta}</div>
+          ${flagChipsHTML(ctx)}
+        </div>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
-        ${r.no_number ? badge('warn', 'No number') : srcBadge}${servable ? overdueBadge(r.overdue_days) : ''}
+      <div class="wl-side">
+        ${kind === 'nonumber' ? badge('warn', 'No number') : sourceBadge(r.source)}${kind === 'servable' ? overdueBadge(r.overdue_days) : ''}
+        <button type="button" class="btn btn-ghost btn-sm btn-icon wl-toggle" aria-label="Show ${sanitizeText(name)}'s details">${icon('chevronRight')}</button>
       </div>
+      <div class="wl-preview" hidden></div>
     </div>`;
+}
+
+function worklistPreviewHTML(r, kind) {
+  const ctx = listContext.get(r.patient_id);
+  const actions = `
+    <div class="wl-preview-actions">
+      ${kind === 'servable' ? `<button type="button" class="btn btn-primary btn-sm" data-wl-start>${icon('phoneCall')}Start this call</button>` : ''}
+      <button type="button" class="btn btn-secondary btn-sm" data-wl-open>${icon('user')}${kind === 'nonumber' ? 'Open record to add a number' : 'Open full record'}</button>
+    </div>`;
+  if (!ctx) {
+    return `<div class="due-meta">Their details could not be loaded just now. You can still start the call, and everything opens there.</div>${actions}`;
+  }
+  const pr = ctx.profile || {};
+  const lc = ctx.last_call;
+  const kv = [
+    ['Age / gender', [pr.age, pr.gender ? capitalize(pr.gender) : ''].filter(Boolean).join(' · ') || 'N/A'],
+    ['Cancer', giLabel(pr.gi_subtype) || pr.cancer_type || 'Not reported'],
+    ['Stage', pr.tnm_stage || (pr.cancer_stage && pr.cancer_stage !== 'unknown' ? capitalize(pr.cancer_stage) : 'N/A')],
+    ['Place', [pr.city, pr.state].filter(Boolean).join(', ') || 'N/A'],
+    ['Language', pr.primary_language || 'N/A'],
+    ['Consent', pr.consent_given ? 'Given' : 'Not yet: ask first'],
+  ];
+  const ds = lc ? (DIAL_STATUSES.find(d => d.key === lc.dial_status) || { label: capitalize(lc.dial_status || 'N/A') }) : null;
+  return `
+    ${(ctx.flags || []).length ? flagCardHTML(ctx.flags) : `<div class="due-meta" style="color:var(--ok)">No open flags on this family.</div>`}
+    <div class="kv">${kv.map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${sanitizeText(v)}</div></div>`).join('')}</div>
+    <div class="wl-lastcall">
+      <div class="info-label">Last call</div>
+      ${lc ? `${sanitizeText(ds.label)} · ${sanitizeText(lc.caller || 'someone on the team')} · ${sanitizeText(fmtDay(lc.call_date))} (${sanitizeText(daysAgo(lc.call_date))})
+        ${lc.notes ? `<div style="margin-top:3px">${sanitizeText(lc.notes)}</div>` : ''}
+        ${lc.next_time ? `<div style="margin-top:3px;color:var(--clay)">↪ for the next call: ${sanitizeText(lc.next_time)}</div>` : ''}`
+      : 'No call logged yet. This will be the first conversation.'}
+    </div>
+    ${(ctx.phones || []).length > 1 ? `<div><div class="info-label" style="margin-bottom:6px">Numbers</div>${phoneListHTML(ctx.phones, { dial: false })}</div>` : ''}
+    ${docStripHTML(ctx.documents, { canUpload: false })}
+    ${actions}`;
+}
+
+function wireWorklistRow(row, r) {
+  if (!row || !r) return;
+  const kind = row.dataset.kind;
+  const preview = row.querySelector('.wl-preview');
+  const mainEl = row.querySelector('.wl-main');
+  const fill = () => {
+    preview.innerHTML = worklistPreviewHTML(r, kind);
+    preview.querySelector('[data-wl-start]')?.addEventListener('click', () => startFromList(r.queue_id, row));
+    preview.querySelector('[data-wl-open]')?.addEventListener('click', () => navigate('patients/' + r.patient_id));
+    preview.querySelector('[data-doc-view]')?.addEventListener('click', () =>
+      openDocumentViewer({ patientId: r.patient_id, patientName: r.full_name || r.patient_code || '' }));
+    wirePhoneList(preview, r.patient_id, async () => {
+      try { const m = await loadCallContext([r.patient_id]); if (m.get(r.patient_id)) listContext.set(r.patient_id, m.get(r.patient_id)); } catch {}
+      fill();
+    });
+  };
+  const toggle = () => {
+    const open = preview.hidden;
+    // One open at a time keeps the list a list.
+    document.querySelectorAll('#tl-body .wl-row.open').forEach(o => {
+      if (o !== row) { o.classList.remove('open'); o.querySelector('.wl-preview').hidden = true; o.querySelector('.wl-main')?.setAttribute('aria-expanded', 'false'); }
+    });
+    if (open) fill();
+    preview.hidden = !open;
+    row.classList.toggle('open', open);
+    mainEl?.setAttribute('aria-expanded', String(open));
+  };
+  mainEl?.addEventListener('click', toggle);
+  mainEl?.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+  row.querySelector('.wl-toggle')?.addEventListener('click', toggle);
 }
 function fmtDayIN(d) { return d ? new Date(d).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }) : 'soon'; }
 
@@ -491,10 +607,11 @@ async function startCallSession(data) {
   timerSeconds = 0; timerRunning = false; timerStartEpoch = null;
   clearInterval(timerInterval); timerInterval = null;
   await Promise.all([loadPatientPitches(data.patient_id), loadPatientSessions(data.patient_id), loadPatientPriority(data.patient_id),
-                     loadPatientServices(data.patient_id), loadOpenLoopsForCall(data.patient_id)]);
+                     loadPatientServices(data.patient_id), loadOpenLoopsForCall(data.patient_id), loadContextFor(data.patient_id)]);
   currentHistory = await loadPatientHistory(data.patient_id);
+  currentPatient = withContextPhones(data);
   saveActive();
-  mountActive(data, currentHistory);
+  mountActive(currentPatient, currentHistory);
 }
 
 // ---- Support levers and open loops, for the call itself ----
@@ -649,7 +766,7 @@ function mountActive(p, history) {
   const name = p.full_name || p.patient_code || 'Patient';
   const attemptTone = p.attempt >= 3 ? 'danger' : p.attempt === 2 ? 'warn' : 'info';
   const location = [p.city, p.state].filter(Boolean).join(', ') || 'N/A';
-  const srcBadge = p.source === 'followup' ? badge('primary', 'Follow-up') : badge('gold', 'New lead');
+  const srcBadge = sourceBadge(p.source, true);
   const info = [
     { label: 'Age / Gender', value: `${p.age || 'N/A'} · ${capitalize(p.gender || 'N/A')}` },
     { label: 'Location', value: location },
@@ -662,14 +779,6 @@ function mountActive(p, history) {
     { label: 'Paying via', value: p.payment_method || capitalize(p.insurance_status || 'N/A') },
     { label: 'Language', value: p.primary_language || 'N/A' },
   ];
-  // The number the big button dials. It used to read patients.phone_full only,
-  // so a family whose numbers are all caregiver lines saw "No number on file"
-  // with those very numbers listed underneath, and the button's href="#" threw
-  // the hash router onto the login screen.
-  const dialPrimary = primaryPhone(p);
-  const dialWho = dialPrimary && dialPrimary.label && dialPrimary.label !== 'patient'
-    ? `${PHONE_LABELS[dialPrimary.label] || 'Contact'}${dialPrimary.contact_name ? ' · ' + dialPrimary.contact_name : ''}`
-    : '';
   el.innerHTML = `
     ${undoBarHTML()}
     <div class="portal-grid">
@@ -687,21 +796,11 @@ function mountActive(p, history) {
               </div>
             </div>
           </div>
-          ${dialPrimary ? `
-          <a class="callbtn" href="tel:${String(dialPrimary.phone).replace(/\s/g, '')}">
-            <span class="cb-ico">${icon('phone')}</span>
-            <div class="grow" style="flex:1"><div class="cb-label">Tap to call${dialWho ? ' · ' + dialWho : ''}</div><div class="cb-num tnum">${dialPrimary.phone}</div></div>
-            ${icon('chevronRight')}
-          </a>
-          <button class="btn btn-secondary" id="copy-num" data-num="${String(dialPrimary.phone).replace(/\s/g, '')}" style="width:100%;justify-content:center;gap:8px;margin-top:8px">${icon('copy')}Copy number</button>`
-          : `
-          <div class="strategy" style="margin-bottom:0">
-            <div class="strategy-head"><span class="strategy-ico">${icon('phone')}</span>
-              <div><div class="strategy-title">No number on file</div></div>
-            </div>
-            <p class="strategy-body">There is nothing to dial for this family yet. Add a number on their profile and they come back into the call order. Your notes here are kept while you go.</p>
-          </div>
-          <button class="btn btn-secondary" id="open-profile-num" style="width:100%;justify-content:center;gap:8px;margin-top:8px">${icon('user')}Open profile to add a number</button>`}
+          <!-- sql/146: what was flagged, in the flagger's own words, before the
+               number. Reported 28 Sep: interns were searching for the reason
+               after the call because nothing on this screen said it. -->
+          <div id="flag-mount">${flagCardHTML(currentContext?.flags)}</div>
+          <div id="dial-block">${dialBlockHTML(p)}</div>
           <!-- Was "Send resources on WhatsApp". Renamed because interns reported
                they could not get at financial and accommodation help quickly:
                match_resources() was already running behind this button, but a
@@ -709,7 +808,10 @@ function mountActive(p, history) {
                something up while you are talking. -->
           <button class="btn btn-gold" id="wa-share-btn" style="width:100%;justify-content:center;gap:8px;margin-top:8px">${icon('handHeart')}Find help for them · money, stay, food</button>
           <button class="btn btn-secondary" id="open-shelf-btn" style="width:100%;justify-content:center;gap:8px;margin-top:8px">${icon('search')}Open the full resource shelf</button>
-          ${renderDialOrder(p)}
+          <div id="dial-order-mount">${renderDialOrder(p)}</div>
+          <!-- sql/146: when the last document arrived and by whom, and the pages
+               themselves one tap away, without leaving the call. -->
+          <div id="doc-strip-mount">${currentContext ? docStripHTML(currentContext.documents) : ''}</div>
           ${renderPriorityBanner()}
           ${renderStageGuide(p)}
           ${p.followup_strategy_notes ? `
@@ -764,6 +866,91 @@ function mountActive(p, history) {
   wireGapsPanel(p);
   wireLeversPanel(p);
   wireUndoBar();
+}
+
+// The number the big button dials. It used to read patients.phone_full only,
+// so a family whose numbers are all caregiver lines saw "No number on file"
+// with those very numbers listed underneath, and the button's href="#" threw
+// the hash router onto the login screen. Rendered on its own so marking a
+// main number can redraw it mid-call without touching the form beside it.
+function dialBlockHTML(p) {
+  const dialPrimary = primaryPhone(p);
+  if (!dialPrimary) {
+    return `
+      <div class="strategy" style="margin-bottom:0">
+        <div class="strategy-head"><span class="strategy-ico">${icon('phone')}</span>
+          <div><div class="strategy-title">No number on file</div></div>
+        </div>
+        <p class="strategy-body">There is nothing to dial for this family yet. Add a number on their profile and they come back into the call order. Your notes here are kept while you go.</p>
+      </div>
+      <button class="btn btn-secondary" id="open-profile-num" style="width:100%;justify-content:center;gap:8px;margin-top:8px">${icon('user')}Open profile to add a number</button>`;
+  }
+  const dialWho = dialPrimary.label && dialPrimary.label !== 'patient'
+    ? `${PHONE_LABELS[dialPrimary.label] || 'Contact'}${dialPrimary.contact_name ? ' · ' + dialPrimary.contact_name : ''}`
+    : '';
+  const tel = String(dialPrimary.phone).replace(/\s/g, '');
+  return `
+    <a class="callbtn" href="tel:${sanitizeText(tel)}">
+      <span class="cb-ico">${icon('phone')}</span>
+      <div class="grow" style="flex:1"><div class="cb-label">Tap to call${dialPrimary.is_primary ? ' · main number' : ''}${dialWho ? ' · ' + sanitizeText(dialWho) : ''}</div><div class="cb-num tnum">${sanitizeText(dialPrimary.phone)}</div></div>
+      ${icon('chevronRight')}
+    </a>
+    <button class="btn btn-secondary" id="copy-num" data-num="${sanitizeText(tel)}" style="width:100%;justify-content:center;gap:8px;margin-top:8px">${icon('copy')}Copy number</button>`;
+}
+
+// Tapping ANY number to dial auto-starts the duration timer, so a caller
+// never loses a call's length just because they forgot to hit "Start".
+// Covers the main "Tap to call" button and every dial-order number:
+// multi-phone patients dial from the list, not the main button, which is why
+// their duration was not being tracked.
+function wireDialArea(p) {
+  ['dial-block', 'dial-order-mount'].forEach(id => document.getElementById(id)
+    ?.querySelectorAll('.callbtn, .cg-call, .ph-num')
+    .forEach(a => a.addEventListener('click', () => { if (!timerRunning) startTimer(); })));
+  // Copy number: tap-to-call fails on some phones, so offer a paste-able number.
+  document.getElementById('copy-num')?.addEventListener('click', async (e) => {
+    const num = e.currentTarget.dataset.num || '';
+    let done = false;
+    try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(num); done = true; } } catch {}
+    if (!done) { try { const t = document.createElement('textarea'); t.value = num; t.style.position = 'fixed'; t.style.opacity = '0'; document.body.appendChild(t); t.focus(); t.select(); done = document.execCommand('copy'); t.remove(); } catch {} }
+    if (!timerRunning) startTimer();   // copying means they're about to dial
+    showToast(done ? `Copied ${num}: paste it into your dialler` : 'Could not copy: long-press the number to copy it', done ? 'success' : 'warning');
+  });
+  // No number to dial: the only useful move is adding one. The active call
+  // (including this form's draft) is saved, so coming back resumes it.
+  document.getElementById('open-profile-num')?.addEventListener('click', () => {
+    saveActive();
+    navigate('patients/' + p.patient_id);
+  });
+  // "Make main" on a number: saved for everyone (sql/146), then the button
+  // and the dial order redraw with it first. The form is not touched.
+  wirePhoneList(document.getElementById('dial-order-mount'), p.patient_id, async () => {
+    await loadContextFor(p.patient_id);
+    currentPatient = withContextPhones(currentPatient || p);
+    saveActive();
+    const block = document.getElementById('dial-block');
+    if (block) block.innerHTML = dialBlockHTML(currentPatient);
+    const order = document.getElementById('dial-order-mount');
+    if (order) order.innerHTML = renderDialOrder(currentPatient);
+    wireDialArea(currentPatient);
+  });
+}
+
+// View documents opens the pages in place; Upload runs the same reader the
+// patient's Documents tab runs. The draft is saved first, in case the phone's
+// file picker reloads the page.
+function wireDocStrip(p) {
+  const mount = document.getElementById('doc-strip-mount');
+  if (!mount) return;
+  const upload = async () => {
+    saveActive();
+    const { openDocumentBatch } = await import('./docBatch.js');
+    await openDocumentBatch(p.patient_id);
+  };
+  mount.querySelector('[data-doc-view]')?.addEventListener('click', () => openDocumentViewer({
+    patientId: p.patient_id, patientName: p.full_name || p.patient_code || '', onUpload: upload,
+  }));
+  mount.querySelector('[data-doc-upload]')?.addEventListener('click', upload);
 }
 
 // Every previous conversation (everyone's notes, newest first) so the
@@ -1392,28 +1579,13 @@ function wireActive(p) {
     const t = document.getElementById('t-time'); if (t) t.textContent = fmtTimer(timerSeconds);
     saveActive();
   });
-  // Tapping ANY number to dial auto-starts the duration timer, so a caller
-  // never loses a call's length just because they forgot to hit "Start".
-  // Covers the main "Tap to call" button, every dial-order number, and the
-  // caregiver number - multi-phone patients dial from the list, not the main
-  // button, which is why their duration was not being tracked.
-  document.querySelectorAll('.callbtn, .cg-call').forEach(a =>
+  // The dial button, the dial order and copy-number live in wireDialArea so
+  // a main-number change can redraw and rewire them alone. The caregiver's
+  // own number sits outside that area and starts the timer the same way.
+  wireDialArea(p);
+  document.querySelectorAll('.caregiver .cg-call').forEach(a =>
     a.addEventListener('click', () => { if (!timerRunning) startTimer(); }));
-  // Copy number: tap-to-call fails on some phones, so offer a paste-able number.
-  document.getElementById('copy-num')?.addEventListener('click', async (e) => {
-    const num = e.currentTarget.dataset.num || '';
-    let done = false;
-    try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(num); done = true; } } catch {}
-    if (!done) { try { const t = document.createElement('textarea'); t.value = num; t.style.position = 'fixed'; t.style.opacity = '0'; document.body.appendChild(t); t.focus(); t.select(); done = document.execCommand('copy'); t.remove(); } catch {} }
-    if (!timerRunning) startTimer();   // copying means they're about to dial
-    showToast(done ? `Copied ${num}: paste it into your dialler` : 'Could not copy: long-press the number to copy it', done ? 'success' : 'warning');
-  });
-  // No number to dial: the only useful move is adding one. The active call
-  // (including this form's draft) is saved, so coming back resumes it.
-  document.getElementById('open-profile-num')?.addEventListener('click', () => {
-    saveActive();
-    navigate('patients/' + p.patient_id);
-  });
+  wireDocStrip(p);
   // Send resources on WhatsApp: curate + send from the business number, mid-call.
   // Straight to the financial + accommodation shelf, the pair the field team
   // asked for by name. Opens the library rather than the send flow.
@@ -1925,6 +2097,7 @@ async function mountQueueEmpty() {
 
 function resetState() {
   currentQueueId = null; currentPatient = null; currentPatientPitches = null; currentPatientPriority = null; currentHistory = []; currentPatientSessions = [];
+  currentContext = null;
   Object.assign(form, blankForm()); timerSeconds = 0; timerRunning = false; timerStartEpoch = null;
   clearInterval(timerInterval); timerInterval = null;
 }

@@ -1209,3 +1209,121 @@ button { -webkit-tap-highlight-color: transparent; }
 .byc-when  { color: var(--ink-4); margin-left: auto; white-space: nowrap; }
 .byc-quote { font: var(--t-sm); color: var(--ink-3); font-style: italic; margin-top: 3px; }
 .brief-when { font: var(--t-sm); color: var(--ink-4); white-space: nowrap; }
+
+/* ---- The document viewer, js/components/docViewer.js (29 Sep 2026) ---- */
+.dv { display: flex; flex-direction: column; gap: 14px; min-height: 200px; }
+.dv-loading { display: flex; align-items: center; gap: 10px; color: var(--ink-3); font: var(--t-sm); padding: 24px 4px; }
+.dv-loading .spinner { width: 18px; height: 18px; border-width: 2.5px; }
+.dv-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+              font: var(--t-sm); color: var(--ink-2); }
+.dv-batch { border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; background: var(--surface); }
+.dv-batch-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+                 padding-bottom: 10px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+.dv-batch-title { font: var(--t-body-strong); font-size: 14.5px; color: var(--ink); }
+.dv-doc + .dv-doc { margin-top: 12px; }
+.dv-doc-title { font: var(--t-body-strong); font-size: 14px; color: var(--ink); display: flex; gap: 8px;
+                align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
+.dv-thumbs { display: flex; gap: 9px; flex-wrap: wrap; }
+.dv-thumb { position: relative; width: 92px; height: 118px; display: grid; place-items: center; overflow: hidden;
+            border: 1px solid var(--line-2); border-radius: var(--r-sm); background: var(--bg-sunken);
+            padding: 0; cursor: zoom-in; transition: border-color var(--fast) var(--ease), transform var(--fast) var(--ease); }
+.dv-thumb:hover, .dv-thumb:focus-visible { border-color: var(--primary); transform: translateY(-1px); }
+.dv-thumb img { max-width: 92px; max-height: 118px; display: block; }
+.dv-thumb img.dv-side { max-width: 118px; max-height: 92px; }
+.dv-thumb-n { position: absolute; right: 4px; bottom: 4px; font: var(--t-mono-label); font-size: 10.5px;
+              background: var(--surface); color: var(--ink-2); border-radius: 6px; padding: 1px 6px; box-shadow: var(--sh-1); }
+.dv-thumb-missing { color: var(--ink-4); width: 26px; height: 26px; }
+.dv-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dv-bar-title { flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 2px; }
+.dv-bar-tools { display: flex; gap: 6px; align-items: center; }
+.dv-bar-tools .btn.active { background: var(--primary-soft); color: var(--primary); }
+.dv-stage { height: min(calc(100dvh - 330px), 760px); min-height: 260px; display: grid; place-items: center; overflow: hidden;
+            background: var(--bg-sunken); border: 1px solid var(--line); border-radius: var(--r-md); }
+/* Sized in pixels by fitCanvas() in docViewer.js: contain-fit, or full size when zoomed. */
+.dv-page { display: block; background: #fff; box-shadow: var(--sh-2); }
+.dv-stage.dv-zoomed { display: block; overflow: auto; }
+.dv-stage.dv-zoomed .dv-page { margin: 0 auto; }
+.dv-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+          position: sticky; bottom: 0; z-index: 2; background: var(--surface); padding: 6px 0 2px; }
+@media (max-width: 760px) {
+  /* Back and the tools share one row, the title gets the full width under
+     them: squeezed beside "All pages" it wrapped to four lines and pushed
+     Previous / Next off a 844px phone. */
+  .dv-bar-title { order: 3; flex: 1 1 100%; min-width: 0; }
+  .dv-bar-tools { margin-left: auto; }
+  .dv-thumb { width: 78px; height: 100px; }
+  .dv-thumb img { max-width: 78px; max-height: 100px; }
+  .dv-thumb img.dv-side { max-width: 100px; max-height: 78px; }
+}
+
+/* ---- Calling portal: why a family is flagged, before and during the call ---- */
+.flagcard { border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: var(--r-md);
+            background: linear-gradient(180deg, var(--surface), var(--warn-soft)); padding: 13px 15px; }
+.flagcard.is-urgent { border-left-color: var(--danger); background: linear-gradient(180deg, var(--surface), var(--danger-soft)); }
+.flagcard-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 8px; }
+.flagcard-head strong { font: var(--t-body-strong); font-size: 14.5px; color: var(--ink); }
+.flagcard-head svg { width: 17px; height: 17px; color: var(--warn); flex: none; }
+.flagcard.is-urgent .flagcard-head svg { color: var(--danger); }
+.flag-item { padding: 8px 0 8px 11px; border-left: 2px solid var(--line-2); }
+.flag-item + .flag-item { margin-top: 6px; }
+.flag-item.sev-urgent { border-left-color: var(--danger); }
+.flag-item.sev-high { border-left-color: var(--warn); }
+.flag-item-head { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; font: var(--t-sm); color: var(--ink-2); }
+.flag-item-head b { color: var(--ink); font-weight: 650; }
+.flag-note { font: var(--t-sm); color: var(--ink-2); margin-top: 3px; overflow-wrap: anywhere; }
+.flag-by { font: var(--t-mono); font-size: 11px; color: var(--ink-3); margin-top: 3px; }
+.docstrip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border: 1px solid var(--line);
+            border-radius: var(--r-md); padding: 10px 13px; background: var(--surface-2); }
+.docstrip-text { flex: 1; min-width: 180px; }
+.docstrip-text .info-value { font-size: 14px; }
+
+/* .due-row.wl-row, not .wl-row: layout.css has a phone rule
+   `.due-row > div:last-child { max-width: 96px; flex: none; }` for the badge
+   column, and the preview is now the row's last child. Found by
+   tools/call_context_live_check.mjs at 390px: the preview rendered as a 96px
+   strip beside the row. The badge column keeps that rule by name (.wl-side). */
+.due-row.wl-row { flex-wrap: wrap; }
+.due-row.wl-row > .wl-preview { flex: 1 1 100%; max-width: none; min-width: 0; }
+.due-row.wl-row > .wl-preview[hidden] { display: none; }
+.due-row.wl-row > .wl-side { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; flex: none; }
+@media (max-width: 760px) {
+  .due-row.wl-row > .wl-side { max-width: 132px; }
+  /* Phones clamp .due-meta to one line (layout.css), which suits a list row's
+     "First conversation" and hides who uploaded a page or raised a flag. Inside
+     these, the line wraps instead. */
+  .dv .due-meta, .docstrip .due-meta, .wl-preview .due-meta, .flagcard .due-meta,
+  .wrap-meta .due-meta, .wrap-meta .due-name, .due-meta.wraps { white-space: normal; overflow: visible; }
+  /* A nowrap line that sits straight in a list (not inside a row's shrinkable
+     text column) cannot shrink, so on a phone it pushed the calling portal's
+     whole ready column out to its 450px max-width and cut every card off at
+     the right edge. Measured 29 Sep: .ready 362px wide, its column 450px. */
+  .due-row > .row-actions:last-child { max-width: none; flex: none; }
+}
+.row-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.wl-row .wl-main { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; cursor: pointer; }
+.wl-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 4px; }
+.wl-chip { display: inline-flex; align-items: center; gap: 5px; font: var(--t-mono); font-size: 11px; line-height: 1.3;
+           padding: 2px 8px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); max-width: 100%; }
+.wl-chip svg { width: 12px; height: 12px; flex: none; }
+.wl-chip.sev-urgent { background: var(--danger-soft); color: var(--danger); }
+.wl-chip.is-doc { background: var(--info-soft); color: var(--info); }
+.wl-toggle { flex: none; }
+.wl-toggle svg { transition: transform var(--fast) var(--ease); }
+.wl-row.open .wl-toggle svg { transform: rotate(90deg); }
+.wl-preview { flex-basis: 100%; margin: 10px 0 2px; padding: 12px 13px; border: 1px solid var(--line);
+              border-radius: var(--r-md); background: var(--surface); display: flex; flex-direction: column; gap: 10px; }
+.wl-preview .kv { grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); }
+.wl-preview-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.wl-lastcall { font: var(--t-sm); color: var(--ink-2); border-left: 2px solid var(--line-2); padding-left: 10px; }
+
+/* ---- A family's numbers, with the one to ring first ---- */
+.ph-list { display: flex; flex-direction: column; gap: 6px; }
+.ph-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; padding: 7px 10px; border: 1px solid var(--line);
+          border-radius: var(--r-sm); background: var(--surface); }
+.ph-row.is-main { border-color: var(--gold-deep); background: linear-gradient(180deg, var(--surface), var(--gold-soft)); }
+.ph-num { font: var(--t-body-strong); font-size: 14px; font-variant-numeric: tabular-nums; color: var(--ink); text-decoration: none; }
+.ph-who { font: var(--t-sm); color: var(--ink-3); flex: 1; min-width: 120px; }
+.ph-main-badge { display: inline-flex; align-items: center; gap: 4px; font: var(--t-mono-label); font-size: 10.5px;
+                 text-transform: uppercase; letter-spacing: .06em; color: var(--gold-deep); }
+.ph-main-badge svg { width: 13px; height: 13px; fill: currentColor; }
+.ph-make { flex: none; }

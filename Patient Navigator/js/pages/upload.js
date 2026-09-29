@@ -15,6 +15,9 @@ import { showToast } from '../components/toast.js';
 import { icon } from '../components/icons.js';
 import { sanitize } from '../utils/validators.js';
 import { showModal, closeModal } from '../components/modal.js';
+import { loadCallContext } from '../components/callContext.js';
+import { openDocumentViewer, describeDocuments, fmtDayTime, daysAgo } from '../components/docViewer.js';
+import { uploadStatusLabel } from '../utils/docClasses.js';
 
 const ALLOWED = ['admin', 'manager', 'content', 'ground_poc', 'uploader'];
 const DEFAULT_HOSPITALS = [
@@ -251,8 +254,8 @@ export async function renderUpload(container) {
   container.innerHTML = `
     <div class="page-header">
       <div>
-        <h1>Upload leads</h1>
-        <p class="header-subtitle" style="margin:0">Add the numbers you've gathered. A hospital + phone is enough; include more columns if you have them. The manager allots them to caregiver mentors from the auto-distribute.</p>
+        <h1>Upload leads &amp; documents</h1>
+        <p class="header-subtitle" style="margin:0">Add the numbers you've gathered. A hospital + phone is enough; include more columns if you have them. The manager allots them to caregiver mentors from the auto-distribute. Photograph the family's hospital papers while they are with you: <strong>Add one</strong> takes them with the patient, and <strong>Upload documents</strong> adds them to anyone you added before.</p>
       </div>
     </div>
 
@@ -284,6 +287,7 @@ export async function renderUpload(container) {
     <div class="login-tabs" id="upload-tabs" style="max-width:760px;margin-bottom:var(--s4)">
       <button class="tab active" data-mode="paste">Paste a list</button>
       <button class="tab" data-mode="single">Add one (detailed)</button>
+      <button class="tab" data-mode="docs">${icon('fileText')}Upload documents</button>
     </div>
 
     <div class="card" id="mode-paste" style="max-width:760px">
@@ -336,9 +340,37 @@ export async function renderUpload(container) {
       <span class="form-hint" style="display:block;margin:-6px 0 12px">All numbers stay linked to the same patient. Mentors call the patient first, then caregiver 1, then caregiver 2.</span>
       <div class="field"><label>Notes</label><textarea class="textarea" id="s-notes" rows="4" maxlength="10000" placeholder="Anything else worth noting (up to 10000 characters)"></textarea>
         <span class="form-hint" id="s-notes-count"></span></div>
+      <!-- Asked for 26 and 28 Sep 2026 (Aadrika, for the ground team): upload
+           the family's medical documents at the same moment the patient is
+           entered, from this page. The files wait here and go up through the
+           normal reader (consent first) as soon as the patient exists. -->
+      <div class="field">
+        <label>Medical documents <span style="font-weight:500;color:var(--ink-3)">(optional)</span></label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <label class="btn btn-secondary btn-sm" for="s-docs" style="cursor:pointer">${icon('upload')}Choose photos or PDFs</label>
+          <input type="file" id="s-docs" accept="image/*,application/pdf" multiple style="display:none" />
+          <label class="btn btn-ghost btn-sm" for="s-camera" style="cursor:pointer">${icon('plus')}Take a photo</label>
+          <input type="file" id="s-camera" accept="image/*" capture="environment" style="display:none" />
+          <button type="button" class="btn btn-ghost btn-sm" id="s-docs-clear" style="display:none">Clear</button>
+        </div>
+        <span class="form-hint" id="s-docs-list" style="display:block;margin-top:6px">Photograph the hospital papers now, while the family is with you. Take a photo once per page. They are attached to this patient and read as soon as you add them, after the family agrees.</span>
+      </div>
       <div id="s-phone-status"></div>
       <div class="form-actions" style="justify-content:flex-start"><button type="submit" class="btn btn-primary" id="s-submit">${icon('plus')}Add this lead</button></div>
     </form>
+
+    <div class="card" id="mode-docs" style="max-width:760px;display:none">
+      <div class="field" style="margin-bottom:var(--s3)">
+        <label>Upload documents for a patient you added</label>
+        <input class="input" id="d-search" type="search" placeholder="Search by name, phone or PAT code" autocomplete="off" />
+        <span class="form-hint" style="display:block;margin-top:6px">Everyone you have added is listed, newest first, with the documents already on file. Upload opens your camera or files; the family has to agree once before anything is read.</span>
+      </div>
+      <div id="d-list" class="wrap-meta"><div class="sk skeleton-row"></div><div class="sk skeleton-row"></div></div>
+      <div style="margin-top:var(--s5)">
+        <div class="info-label" style="margin-bottom:8px">Your recent uploads</div>
+        <div id="d-mine" class="wrap-meta"><div class="sk skeleton-row"></div></div>
+      </div>
+    </div>
 
     <div id="lead-result" style="max-width:760px;margin-top:var(--s4)"></div>
   `;
@@ -481,13 +513,154 @@ export async function renderUpload(container) {
   refreshWaiting();
 
   // tab switching
-  container.querySelectorAll('#upload-tabs .tab').forEach(t => t.addEventListener('click', () => {
-    container.querySelectorAll('#upload-tabs .tab').forEach(x => x.classList.remove('active'));
-    t.classList.add('active');
-    const single = t.dataset.mode === 'single';
-    $('#mode-single').style.display = single ? '' : 'none';
-    $('#mode-paste').style.display = single ? 'none' : '';
+  const showMode = (mode) => {
+    container.querySelectorAll('#upload-tabs .tab').forEach(x => x.classList.toggle('active', x.dataset.mode === mode));
+    $('#mode-single').style.display = mode === 'single' ? '' : 'none';
+    $('#mode-paste').style.display = mode === 'paste' ? '' : 'none';
+    $('#mode-docs').style.display = mode === 'docs' ? '' : 'none';
+    if (mode === 'docs') loadDocsTab();
+  };
+  container.querySelectorAll('#upload-tabs .tab').forEach(t => t.addEventListener('click', () => showMode(t.dataset.mode)));
+
+  // ---- Documents, for patients this person added -------------------------
+  // The ground team meets the family at the hospital, papers in hand. Until
+  // 29 Sep the only way to upload them was to find the patient's record and
+  // open its Documents tab, which is not a screen the ground team works in.
+  const myId = async () => (await import('../auth.js')).getCurrentUser()?.id;
+  const cleanQ = (q) => String(q || '').replace(/[,()*%\\]/g, ' ').trim().slice(0, 60);
+
+  async function loadDocsTab() {
+    const list = $('#d-list');
+    const q = cleanQ($('#d-search')?.value);
+    try {
+      const uid = await myId();
+      let query = sb.from('patients')
+        .select('id, full_name, patient_code, phone_full, created_at')
+        .eq('created_by', uid).eq('is_active', true)
+        .order('created_at', { ascending: false }).limit(60);
+      if (q) query = query.or(`full_name.ilike.*${q}*,patient_code.ilike.*${q}*,phone_full.ilike.*${q}*`);
+      const { data, error } = await query;
+      if (error) throw error;
+      const people = data || [];
+      if (!people.length) {
+        list.innerHTML = `<div class="due-meta" style="padding:8px 2px">${q ? 'Nobody you added matches that.' : 'You have not added anyone yet. Add a patient first, then their documents go here.'}</div>`;
+      } else {
+        let ctx = new Map();
+        try { ctx = await loadCallContext(people.map(p => p.id)); } catch (e) { console.warn('[upload] document summary unavailable:', e.message); }
+        list.innerHTML = `<div class="due-list" style="padding:0">${people.map(p => {
+          const d = ctx.get(p.id)?.documents;
+          const name = p.full_name || p.patient_code || 'Patient';
+          return `<div class="due-row" style="flex-wrap:wrap">
+            <div style="flex:1;min-width:200px">
+              <div class="due-name">${sanitize(name)} <span class="due-meta">${sanitize(p.patient_code || '')}</span></div>
+              <div class="due-meta">Added ${sanitize(daysAgo(p.created_at))} · ${sanitize(d ? describeDocuments(d) : 'documents not checked')}</div>
+            </div>
+            <div class="row-actions">
+              ${d && d.uploads ? `<button type="button" class="btn btn-ghost btn-sm" data-d-view="${p.id}" data-name="${sanitize(name)}">${icon('fileText')}View</button>` : ''}
+              <button type="button" class="btn btn-primary btn-sm" data-d-up="${p.id}">${icon('upload')}Upload</button>
+            </div>
+          </div>`;
+        }).join('')}</div>`;
+        list.querySelectorAll('[data-d-up]').forEach(b => b.addEventListener('click', async () => {
+          const { openDocumentBatch } = await import('./docBatch.js');
+          await openDocumentBatch(b.dataset.dUp);
+        }));
+        list.querySelectorAll('[data-d-view]').forEach(b => b.addEventListener('click', () =>
+          openDocumentViewer({ patientId: b.dataset.dView, patientName: b.dataset.name || '' })));
+      }
+    } catch (e) {
+      list.innerHTML = `<div class="due-meta" style="color:var(--danger)">Could not load the patients you added: ${sanitize(e.message)}</div>`;
+    }
+    loadMyUploads();
+  }
+
+  async function loadMyUploads() {
+    const mine = $('#d-mine');
+    try {
+      // Own uploads only, even for a manager on this page: the full log lives
+      // on Document uploads. The RPC already limits everyone else to their own.
+      const uid = await myId();
+      const { data, error } = await sb.rpc('get_document_upload_log', { p_uploader: uid, p_limit: 15 });
+      if (error) throw error;
+      const rows = data || [];
+      mine.innerHTML = rows.length ? `<div class="due-list" style="padding:0">${rows.map(r => `
+        <div class="due-row">
+          <div style="flex:1;min-width:0">
+            <div class="due-name">${sanitize(r.patient_name || r.patient_code || 'Patient')} <span class="due-meta">${sanitize(r.patient_code || '')}</span></div>
+            <div class="due-meta">${sanitize(fmtDayTime(r.uploaded_at))} · ${r.page_count || 0} page${r.page_count === 1 ? '' : 's'} · ${sanitize(uploadStatusLabel(r.status))}</div>
+          </div>
+          <div class="row-actions">${(r.page_count || 0) > 0 && r.status !== 'discarded' ? `<button type="button" class="btn btn-ghost btn-sm" data-u-view="${r.batch_id}" data-pid="${r.patient_id}" data-name="${sanitize(r.patient_name || '')}">${icon('eye')}View</button>` : ''}</div>
+        </div>`).join('')}</div>` : '<div class="due-meta">Nothing uploaded by you yet.</div>';
+      mine.querySelectorAll('[data-u-view]').forEach(b => b.addEventListener('click', () =>
+        openDocumentViewer({ patientId: b.dataset.pid, patientName: b.dataset.name || '', batchId: b.dataset.uView })));
+    } catch (e) {
+      mine.innerHTML = `<div class="due-meta">Your uploads could not be listed: ${sanitize(e.message)}</div>`;
+    }
+  }
+
+  let searchTimer = null;
+  $('#d-search')?.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadDocsTab, 350); });
+
+  // ---- Documents picked on the Add one form --------------------------------
+  let pickedDocs = [];
+  const renderPicked = () => {
+    const hint = $('#s-docs-list');
+    const clear = $('#s-docs-clear');
+    if (!pickedDocs.length) {
+      hint.innerHTML = 'Photograph the hospital papers now, while the family is with you. Take a photo once per page. They are attached to this patient and read as soon as you add them, after the family agrees.';
+      clear.style.display = 'none';
+      return;
+    }
+    const names = pickedDocs.slice(0, 4).map(f => sanitize(f.name || 'photo')).join(', ');
+    hint.innerHTML = `<strong>${pickedDocs.length} file${pickedDocs.length === 1 ? '' : 's'} ready:</strong> ${names}${pickedDocs.length > 4 ? ` and ${pickedDocs.length - 4} more` : ''}. They go up the moment you add this patient.`;
+    clear.style.display = '';
+  };
+  ['#s-docs', '#s-camera'].forEach(sel => $(sel)?.addEventListener('change', (e) => {
+    pickedDocs = pickedDocs.concat([...(e.target.files || [])]);
+    e.target.value = '';           // the same page can be photographed again
+    renderPicked();
   }));
+  $('#s-docs-clear')?.addEventListener('click', () => { pickedDocs = []; renderPicked(); });
+
+  // After a single add: find the patient the number now belongs to, then
+  // either send the files already picked or offer the upload right there.
+  // A number that belonged to a family someone else registered is not ours to
+  // attach papers to, and get_call_context (can_care_for_patient) says so.
+  async function afterSingleAdd(phone) {
+    const st = await checkPhoneRPC(sb, phone);
+    const box = document.createElement('div');
+    box.className = 'card wrap-meta';
+    box.style.cssText = 'margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap';
+    resultEl.appendChild(box);
+    if (!st.found || !st.patient_id) {
+      box.innerHTML = `<div class="due-meta">${pickedDocs.length ? 'The patient was saved, but I could not find them again to attach the documents. Open the Upload documents tab and upload them there.' : ''}</div>`;
+      if (!pickedDocs.length) box.remove();
+      return;
+    }
+    let mine = false;
+    try { mine = (await loadCallContext([st.patient_id])).has(st.patient_id); } catch {}
+    const name = st.full_name || st.patient_code || 'this patient';
+    if (!mine) {
+      box.innerHTML = `<div class="due-meta">${sanitize(name)} was registered by someone else, so their documents go through the mentor who looks after them. Ask them, or a manager, to upload these.</div>`;
+      return;
+    }
+    if (pickedDocs.length) {
+      const files = pickedDocs;
+      pickedDocs = []; renderPicked();
+      box.innerHTML = `<div class="due-meta">Uploading ${files.length} file${files.length === 1 ? '' : 's'} for ${sanitize(name)}…</div>`;
+      const { uploadDocumentsFor } = await import('./docBatch.js');
+      const sent = await uploadDocumentsFor(st.patient_id, files, { consentMethod: 'in_person' });
+      box.innerHTML = sent
+        ? `<span class="stat-ico ok" style="width:30px;height:30px;border-radius:8px">${icon('checkCircle')}</span><div style="flex:1" class="due-meta">Documents sent for ${sanitize(name)}. They are being read now and show on their record.</div>`
+        : `<div style="flex:1" class="due-meta">The documents for ${sanitize(name)} were not uploaded. You can try again:</div><button type="button" class="btn btn-primary btn-sm" data-retry>${icon('upload')}Upload documents</button>`;
+    } else {
+      box.innerHTML = `<div style="flex:1" class="due-meta">Have ${sanitize(name)}'s hospital papers with you? Add them now.</div><button type="button" class="btn btn-primary btn-sm" data-retry>${icon('upload')}Upload their documents</button>`;
+    }
+    box.querySelector('[data-retry]')?.addEventListener('click', async () => {
+      const { openDocumentBatch } = await import('./docBatch.js');
+      await openDocumentBatch(st.patient_id);
+    });
+  }
 
   function recompute() {
     const base = parseList(input.value);
@@ -553,7 +726,16 @@ export async function renderUpload(container) {
       caregiver_phone_2: $('#s-cgphone2').value.trim(), notes: $('#s-notes').value.trim(),
     };
     const btn = $('#s-submit'); btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:17px;height:17px;border-width:2.5px"></span>Adding…';
-    await submitRows(sb, [row], resultEl, () => { $('#mode-single').reset(); refreshWaiting(); });
+    let added = false;
+    await submitRows(sb, [row], resultEl, () => {
+      added = true; $('#mode-single').reset(); refreshWaiting();
+      // The number check runs 450 ms after the last keystroke. A quick Add
+      // let it land AFTER the insert and call the patient just added
+      // "Already registered", right above "1 lead added".
+      clearTimeout(phoneTimer);
+      const st = $('#s-phone-status'); if (st) st.innerHTML = '';
+    });
     btn.disabled = false; btn.innerHTML = `${icon('plus')}Add this lead`;
+    if (added) await afterSingleAdd(phone);
   });
 }

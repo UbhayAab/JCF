@@ -2003,6 +2003,37 @@ export async function openDocumentBatch(patientId) {
   picker.click();
 }
 
+/**
+ * Upload files someone has ALREADY picked, through the same consent check and
+ * reader as Upload documents on the record. The ground POC's intake form picks
+ * the papers while the family is still in front of her (asked for 26 and
+ * 28 Sep 2026: "upload their medical documents directly on the dashboard
+ * itself"), so by the time the patient exists the files are in hand and there
+ * is no picker to open. A patient added a moment ago has no earlier uploads,
+ * so the unfinished-upload chooser in openDocumentBatch is not needed here.
+ */
+export async function uploadDocumentsFor(patientId, files, { consentMethod = null } = {}) {
+  const list = [...(files || [])];
+  if (!patientId || !list.length) return false;
+  if (drawingNow) {
+    showToast('An upload is still being prepared. Finish it or close it first.', 'info');
+    return false;
+  }
+  const sb = getSupabase();
+  const [patient, consented] = await Promise.all([
+    loadPatient(sb, patientId),
+    hasDocumentConsent(patientId).catch(() => false),
+  ]);
+  if (!patient) { showToast('Could not load the patient to attach the documents to', 'error'); return false; }
+  if (!consented) {
+    const method = await askConsent(patientId, patient.full_name, { preferred: consentMethod });
+    if (!method) { showToast('Recorded that they did not agree. Nothing was uploaded.', 'info'); return false; }
+    await recordConsent(patientId, true, method);
+  }
+  await uploadPicked(sb, patient, patientId, list);
+  return true;
+}
+
 async function uploadPicked(sb, patient, patientId, files) {
   if (!files.length) return;
   if (files.length > MAX_FILES) {

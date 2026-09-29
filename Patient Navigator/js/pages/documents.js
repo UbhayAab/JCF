@@ -163,7 +163,10 @@ export async function recordConsent(patientId, granted, method = 'verbal_during_
   if (error) throw error;
 }
 
-export function askConsent(patientId, patientName) {
+// `preferred` picks the method that is true for the screen asking: the ground
+// team's intake form asks in person at the hospital, not on a call (sql/147
+// added 'in_person'; before it, the only honest choice there was "In writing").
+export function askConsent(patientId, patientName, { preferred = null } = {}) {
   return new Promise((resolve) => {
     const el = document.createElement('div');
     el.innerHTML = `
@@ -180,15 +183,23 @@ export function askConsent(patientId, patientName) {
         <label class="form-label">How was this asked?</label>
         <select class="form-select" id="dc-method">
           <option value="verbal_during_call">Verbally, on a call</option>
+          <option value="in_person">In person (at the hospital or a camp)</option>
           <option value="written">In writing</option>
           <option value="digital">Digitally (WhatsApp / form)</option>
           <option value="guardian_consent">Given by a guardian</option>
         </select>
       </div>`;
+    if (preferred) {
+      const sel = el.querySelector('#dc-method');
+      if ([...sel.options].some((o) => o.value === preferred)) sel.value = preferred;
+    }
     showModal({
       title: 'Consent to read documents', content: el, size: 'md',
       footer: `<button class="btn btn-ghost" id="dc-no">They said no</button>
                <button class="btn btn-primary" id="dc-yes">They agreed</button>`,
+      // Closing with the cross or Esc is not an answer: nothing is recorded,
+      // and the upload that asked stops instead of waiting forever.
+      onClose: () => resolve(null),
     });
     document.getElementById('dc-no').addEventListener('click', async () => {
       const method = el.querySelector('#dc-method').value;

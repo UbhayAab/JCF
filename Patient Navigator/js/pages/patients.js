@@ -14,6 +14,9 @@ import { openCallForm } from '../components/callForm.js';
 import { openWhatsappShare, recipientsFromPatient } from '../components/whatsappShare.js';
 import { openAssessmentFlow } from '../components/assessmentFlow.js';
 import { mountBeforeYouCall } from '../components/beforeYouCall.js';
+import { phoneListHTML, wirePhoneList } from '../components/callContext.js';
+import { openDocumentViewer, fmtDayTime, daysAgo } from '../components/docViewer.js';
+import { docClassLabel } from '../utils/docClasses.js';
 import { renderNotesPanel } from '../components/patientNotes.js';
 import { openEscalateModal, openDisinterestModal, clearDisinterest, openBlacklistModal } from '../components/escalate.js';
 import { formatDate, formatRelativeTime, capitalize, getDialStatusBadge, exportToCSV, renderSkeleton } from '../utils/formatters.js';
@@ -440,7 +443,7 @@ function showPatientForm(existing = null, onSaved = null) {
           <span>Patient gave informed consent <span class="required">*</span></span></label></div>
         <div class="form-group"><label class="form-label">Consent method</label>
           <select class="form-select" id="pf-consent-method">
-            ${[['verbal_during_call', 'Verbal during call'], ['written', 'Written'], ['digital', 'Digital'], ['guardian_consent', 'Guardian consent']].map(([k, l]) =>
+            ${[['verbal_during_call', 'Verbal during call'], ['in_person', 'In person (hospital or camp)'], ['written', 'Written'], ['digital', 'Digital'], ['guardian_consent', 'Guardian consent']].map(([k, l]) =>
               `<option value="${k}" ${(x.consent_method || 'verbal_during_call') === k ? 'selected' : ''}>${l}</option>`).join('')}
           </select></div>
       </div>
@@ -1117,6 +1120,10 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
             ? vHas(sanitize(p.nutritionist?.full_name || 'N/A'))
             : vNone('Unclaimed')}</div>
         </div>
+        <!-- sql/146: every number the family gave, the main one first. Asked
+             for by the interns on 28 Sep: "an option to mark/highlight one
+             number as the primary or important contact number". -->
+        <div id="phones-mount" style="margin-top:var(--s4)"></div>
         <div style="margin-top:var(--s4)" class="kv">
           <div><div class="k">Consent</div><div class="v">${p.consent_given ? '<span class="badge badge-ok badge-dot">Given</span>' : '<span class="badge badge-danger badge-dot">Missing</span>'}</div></div>
           <div><div class="k">Method</div>${p.consent_method ? vHas(capitalize(p.consent_method)) : vNone()}</div>
@@ -1157,6 +1164,35 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
   // this card renders nothing at all when there is nothing to say.
   mountBeforeYouCall(el.querySelector('#byc-mount'), p);
   loadFolderMore(p.id);
+  mountPhones(el.querySelector('#phones-mount'), p, sb);
+}
+
+// The family's numbers from patient_phones, which is where bulk_add_leads
+// files a second or third caregiver line; the two cells above only ever
+// showed patients.phone_full and caregiver_phone_full. Marking one as main is
+// set_primary_phone (sql/146): the calling portal then dials it first, for
+// everyone. Content accounts read records but do not look after families, and
+// the RPC would refuse them, so they get the list without the buttons.
+async function mountPhones(mount, p, sb) {
+  if (!mount) return;
+  const { data, error } = await sb.from('patient_phones')
+    .select('id, phone, label, contact_name, relationship, is_primary, priority, created_at')
+    .eq('patient_id', p.id)
+    .order('is_primary', { ascending: false }).order('priority').order('created_at');
+  if (error) {
+    mount.innerHTML = `<div class="due-meta">Could not load this family's numbers: ${sanitize(error.message)}</div>`;
+    return;
+  }
+  const rows = data || [];
+  if (!rows.length) { mount.innerHTML = ''; return; }
+  const canEdit = getUserRole() !== 'content' && p.patient_status !== 'deceased';
+  mount.innerHTML = `
+    <strong style="font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-3)">Numbers${rows.length > 1 ? ' · the main one is rung first' : ''}</strong>
+    <div style="margin-top:8px">${phoneListHTML(rows, { canEdit })}</div>
+    ${rows.length > 1 && !rows.some((r) => r.is_primary) && canEdit
+      ? '<div class="due-meta" style="margin-top:6px">No main number yet. If the family says which number to use, tap Make main on it and the calling portal rings that one first.</div>'
+      : ''}`;
+  wirePhoneList(mount, p.id, () => mountPhones(mount, p, sb));
 }
 
 // ---- Bereavement panel (deceased patients) ----
@@ -1624,7 +1660,7 @@ export async function renderDocumentsTab(el, p, sb, reload) {
     //   column document_batches.created_at does not exist
     // which the live browser check caught on its first run.
     sb.from('document_batches')
-      .select('id, status, page_count, note, uploaded_at, reviewed_at')
+      .select('id, status, page_count, note, uploaded_at, reviewed_at, uploaded_by, uploader:profiles!document_batches_uploaded_by_fkey(full_name)')
       .eq('patient_id', p.id).is('deleted_at', null)
       .order('uploaded_at', { ascending: false }).limit(20),
     sb.from('patient_documents')
@@ -1657,11 +1693,15 @@ export async function renderDocumentsTab(el, p, sb, reload) {
   const byBatch = {};
   for (const d of docs) (byBatch[d.batch_id] ??= []).push(d);
 
+  const viewable = batches.filter((b) => b.status !== 'discarded' && (b.page_count || 0) > 0);
   el.innerHTML = `
     <div class="card">
       <div class="card-header">
         <div class="card-title">Documents the family has sent</div>
-        ${upload}
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${viewable.length ? `<button class="btn btn-secondary btn-sm" id="doc-view-all">${icon('eye')}View all pages</button>` : ''}
+          ${upload}
+        </div>
       </div>
       <p class="form-hint">Photos, screenshots or a PDF, in any order. We read them,
       check every answer back against the page, and show you what to confirm before
@@ -1682,12 +1722,19 @@ export async function renderDocumentsTab(el, p, sb, reload) {
                        : (stopped || b.status === 'segmenting' || b.status === 'extracting') ? 'Finish reading' : '';
           const cls = b.status === 'failed' && !stopped ? 'doc-callout-danger'
                     : (b.status === 'ready_for_review' || stopped) ? 'doc-callout-warn' : '';
+          // Who uploaded it and when, in IST: asked for on 28 Sep ("see which
+          // intern uploaded documents of which patients"). The pages open in
+          // place from View pages rather than only being listed by type.
+          const canView = b.status !== 'discarded' && (b.page_count || 0) > 0;
           return `<div class="doc-callout ${cls}">
             <strong>${icon('fileText')} ${b.page_count || mine.length} page(s),
               ${stopped ? 'stopped part way' : BATCH_STATUS[b.status] || sanitize(b.status)}</strong>
-            ${action ? `<button class="btn btn-primary btn-sm" data-open-batch="${b.id}" style="float:right">${action}</button>` : ''}
-            <p>${new Date(b.uploaded_at).toLocaleString()}${
-              b.reviewed_at ? ' &middot; reviewed ' + new Date(b.reviewed_at).toLocaleDateString() : ''}</p>
+            <span style="float:right;display:flex;gap:6px">
+              ${canView ? `<button class="btn btn-secondary btn-sm" data-view-batch="${b.id}">${icon('eye')}View pages</button>` : ''}
+              ${action ? `<button class="btn btn-primary btn-sm" data-open-batch="${b.id}">${action}</button>` : ''}
+            </span>
+            <p>Uploaded ${sanitize(fmtDayTime(b.uploaded_at))} (${sanitize(daysAgo(b.uploaded_at))}) by ${sanitize(b.uploader?.full_name || (b.uploaded_by ? 'a team member' : 'the family on WhatsApp'))}${
+              b.reviewed_at ? ' &middot; reviewed ' + new Date(b.reviewed_at).toLocaleDateString('en-IN') : ''}</p>
             ${b.note ? `<p class="form-hint">${sanitize(b.note)}</p>` : ''}
             ${mine.length ? `<ul style="margin:6px 0 0 18px">${mine.map((d) =>
               `<li>${sanitize(docLabel(d.doc_type))}${
@@ -1709,27 +1756,20 @@ export async function renderDocumentsTab(el, p, sb, reload) {
     await openExistingBatch(btn.dataset.openBatch);
     reload();
   }));
+  const uploadMore = async () => {
+    const { openDocumentBatch } = await import('./docBatch.js');
+    await openDocumentBatch(p.id);
+    reload();
+  };
+  el.querySelector('#doc-view-all')?.addEventListener('click', () =>
+    openDocumentViewer({ patientId: p.id, patientName: p.full_name || p.patient_code || '', onUpload: uploadMore }));
+  el.querySelectorAll('[data-view-batch]').forEach((btn) => btn.addEventListener('click', () =>
+    openDocumentViewer({ patientId: p.id, patientName: p.full_name || p.patient_code || '', batchId: btn.dataset.viewBatch })));
 }
 
-/** The same class labels the batch reader uses, without importing the whole
- *  module for one map. A class this file has not heard of shows as itself. */
+/** The class labels, now shared with the viewer and the portal (utils/docClasses.js). */
 function docLabel(cls) {
-  const L = {
-    treatment_protocol: 'Treatment protocol', drug_calculation: 'Day-care drug sheet',
-    nursing_record: 'Nursing record', registration_form: 'Registration slip',
-    file_cover: 'File cover', id_card: 'ID card', cost_certificate: 'Cost certificate',
-    laboratory_report: 'Laboratory report', radiology_report: 'Radiology report',
-    imaging_report: 'Imaging report', histopathology: 'Histopathology',
-    pathology_addendum: 'Pathology addendum', endoscopy_report: 'Endoscopy / ERCP',
-    device_record: 'Device / PICC card', discharge_summary: 'Discharge summary',
-    prescription: 'Prescription', opd_note: 'OPD note', referral_letter: 'Referral letter',
-    consent_form: 'Consent form', scheme_card: 'Scheme card',
-    income_certificate: 'Income certificate', disability_certificate: 'Disability certificate',
-    ration_card: 'Ration card', insurance_document: 'Insurance document',
-    ngo_sanction_letter: 'NGO sanction letter', transfusion_record: 'Transfusion record',
-    bill_receipt: 'Bill / receipt', not_a_medical_document: 'Not a medical document',
-  };
-  return L[cls] || (cls ? String(cls).replace(/_/g, ' ') : 'Document');
+  return docClassLabel(cls);
 }
 
 function renderCallsTab(el, p, calls, reload, failed = false) {

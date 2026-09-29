@@ -27,6 +27,7 @@ import { renderSessions } from './pages/sessions.js';
 import { renderResources } from './pages/resources.js';
 import { renderExports } from './pages/exports.js';
 import { renderReport } from './pages/report.js';
+import { renderUploads } from './pages/uploads.js';
 import { validateEmail, validatePassword } from './utils/validators.js';
 import { CONFIG } from './config.js';
 import { initTheme, renderThemeSwitch } from './theme.js';
@@ -474,7 +475,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20260925e';  // bumped on every breaking deploy
+const APP_BUILD = '20260929a';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -553,6 +554,9 @@ async function init() {
   // content (research) only the de-identified datasets.
   registerRoute('exports', (c) => renderExports(c), { requiresAuth: true, roles: ['admin', 'manager', 'content'] });
   registerRoute('report', (c) => renderReport(c), { requiresAuth: true, roles: ['admin', 'manager'] });
+  // Who uploaded which family's documents (sql/146). Open to every role: the
+  // RPC shows managers and admins everyone's uploads and anyone else their own.
+  registerRoute('uploads', (c) => renderUploads(c), { requiresAuth: true });
 
   // Set guards
   setAuthGuard(() => !!getCurrentUser());

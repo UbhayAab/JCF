@@ -43,7 +43,7 @@ const NAV_ITEMS = [
       { id: 'leads',     label: 'WhatsApp leads', icon: 'inbox', route: 'leads', roles: CARE_ROLES },
       { id: 'docreads',  label: 'Document reads', icon: 'fileText', route: 'docreads', roles: ['admin', 'manager'] },
       { id: 'resources', label: 'Resources',      icon: 'mapPin',    route: 'resources', roles: ALL_ROLES },
-      { id: 'upload',    label: 'Upload leads',   icon: 'upload',    route: 'upload',    roles: UPLOAD_ROLES },
+      { id: 'upload',    label: 'Upload leads & docs', icon: 'upload', route: 'upload',  roles: UPLOAD_ROLES },
       { id: 'intake',    label: 'Intake report',  icon: 'fileText',  route: 'intake',    roles: UPLOAD_ROLES },
       { id: 'analytics', label: 'Analytics',      icon: 'chart',     route: 'analytics', roles: ['admin', 'manager', 'content'] },
       { id: 'exports',   label: 'Data room',      icon: 'download',  route: 'exports',   roles: ['admin', 'manager', 'content'] },
@@ -55,6 +55,8 @@ const NAV_ITEMS = [
     items: [
       { id: 'team',        label: 'Team & Queue',    icon: 'userPlus',    route: 'team',        roles: ['admin', 'manager'] },
       { id: 'leaderboard', label: 'Leaderboard',     icon: 'chart',       route: 'leaderboard', roles: ['admin', 'manager'] },
+      // 28 Sep, Aadrika: "see which intern uploaded documents of which patients".
+      { id: 'uploads',     label: 'Document uploads', icon: 'fileText',   route: 'uploads',     roles: ['admin', 'manager'] },
       { id: 'report',      label: 'Impact Report',   icon: 'fileText',    route: 'report',      roles: ['admin', 'manager'] },
       { id: 'admin-users', label: 'User Management', icon: 'shieldCheck', route: 'admin/users', roles: ['admin', 'manager'] },
       { id: 'admin-audit', label: 'Audit Log',       icon: 'fileText',    route: 'admin/audit', roles: ['admin'] },
