@@ -1,12 +1,12 @@
 /* ============================================================
-   Patient Navigator: Base Styles v8 "Warm Ledger"
-   Reset, aurora atmosphere, the serif/grotesk/mono type system,
+   Patient Navigator: Base Styles v11 "Cocoa & Blush"
+   Reset, the fixed blush ground, the Manrope type system,
    and the full motion library.
    ============================================================ */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html { font-size: 16px; -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+html { font-size: 16px; -webkit-text-size-adjust: 100%; scroll-behavior: smooth; background-color: var(--bg); }
 /* one stray wide element must never zoom the mobile layout viewport out */
 html, body { overflow-x: hidden; overflow-x: clip; }
 
@@ -14,13 +14,19 @@ body {
   font: var(--t-body);
   letter-spacing: -0.005em;
   color: var(--ink);
-  background-color: var(--bg);
-  /* Ground atmosphere is theme-driven: none in light/dark (clean, premium),
-     a soft aurora in colourful mode. One token, correct in every theme. */
+  /* v11: the colour lives on <html> and the body is transparent. index.html
+     gives <html> a boot colour, and once <html> has a background the body's
+     is painted on the body box itself, which sits ABOVE the fixed z-index:-1
+     ground layer below and hid the gradient completely. */
+  background-color: transparent;
   background-image: var(--app-bg-image, none);
   background-attachment: fixed;
   background-repeat: no-repeat;
   min-height: 100vh;
+  /* Tabular figures everywhere: queue counts, durations and dates line up in
+     every table and tile without a per-selector rule. The font shorthand does
+     not reset font-feature-settings, so this survives every font: var(--t-*). */
+  font-feature-settings: "tnum" 1, "lnum" 1;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -39,6 +45,19 @@ body {
    mobile GPUs, pin it to scroll instead (the wash is static, so it's fine). */
 @media (pointer: coarse) { body { background-attachment: scroll; } }
 
+/* The v11 ground: the mockups' peach-to-blush wash, on its own fixed layer.
+   A pseudo-element is composited once and the page scrolls over it, which is
+   what the background-attachment:fixed above could not do cheaply on a phone,
+   and it keeps the gradient the same at any scroll depth instead of stretching
+   it across a 30,000px resources page. */
+body::after {
+  /* z-index -1, not 0: a positioned layer at 0 paints OVER any in-flow screen
+     that is not itself positioned (the set-password and account-problem
+     screens are not). At -1 it sits on the canvas, under everything. */
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: var(--app-ground, var(--bg));
+}
+
 /* app + login sit above the grain */
 .app-shell, .login-page { position: relative; z-index: 2; }
 
@@ -49,8 +68,8 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: var(--ink-4); }
 
 /* ============================================================
-   TYPOGRAPHY: Fraunces for the human moments, Instrument Sans
-   for the interface, Spline Sans Mono for the ledger.
+   TYPOGRAPHY: Manrope for every voice (v11). Headings are bold and
+   tight, labels are small uppercase Manrope, never monospace.
    ============================================================ */
 h1, h2, h3, h4, h5, h6 { font-weight: 700; line-height: var(--line-height-tight); color: var(--ink); letter-spacing: -0.015em; }
 h1, h2 {
@@ -80,7 +99,7 @@ p a:hover, td a:hover, .link-draw:hover { background-size: 100% 1.5px; }
 
 strong { font-weight: 600; color: var(--ink); }
 small { font-size: var(--font-xs); }
-code { font-family: var(--font-mono); font-size: var(--font-sm); background: var(--bg-sunken); padding: 1px 5px; border-radius: var(--r-xs); }
+code { font-family: var(--font-code); font-size: var(--font-sm); background: var(--bg-sunken); padding: 1px 5px; border-radius: var(--r-xs); }
 
 ul, ol { list-style: none; }
 img, svg { display: block; max-width: 100%; }
@@ -104,8 +123,9 @@ button { font-family: inherit; }
 .font-medium    { font-weight: 500 !important; }
 .font-semibold  { font-weight: 600 !important; }
 .font-bold      { font-weight: 700 !important; }
-/* .serif is the "styled accent" voice now, italic, slightly narrow */
-.serif          { font-family: var(--font-display) !important; font-style: italic; font-stretch: 94%; }
+/* .serif was an italic accent; the v11 mockups carry no italic display voice,
+   so it is now a plain weight accent (Manrope has no true italic). */
+.serif          { font-family: var(--font-display) !important; font-style: normal; }
 .mono           { font-family: var(--font-mono) !important; }
 .italic         { font-style: italic !important; }
 .tnum           { font-variant-numeric: tabular-nums; }

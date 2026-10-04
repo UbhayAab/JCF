@@ -177,7 +177,7 @@ function podium(top) {
         <div style="font:var(--t-body-strong);font-weight:650;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.full_name}</div>
         <div style="font:var(--t-h2);font-weight:800;color:var(--primary);line-height:1.1">${r.mvp}</div>
         <div class="faint" style="font-size:11px;color:var(--ink-3);margin-bottom:8px">MVP</div>
-        <div style="height:${m.h}px;border-radius:10px 10px 0 0;background:linear-gradient(180deg,var(--primary-bright),var(--primary));display:flex;align-items:flex-start;justify-content:center;padding-top:8px;color:#fff;font-weight:800;font-size:20px">${r.rank}</div>
+        <div style="height:${m.h}px;border-radius:10px 10px 0 0;background:linear-gradient(180deg,var(--primary-bright),var(--primary));display:flex;align-items:flex-start;justify-content:center;padding-top:8px;color:var(--on-primary);font-weight:800;font-size:20px">${r.rank}</div>
       </div>`;
     }).join('')}
   </div>`;
@@ -229,7 +229,7 @@ function rowHTML(r) {
   const depthTone = r.depth_score >= 75 ? 'ok' : r.depth_score >= 55 ? 'primary' : 'clay';
   const connTone = r.connect_rate >= 60 ? 'ok' : r.connect_rate >= 45 ? 'clay' : 'danger';
   const cellNum = (v, tone) => `<td style="padding:8px;text-align:center;${tone?`color:var(--${tone});font-weight:650`:''}">${v}</td>`;
-  return `<tr data-open="${r.caller_id}" style="border-bottom:1px solid var(--line-2);cursor:pointer;${zero?'opacity:.5':''}">
+  return `<tr data-open="${r.caller_id}" style="border-bottom:1px solid var(--line-2);cursor:pointer;${zero?'filter:grayscale(1);opacity:.85':''}">
     <td style="padding:8px 10px;font-size:15px;position:sticky;left:0;background:var(--surface)">${medal}</td>
     <td style="padding:8px 10px;position:sticky;left:0;background:var(--surface)">
       <div style="display:flex;align-items:center;gap:9px;min-width:150px">

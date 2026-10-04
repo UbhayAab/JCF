@@ -186,6 +186,47 @@ async function loadTodayAssignments() {
   }
 }
 
+// v11, phones: the redesign's call history. Calls grouped by day, each one a
+// card with what happened, who called, how long, and what the family asked
+// for. On 390px the table showed Date, Patient and Called by and cut the
+// outcome off the edge, so the one thing a log is for was not on screen.
+// Both are rendered; css/dashboard.css shows one per width.
+const OUTCOME_ICON = {
+  connected: ['ok', 'phoneCall'], no_answer: ['danger', 'phoneOff'], busy: ['warn', 'phone'],
+  callback_requested: ['beige', 'phoneOutgoing'], voicemail: ['neutral', 'message'], wrong_number: ['danger', 'x'],
+};
+function callCards(rows) {
+  const dayKey = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const today = dayKey(Date.now()), yesterday = dayKey(Date.now() - 864e5);
+  const dayLabel = (k) => k === today ? 'Today' : k === yesterday ? 'Yesterday'
+    : new Date(k + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+  const groups = [];
+  rows.forEach(c => {
+    const k = dayKey(c.call_date);
+    if (!groups.length || groups[groups.length - 1].k !== k) groups.push({ k, rows: [] });
+    groups[groups.length - 1].rows.push(c);
+  });
+  return `<div class="ccards">${groups.map(g => `
+    <div class="cc-day">${dayLabel(g.k)}</div>
+    ${g.rows.map(c => {
+      const [tone, ico] = OUTCOME_ICON[c.dial_status] || ['neutral', 'phone'];
+      const cond = CONDITIONS.find(x => x.key === c.patient_condition);
+      const time = new Date(c.call_date).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+      const dur = c.call_duration_mins ? ` · ${c.call_duration_mins} min` : '';
+      const spoke = spokeWith(c);
+      return `
+      <article class="cc" data-call="${c.id}" tabindex="0">
+        <span class="cc-ico tone-${tone}">${icon(ico)}</span>
+        <div class="cc-main">
+          <div class="cc-top"><span class="cc-name">${sanitize(c.patients?.full_name || c.patients?.patient_code || 'Patient')}</span><span class="cc-when">${time}${dur}</span></div>
+          <div class="cc-sub">${sanitize(c.patients?.patient_code || '')} · by ${sanitize(loggedBy(c))}${spoke ? ` · spoke with ${sanitize(spoke)}` : ''}</div>
+          <div class="cc-chips">${getDialStatusBadge(c.dial_status)}${cond ? `<span class="badge badge-${cond.tone === 'ok' ? 'ok' : cond.tone === 'danger' ? 'danger' : cond.tone === 'warn' ? 'warn' : 'neutral'}">${cond.label}</span>` : ''}</div>
+          ${c.requirements_noted ? `<div class="cc-note">Asked for: ${sanitize(c.requirements_noted)}</div>` : ''}
+          ${c.follow_up_date ? `<div class="cc-next">Next check-in ${new Date(c.follow_up_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</div>` : ''}
+        </div>
+      </article>`; }).join('')}`).join('')}</div>`;
+}
+
 async function loadCalls() {
   const sb = getSupabase();
   const search = document.getElementById('call-search')?.value.trim() || '';
@@ -257,10 +298,11 @@ async function loadCalls() {
           }).join('')}
         </tbody>
       </table>
+      ${callCards(data)}
     `;
 
     const byId = Object.fromEntries(data.map(c => [c.id, c]));
-    tableBody.querySelectorAll('tr[data-call]').forEach(row => {
+    tableBody.querySelectorAll('[data-call]').forEach(row => {
       const open = () => showCallDetail(byId[row.dataset.call]);
       row.addEventListener('click', open);
       row.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });

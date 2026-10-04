@@ -112,7 +112,7 @@ export function renderSidebar() {
 
   sidebar.innerHTML = `
     <div class="sidebar-header">
-      <div class="sidebar-logo">${icon('handHeart')}</div>
+      <div class="sidebar-logo">${icon('heartPulse')}</div>
       <div class="sidebar-brand">
         <span class="sidebar-brand-name">Jarurat Care</span>
         <span class="sidebar-brand-sub">Patient Navigator</span>
@@ -185,7 +185,9 @@ async function refreshConcernCount() {
     try {
       const { count } = await getSupabase().from('patient_concerns')
         .select('*', { count: 'exact', head: true })
-        .in('status', ['open', 'acknowledged']);
+        .in('status', ['open', 'acknowledged'])
+        // care gaps have their own card on the lead dashboard
+        .not('reason', 'like', 'care_gap_%');
       concernCache = { n: count || 0, at: Date.now() };
     } catch { /* leave the pill hidden on failure */ }
   }

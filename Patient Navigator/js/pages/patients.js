@@ -7,6 +7,7 @@
 // ============================================================
 
 import { getSupabase, mustWrite } from '../supabase.js';
+import { avatarColor } from '../utils/avatar.js';
 import { getCurrentUser, getCurrentProfile, isManagerOrAdmin, getUserRole } from '../auth.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, confirmModal } from '../components/modal.js';
@@ -140,6 +141,12 @@ async function renderPatientList(container) {
   // parallel with the list query used to put seven scans of `patients` on the
   // pooler at once, which is what pushed the slowest of them past the 8 s
   // statement_timeout. They are decorative, so they can wait a beat.
+  // The header search (js/app.js) arrives as #patients?q=<words>.
+  const q = new URLSearchParams(window.location.hash.split('?')[1] || '').get('q');
+  if (q) {
+    const box = container.querySelector('#patient-search');
+    if (box) { box.value = q.slice(0, 80); currentPage = 1; }
+  }
   await loadPatients();
   loadStatusCounts();
 }
@@ -198,6 +205,38 @@ function priorityCell(p) {
     <div class="due-meta" style="margin-top:3px" title="${sanitize(known)}">${sanitize(p.reason || '')}</div>`;
 }
 
+// v11, phones: the same rows as cards (the redesign's patient list). On a
+// 390px screen the table showed two and a half of its nine columns, cut at
+// the right edge ("N/A · Ma"), and "Why now" was clipped to two words. The
+// table and the cards are both rendered; css/dashboard.css shows one per width,
+// so rotating a phone never needs a re-query.
+function patientCards(rows) {
+  return `<div class="pcards">${rows.map(p => {
+    const name = p.full_name || p.patient_code || 'Patient';
+    const who = [p.age ? `${p.age} yrs` : '', p.gender && p.gender !== 'prefer_not_to_say' ? capitalize(p.gender) : '']
+      .filter(Boolean).join(' · ');
+    const band = p.band ? `<span class="badge badge-${BAND_TONE[p.band] || 'neutral'}">${capitalize(p.band)}</span>` : '';
+    const cancer = giLabel(p.gi_subtype) || p.cancer_type || '';
+    const stage = p.cancer_stage && p.cancer_stage !== 'unknown' ? capitalize(p.cancer_stage) : '';
+    const place = [p.city, p.state].filter(Boolean).join(', ');
+    return `
+    <article class="pcard-m" data-patient-id="${p.id}" tabindex="0">
+      <div class="pcm-top">
+        <span class="avatar" style="background:${avatarColor(name)}">${sanitize(String(name).split(/\s+/).map(w => w[0]).join('').toUpperCase().slice(0, 2))}</span>
+        <div class="pcm-id"><div class="pcm-name">${sanitize(name)}</div><div class="pcm-sub">${sanitize(p.patient_code || '')}${who ? ` · ${who}` : ''}</div></div>
+        ${band}
+      </div>
+      ${p.reason ? `<div class="pcm-why">${sanitize(p.reason)}</div>` : ''}
+      <dl class="pcm-facts">
+        <div><dt>Cancer</dt><dd>${sanitize(cancer) || '<span class="q-dim">N/A</span>'}</dd></div>
+        <div><dt>Stage</dt><dd>${stage || '<span class="q-dim">N/A</span>'}</dd></div>
+        <div><dt>Place</dt><dd>${sanitize(place) || '<span class="q-dim">N/A</span>'}</dd></div>
+        <div><dt>Status</dt><dd>${statusBadge(p.patient_status)}${holdBadge(p)}</dd></div>
+      </dl>
+      <span class="btn btn-primary btn-sm btn-block pcm-open">View profile ${icon('arrowRight')}</span>
+    </article>`; }).join('')}</div>`;
+}
+
 async function loadPatients() {
   const sb = getSupabase();
   const search = (document.getElementById('patient-search')?.value || '').trim();
@@ -242,7 +281,9 @@ async function loadPatients() {
 
     if (!data || data.length === 0) {
       tableBody.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('users')}</div><h4>No patients found</h4><p>Try a different filter, or register a new patient.</p></div>`;
-      document.getElementById('patients-pagination').innerHTML = '';
+      // the page may have been left while this was loading
+      const pager = document.getElementById('patients-pagination');
+      if (pager) pager.innerHTML = '';
       return;
     }
 
@@ -268,9 +309,10 @@ async function loadPatients() {
           `).join('')}
         </tbody>
       </table>
+      ${patientCards(data)}
     `;
 
-    tableBody.querySelectorAll('tr[data-patient-id]').forEach(row => {
+    tableBody.querySelectorAll('[data-patient-id]').forEach(row => {
       const go = () => navigate('patients/' + row.dataset.patientId);
       row.addEventListener('click', go);
       row.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
@@ -642,14 +684,14 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
     {
       const { count, error } = await sb.from('patient_concerns')
         .select('id', { count: 'exact', head: true })
-        .eq('patient_id', patientId).in('status', ['open', 'acknowledged']);
+        .eq('patient_id', patientId).in('status', ['open', 'acknowledged'])
+        // a never-reached family is the team's miss, not a red flag for its mentor
+        .not('reason', 'like', 'care_gap_%');
       if (error) console.warn('Open concerns unavailable:', error.message);
       else openFlags = count ?? 0;
     }
     const supportCount = Object.values(services).filter(s => s.done && !OUTCOME_FLAGS.some(f => f.key === s.lever)).length;
-    const AVATAR_COLORS = ['#006469', '#7A4C00', '#5B4892', '#295B86', '#106841', '#953028'];
-    let h = 0; for (const ch of patient.full_name) h = ch.charCodeAt(0) + ((h << 5) - h);
-    const avColor = AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
+    const avColor = avatarColor(patient.full_name);
     const initials = patient.full_name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
     // Age and gender show only when we hold them. 'N/A yrs' used to sit directly
     // under the patient's name, so the most-read line on the page led with a gap.
@@ -677,8 +719,13 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
             </div>
           </div>
         </div>
-        <div class="detail-actions">
-          <select class="form-select" id="status-select" style="width:auto" title="Patient status">
+        <!-- v11, phones: ten buttons stacked above the record was the first
+             thing a mentor scrolled past on every patient. Log a call, WhatsApp
+             and Flag stay in reach; the rest fold behind More (css/dashboard.css,
+             .detail-actions.pa). Desktop is unchanged: everything in one row. -->
+        <div class="detail-actions pa" id="pa-actions">
+          <button class="btn btn-secondary pa-toggle" id="pa-more-btn" type="button" aria-expanded="false" aria-controls="pa-actions">${icon('moreHorizontal')}<span class="pa-toggle-label">More actions</span></button>
+          <select class="form-select pa-more" id="status-select" style="width:auto" title="Patient status">
             ${PATIENT_STATUSES.map(s => `<option value="${s.key}" ${patient.patient_status === s.key ? 'selected' : ''}>${s.label}</option>`).join('')}
           </select>
           <!-- Reported 09/09 by the Ground POC lead. Measured cause: a patient
@@ -688,22 +735,22 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
                owner changes on the same patient over 90 days: exactly 7.
                This is where a mentor says "stop passing them around". -->
           ${!deceased ? (patient.disinterest_level
-            ? `<button class="btn btn-secondary" id="clear-hold-btn" title="Put them back in the call order now">${icon('refresh')}Back in the programme</button>`
-            : `<button class="btn btn-secondary" id="disinterest-btn">${icon('clock')}Not taking part</button>`) : ''}
+            ? `<button class="btn btn-secondary pa-more" id="clear-hold-btn" title="Put them back in the call order now">${icon('refresh')}Back in the programme</button>`
+            : `<button class="btn btn-secondary pa-more" id="disinterest-btn">${icon('clock')}Not taking part</button>`) : ''}
           <!-- Reported 01/09 by Prachi. The RPC behind this has been live since
                sql/113 and had been used zero times, because the only trigger in
                the whole app was a ghost button inside the calling portal's log
                form. This is the same call, from the record. -->
           ${!deceased ? `<button class="btn btn-secondary" id="escalate-btn" ${openFlags ? 'style="color:var(--danger)"' : ''} title="${openFlags ? `${openFlags} open flag${openFlags === 1 ? '' : 's'} on this patient` : 'Raise a flag to the supervisors'}">${icon('alertTriangle')}Flag / hand over${openFlags ? ` <span class="badge badge-danger">${openFlags}</span>` : ''}</button>` : ''}
           ${!deceased ? (patient.is_blacklisted
-            ? (isManagerOrAdmin() ? `${!patient.blacklist_reviewed ? `<button class="btn btn-secondary" id="approve-block-btn" title="Validate this block against the reason on record. They stay blocked.">${icon('checkCircle')}Approve block</button>` : ''}<button class="btn btn-secondary" id="unblock-btn">${icon('check')}Review unblock</button>` : '')
-            : `<button class="btn btn-secondary" id="block-btn" style="color:var(--danger)" title="Severe cases: block for everyone until a manager reviews">${icon('x')}Block patient</button>`) : ''}
-          <button class="btn btn-secondary" id="edit-patient-btn">${icon('edit')}Edit</button>
-          <button class="btn btn-secondary" id="read-docs-btn">${icon('upload')}Upload documents</button>
-          <button class="btn btn-secondary" id="assess-btn">${icon('activity')}Record wellbeing</button>
-          ${!deceased ? `<button class="btn btn-secondary" id="org-report-btn" title="Record what happened when this family contacted an NGO or organisation">${icon('message')}Report an NGO</button>` : ''}
-          ${!deceased ? `<button class="btn btn-gold" id="wa-share-btn">${icon('phone')}WhatsApp</button>` : ''}
-          ${!deceased ? `<button class="btn btn-primary" id="log-call-btn">${icon('phoneCall')}Log a call</button>` : ''}
+            ? (isManagerOrAdmin() ? `${!patient.blacklist_reviewed ? `<button class="btn btn-secondary pa-more" id="approve-block-btn" title="Validate this block against the reason on record. They stay blocked.">${icon('checkCircle')}Approve block</button>` : ''}<button class="btn btn-secondary pa-more" id="unblock-btn">${icon('check')}Review unblock</button>` : '')
+            : `<button class="btn btn-secondary pa-more" id="block-btn" style="color:var(--danger)" title="Severe cases: block for everyone until a manager reviews">${icon('x')}Block patient</button>`) : ''}
+          <button class="btn btn-secondary pa-more" id="edit-patient-btn">${icon('edit')}Edit</button>
+          <button class="btn btn-secondary pa-more" id="read-docs-btn">${icon('upload')}Upload documents</button>
+          <button class="btn btn-secondary pa-more" id="assess-btn">${icon('activity')}Record wellbeing</button>
+          ${!deceased ? `<button class="btn btn-secondary pa-more" id="org-report-btn" title="Record what happened when this family contacted an NGO or organisation">${icon('message')}Report an NGO</button>` : ''}
+          ${!deceased ? `<button class="btn btn-gold pa-main" id="wa-share-btn">${icon('phone')}WhatsApp</button>` : ''}
+          ${!deceased ? `<button class="btn btn-primary pa-main" id="log-call-btn">${icon('phoneCall')}Log a call</button>` : ''}
         </div>
       </div>
 
@@ -729,6 +776,14 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
     // Back goes where they came from (Calls, Concerns, the queue board, the
     // calling portal...), not always to the patients list. See goBack().
     container.querySelector('#back-to-patients').addEventListener('click', () => goBack('patients'));
+    container.querySelector('#pa-more-btn')?.addEventListener('click', (e) => {
+      const box = container.querySelector('#pa-actions');
+      const open = box.classList.toggle('show-more');
+      e.currentTarget.setAttribute('aria-expanded', String(open));
+      // its own span: anim.js appends a ripple span on press, so lastChild was the ripple
+      const label = e.currentTarget.querySelector('.pa-toggle-label');
+      if (label) label.textContent = open ? 'Fewer actions' : 'More actions';
+    });
     container.querySelector('#edit-patient-btn').addEventListener('click', () => showPatientForm(patient, reload));
     // The batch reader. One PDF, twenty photos or a mix, segmented into
     // documents and reviewed as one thing. See js/pages/docBatch.js.
@@ -888,6 +943,9 @@ const POC_REASON_LABELS = {
   restored_after_leave: 'Restored after leave',
   auto_distribute: 'Auto-distributed',
   daily_rotation: 'Daily rotation',
+  // sql/149: a member is deactivated and their families move on automatically
+  member_left: 'Handed on: previous holder left the team',
+  member_left_unowned: 'Released: previous holder left the team',
   manual_update: 'Updated',
   // v89, the nutrition side of the same table
   nutrition_claim: 'Claimed',
@@ -1068,9 +1126,9 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
     ${nutriBanner}
     ${renderCareFolderCard(p, services, assessments)}
     ${gaps.length ? `
-    <div class="card" style="margin-bottom:var(--s5);border-left:3px solid var(--warn)">
+    <div class="card wrap-meta" style="margin-bottom:var(--s5);border-left:3px solid var(--warn)">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-        <div style="display:flex;align-items:center;gap:11px">
+        <div style="display:flex;align-items:center;gap:11px;min-width:0;flex:1 1 240px">
           <span class="stat-ico warn">${icon('search')}</span>
           <div><div class="info-value">${gaps.length} detail${gaps.length === 1 ? '' : 's'} still unknown</div>
           <div class="due-meta">Callers get prompted for these at the right call stage, or fill them now if you know.</div></div>

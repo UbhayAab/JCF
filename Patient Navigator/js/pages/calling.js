@@ -246,6 +246,8 @@ function sourceBadge(source, long = false) {
   switch (source) {
     case 'followup':        return badge('primary', 'Follow-up');
     case 'concern':         return badge('danger', long ? 'Flag follow-up' : 'Flag');
+    // sql/151: queued because the team had not reached this family in time
+    case 'care_gap':        return badge('warn', long ? 'Overdue for a call' : 'Overdue');
     case 'nutrition_pitch': return badge('ok', 'Nutrition');
     default:                return badge('gold', long ? 'New lead' : 'New');
   }

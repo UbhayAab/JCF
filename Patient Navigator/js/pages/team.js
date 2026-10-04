@@ -5,6 +5,7 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
+import { avatarColor } from '../utils/avatar.js';
 import { isAdmin, isManagerOrAdmin, getCurrentProfile, startImpersonation } from '../auth.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, confirmModal } from '../components/modal.js';
@@ -16,8 +17,8 @@ import { navigate } from '../router.js';
 import { DIAL_STATUSES, CONDITIONS, statusBadge } from '../utils/catalog.js';
 import { withMvp, mvpBand, median } from '../utils/performance.js';
 
-const AV_COLORS = ['#006469', '#7A4C00', '#5B4892', '#295B86', '#106841', '#953028'];
-function avColor(n) { let h = 0; for (let i = 0; i < (n || '').length; i++) h = n.charCodeAt(i) + ((h << 5) - h); return AV_COLORS[Math.abs(h) % AV_COLORS.length]; }
+// The one palette (js/utils/avatar.js); same hash, so nobody changes colour.
+const avColor = (n) => avatarColor(n);
 function inits(n) { return n ? n.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) : '?'; }
 
 export async function renderTeam(container) {
@@ -58,7 +59,20 @@ export async function renderTeam(container) {
     else loadAvailability();
   }));
 
-  await loadAvailability();
+  // The dashboard's "Open today's queue" lands here on the queue tab
+  // (one-shot hint, js/pages/dashboard.js). Anything else opens on availability.
+  let wantTab = null;
+  try { wantTab = sessionStorage.getItem(TEAM_TAB_KEY); sessionStorage.removeItem(TEAM_TAB_KEY); } catch { /* private mode */ }
+  const tabBtn = wantTab && document.querySelector(`#team-tabs .tab[data-tab="${wantTab}"]`);
+  if (tabBtn) tabBtn.click();
+  else await loadAvailability();
+}
+
+const TEAM_TAB_KEY = 'pn_team_tab';
+// Open the Team page on a given tab ('queue', 'availability', ...).
+export function openTeamOn(tab) {
+  try { sessionStorage.setItem(TEAM_TAB_KEY, tab); } catch { /* private mode */ }
+  navigate('team');
 }
 
 // ---- Not taking part: who is on an engagement hold, and until when ----
@@ -433,7 +447,8 @@ async function loadAvailability() {
       const { error } = await sb.rpc('mark_availability_for', { p_caller_id: btn.dataset.id, p_available: !on });
       btn.disabled = false;
       if (error) { showToast(error.message, 'error'); return; }
-      showToast(`${btn.dataset.name || 'They'} marked ${on ? 'off' : 'on'} for today`, 'success');
+      // dataset decodes the escaped name: escape it again before it is HTML
+      showToast(`${sanitize(btn.dataset.name) || 'They'} marked ${on ? 'off' : 'on'} for today`, 'success');
       loadAvailability();
     }));
     content.querySelector('#team-sort')?.addEventListener('change', (e) => {
@@ -443,11 +458,11 @@ async function loadAvailability() {
     content.querySelectorAll('.give-btn').forEach(btn => btn.addEventListener('click', () => showAssignPatientsModal(btn.dataset.id)));
     content.querySelectorAll('.restore-btn').forEach(btn => btn.addEventListener('click', async () => {
       try { const { data: n, error: e } = await sb.rpc('restore_owned_patients', { p_user_id: btn.dataset.id });
-        if (e) throw e; showToast(`Restored ${n || 0} patients to ${btn.dataset.name}`, 'success'); loadAvailability();
+        if (e) throw e; showToast(`Restored ${Number(n) || 0} patients to ${sanitize(btn.dataset.name)}`, 'success'); loadAvailability();
       } catch (e) { showToast(e.message, 'error'); }
     }));
     content.querySelectorAll('.cover-btn').forEach(btn => btn.addEventListener('click', () => {
-      confirmModal(`Hand <strong>${btn.dataset.name}</strong>'s caseload to present caregiver mentors? Their original ownership is preserved, so you can restore it when they're back.`,
+      confirmModal(`Hand <strong>${sanitize(btn.dataset.name)}</strong>'s caseload to present caregiver mentors? Their original ownership is preserved, so you can restore it when they're back.`,
         async () => { try { const { data: n, error: e } = await sb.rpc('reassign_for_absence', { p_user_id: btn.dataset.id });
           if (e) throw e; showToast(`Covered ${n || 0} patients`, 'success'); loadAvailability();
         } catch (e) { showToast(e.message, 'error'); } },
@@ -732,13 +747,17 @@ function applyAndRenderQueue() {
 // v89: a nutrition_pitch row can only go to a nutritionist, and the caregiver
 // rows can only go to mentors. Offering the wrong team just produced a raise
 // from move_queue_entry with no valid candidate anywhere in the list.
-async function showMoveQueueModal(row) {
+// v11: exported for the dashboard. `onMoved` replaces the Team-page reload
+// there (loadQueue writes into #team-content, which the dashboard does not
+// have), and `handOver: false` opens it as a today-only cover: the mockups'
+// "Assign temporary caller" is exactly move_queue_entry without ownership.
+export async function showMoveQueueModal(row, { onMoved = loadQueue, handOver = true, title } = {}) {
   if (!row) return;
   const sb = getSupabase();
   const isNutRow = String(row.source || '').startsWith('nutrition');
   const el = document.createElement('div');
   el.innerHTML = `<div style="padding:var(--s6);text-align:center;color:var(--ink-3)"><span class="spinner" style="width:22px;height:22px;border-width:2.5px"></span><div style="margin-top:10px">Loading the team…</div></div>`;
-  showModal({ title: `Move ${sanitize(row.full_name || row.patient_code || 'this call')}`, content: el, size: 'lg' });
+  showModal({ title: title || `Move ${sanitize(row.full_name || row.patient_code || 'this call')}`, content: el, size: 'lg' });
   try {
     let team;
     if (isNutRow) {
@@ -766,7 +785,7 @@ async function showMoveQueueModal(row) {
           </label>`).join('')}
       </div>
       <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer">
-        <input type="checkbox" id="move-ownership" checked style="margin-top:3px" />
+        <input type="checkbox" id="move-ownership" ${handOver ? 'checked' : ''} style="margin-top:3px" />
         <span><span class="info-value">${isNutRow ? 'Also hand over nutrition care for this patient' : 'Also hand over the patient (future follow-ups go to them)'}</span>
         <span class="due-meta" style="display:block;margin-top:2px">${isNutRow
           ? 'Unchecked = this one call moves and nothing else. Checked, they become the nutrition POC on the record.'
@@ -793,7 +812,7 @@ async function showMoveQueueModal(row) {
         const n = res?.target_today ?? 0;
         showToast(`Moved to ${target?.full_name || 'them'}: now has ${n} today${n > 22 ? ' (over the ~22/day target, keep an eye on their load)' : ''}`, 'success');
         closeModal();
-        loadQueue();
+        onMoved();
       } catch (err) { showToast(err.message, 'error'); btn.disabled = false; btn.innerHTML = `${icon('users')}Move call`; }
     });
   } catch (err) {

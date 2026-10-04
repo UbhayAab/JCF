@@ -1,50 +1,51 @@
 // ============================================================
 // Patient Navigator: Chart.js Utility Module
-// Wraps Chart.js for consistent dark-themed charts
+// Wraps Chart.js for consistent, theme-following charts
 // ============================================================
 
 // Canvas can't read CSS var() strings, so pull token values off :root at call time.
 const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
-// Color palette for charts: "Clinic Calm" teal theme.
-// Leads with teals, then keeps semantic hues so multi-series charts stay legible.
+// Color palette for charts: v11 "Cocoa & Blush". The mockups' "Calls Over
+// Time" draws Total in blue and Connected in green on white, so the series
+// lead with those two, then the pastel tile family at full strength.
 // These stay rgba(…, 1) literals because callers derive translucent fills via
 // `.replace('1)', '0.x)')` and createGradient's `/[\d.]+\)$/` regex.
 export const CHART_COLORS = {
-  primary:   'rgba(12, 110, 116, 1)',   // teal primary
-  accent:    'rgba(23, 173, 180, 1)',   // teal glow
-  rose:      'rgba(192, 71, 59, 1)',    // danger red
-  success:   'rgba(46, 125, 85, 1)',    // ok green
-  warning:   'rgba(176, 120, 14, 1)',   // warn amber
-  info:      'rgba(53, 102, 144, 1)',   // info steel blue
-  danger:    'rgba(192, 71, 59, 1)',
-  slate:     'rgba(100, 112, 108, 1)',  // cool slate / ink
+  primary:   'rgba(74, 112, 214, 1)',   // blue: "Total" in the mockups
+  accent:    'rgba(214, 74, 128, 1)',   // blush
+  rose:      'rgba(186, 26, 26, 1)',    // danger red
+  success:   'rgba(46, 150, 110, 1)',   // green: "Connected" in the mockups
+  warning:   'rgba(196, 128, 18, 1)',   // amber
+  info:      'rgba(26, 67, 168, 1)',    // deep blue
+  danger:    'rgba(186, 26, 26, 1)',
+  slate:     'rgba(110, 98, 95, 1)',    // warm stone
 };
 
 export const CHART_PALETTE = [
-  'rgba(12, 110, 116, 0.85)',  // teal
-  'rgba(23, 173, 180, 0.85)',  // teal glow
-  'rgba(106, 87, 166, 0.85)',  // clay
-  'rgba(53, 102, 144, 0.85)',  // steel blue
-  'rgba(46, 125, 85, 0.85)',   // green
-  'rgba(176, 120, 14, 0.85)',  // amber
-  'rgba(192, 71, 59, 0.85)',   // red
-  'rgba(14, 136, 143, 0.85)',  // teal bright
-  'rgba(150, 131, 214, 0.85)', // violet
-  'rgba(133, 144, 140, 0.85)', // cool slate
+  'rgba(74, 112, 214, 0.85)',  // blue
+  'rgba(214, 74, 128, 0.85)',  // blush
+  'rgba(46, 150, 110, 0.85)',  // green
+  'rgba(196, 128, 18, 0.85)',  // amber
+  'rgba(110, 82, 190, 0.85)',  // lavender
+  'rgba(24, 130, 170, 0.85)',  // cyan
+  'rgba(200, 70, 60, 0.85)',   // rose
+  'rgba(150, 96, 66, 0.85)',   // cocoa
+  'rgba(92, 170, 140, 0.85)',  // mint
+  'rgba(110, 98, 95, 0.85)',   // stone
 ];
 
 export const CHART_PALETTE_LIGHT = [
-  'rgba(12, 110, 116, 0.16)',
-  'rgba(23, 173, 180, 0.16)',
-  'rgba(106, 87, 166, 0.16)',
-  'rgba(53, 102, 144, 0.16)',
-  'rgba(46, 125, 85, 0.16)',
-  'rgba(176, 120, 14, 0.16)',
-  'rgba(192, 71, 59, 0.16)',
-  'rgba(14, 136, 143, 0.16)',
-  'rgba(150, 131, 214, 0.16)',
-  'rgba(133, 144, 140, 0.16)',
+  'rgba(74, 112, 214, 0.16)',
+  'rgba(214, 74, 128, 0.16)',
+  'rgba(46, 150, 110, 0.16)',
+  'rgba(196, 128, 18, 0.16)',
+  'rgba(110, 82, 190, 0.16)',
+  'rgba(24, 130, 170, 0.16)',
+  'rgba(200, 70, 60, 0.16)',
+  'rgba(150, 96, 66, 0.16)',
+  'rgba(92, 170, 140, 0.16)',
+  'rgba(110, 98, 95, 0.16)',
 ];
 
 // Chart instance registry (for cleanup)
@@ -64,7 +65,7 @@ export function defaultChartOptions(type = 'bar') {
         display: false,
         labels: {
           color: cssVar('--ink-2'),
-          font: { family: "'Archivo', sans-serif", size: 11 },
+          font: { family: "'Manrope', sans-serif", size: 11 },
           padding: 16,
           usePointStyle: true,
           pointStyleWidth: 8,
@@ -78,8 +79,8 @@ export function defaultChartOptions(type = 'bar') {
         borderWidth: 1,
         cornerRadius: 9,
         padding: 12,
-        titleFont: { family: "'Archivo', sans-serif", weight: '600', size: 13 },
-        bodyFont: { family: "'Spline Sans Mono', monospace", size: 11.5 },
+        titleFont: { family: "'Manrope', sans-serif", weight: '600', size: 13 },
+        bodyFont: { family: "'Manrope', sans-serif", size: 11.5 },
         displayColors: true,
         boxPadding: 4,
       },
@@ -96,7 +97,7 @@ export function defaultChartOptions(type = 'bar') {
         },
         ticks: {
           color: cssVar('--ink-2'),
-          font: { family: "'Spline Sans Mono', monospace", size: 10 },
+          font: { family: "'Manrope', sans-serif", size: 10 },
           maxRotation: 45,
         },
         border: { display: false },
@@ -108,7 +109,7 @@ export function defaultChartOptions(type = 'bar') {
         },
         ticks: {
           color: cssVar('--ink-2'),
-          font: { family: "'Spline Sans Mono', monospace", size: 10 },
+          font: { family: "'Manrope', sans-serif", size: 10 },
           precision: 0,
         },
         border: { display: false },

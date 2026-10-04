@@ -211,7 +211,11 @@ function injectStyle() {
   s.id = STYLE_ID;
   s.textContent = `
     .fs-block { display:flex; flex-direction:column; gap:6px; }
-    .fs-build { font-size:11px; opacity:.6; letter-spacing:.02em; text-align:center; }
+    /* The build label used to be opacity:.6 of whatever colour it inherited,
+       which in the sidebar was the page ink on the dark panel: 1.0-1.2:1 in
+       every theme, so nobody could read it. Theme tokens now, no opacity. */
+    .fs-build { font-size:11px; letter-spacing:.02em; text-align:center; color:var(--ink-3, #625754); }
+    .sidebar .fs-build { color:var(--panel-text-3, #C7AEA2); }
     /* --text and --border do not exist in this app's palette: it names them
        --color-text and --color-border. The old names silently fell through to
        the hardcoded fallbacks, which painted near-black text on the dark

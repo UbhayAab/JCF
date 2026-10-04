@@ -1,6 +1,10 @@
 // ============================================================
 // Patient Navigator: Dashboard (warm "here's today" landing)
 // Care-oriented. v2: assignment ops, availability, live insights.
+// v11 (Oct 2026): managers and admins get the redesign's action-first
+// dashboard in js/pages/dashboardAdmin.js; this file keeps the role views
+// (mentors, specialists, ground intake, content). Cards both use live in
+// js/components/dashCards.js.
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
@@ -10,11 +14,9 @@ import { measureLabel } from '../utils/catalog.js';
 import { showToast } from '../components/toast.js';
 import { navigate } from '../router.js';
 import { icon } from '../components/icons.js';
-import { openSessionForm, suggestNextSession } from '../components/sessionForm.js';
-import { sanitize } from '../utils/validators.js';
-import { AVATAR_COLORS, avatarColor, initials } from '../utils/avatar.js';
-
-const RESOURCE_REPLIES_URL = 'https://uhesnagqbmuyqiuzfhcv.supabase.co/functions/v1/resource-replies';
+import { avatarColor, initials } from '../utils/avatar.js';
+import { loadSaturdayCard, loadResourceReplies, loadDocsWaitingCard } from '../components/dashCards.js';
+import { renderAdminDashboard } from './dashboardAdmin.js';
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 function greetingWord() { const h = new Date().getHours(); return h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening'; }
 
@@ -46,6 +48,9 @@ export async function renderDashboard(container) {
           ? "An overview of the people in our care and the work going on."
           : 'A few people are waiting to hear from you today. No rush: one good conversation at a time.';
 
+  // Managers and admins: the v11 action-first dashboard.
+  if (isAdmin) return renderAdminDashboard(container, { firstName, subtitle, today, role });
+
   container.innerHTML = `
     <div class="dash">
       <div class="greet">
@@ -59,11 +64,7 @@ export async function renderDashboard(container) {
       ${isCaller ? `<div id="caller-avail"></div>` : ''}
 
       <div class="quick">
-        ${isAdmin ? `
-        <a class="qa" id="qa-build"><span class="qa-ico teal">${icon('refresh')}</span><div><div class="qa-title">Build today's list</div><div class="qa-sub">Assign calls to the team</div></div></a>
-        <a class="qa" id="qa-leads"><span class="qa-ico coral">${icon('userPlus')}</span><div><div class="qa-title">Add new leads</div><div class="qa-sub">Bulk-add today's numbers</div></div></a>
-        <a class="qa" id="qa-analytics"><span class="qa-ico blue">${icon('chart')}</span><div><div class="qa-title">See how we're doing</div><div class="qa-sub">Open analytics</div></div></a>
-        ` : isIntake ? `
+        ${isIntake ? `
         <a class="qa" id="qa-upload"><span class="qa-ico coral">${icon('upload')}</span><div><div class="qa-title">Upload numbers</div><div class="qa-sub">Paste a list or add one lead</div></div></a>
         <a class="qa" id="qa-patients"><span class="qa-ico blue">${icon('users')}</span><div><div class="qa-title">My uploaded leads</div><div class="qa-sub">Review what you added</div></div></a>
         <a class="qa" id="qa-profile"><span class="qa-ico teal">${icon('user')}</span><div><div class="qa-title">Profile</div><div class="qa-sub">Password and account settings</div></div></a>
@@ -81,7 +82,6 @@ export async function renderDashboard(container) {
 
       <div id="saturday-card"></div>
       <div id="resource-replies"></div>
-      <div id="blocked-card"></div>
       <div id="docs-waiting-card"></div>
 
       <div class="hero-metrics" id="hero-metrics">
@@ -90,8 +90,6 @@ export async function renderDashboard(container) {
       </div>
 
       <div class="stats" id="stats">${Array(isAdmin ? 4 : 3).fill('<div class="stat"><span class="stat-ico"></span><div><div class="stat-num"><span class="sk" style="display:inline-block;width:36px;height:22px"></span></div><div class="stat-lbl">Loading…</div></div></div>').join('')}</div>
-
-      ${isAdmin ? `<div id="insights"></div>` : ''}
 
       <div class="dash-grid">
         <div class="card card-flush">
@@ -105,26 +103,11 @@ export async function renderDashboard(container) {
             <div id="due-today"><div style="padding:var(--s4)">${Array(3).fill('<div class="sk skeleton-row"></div>').join('')}</div></div>
             <div class="card-foot"><a id="open-portal">${isSpecialist ? 'Open the full worklist' : (isIntake ? 'Open upload' : (isAdmin ? 'Open calling portal' : 'Start calling'))} ${icon('arrowRight')}</a></div>
           </div>
-          ${isAdmin ? `
-          <div class="card card-flush">
-            <div class="card-head"><h3>Today's intake</h3><span style="width:20px;height:20px;color:var(--ink-3)">${icon('inbox')}</span></div>
-            <div class="intake">
-              <p style="font-size:13.5px;color:var(--ink-2)">New people added in the last 24 hours, waiting for assignment.</p>
-              <div class="intake-nums" id="intake-nums">
-                <div class="intake-num"><div class="n">…</div><div class="l">Added today</div></div>
-                <div class="intake-num warn"><div class="n">…</div><div class="l">Not yet assigned</div></div>
-              </div>
-              <button class="btn btn-primary btn-block" id="distribute-btn">${icon('users')}Build today's assignments</button>
-            </div>
-          </div>` : ''}
         </div>
       </div>
     </div>`;
 
   // quick actions
-  document.getElementById('qa-build')?.addEventListener('click', buildAssignments);
-  document.getElementById('qa-leads')?.addEventListener('click', () => navigate('upload'));
-  document.getElementById('qa-analytics')?.addEventListener('click', () => navigate('analytics'));
   document.getElementById('qa-upload')?.addEventListener('click', () => navigate('upload'));
   document.getElementById('qa-call')?.addEventListener('click', () => navigate('calling'));
   document.getElementById('qa-learn')?.addEventListener('click', () => navigate('learn'));
@@ -143,160 +126,13 @@ export async function renderDashboard(container) {
   // landed on the unfiltered 617 row shelf. Fixed 2026-09-10 in app.js.
   document.getElementById('qa-resources')?.addEventListener('click', () => navigate('resources/money_stay'));
   document.getElementById('open-portal')?.addEventListener('click', () => navigate(isSpecialist ? (role === 'nutritionist' ? 'nutrition' : 'sessions') : (isIntake ? 'upload' : 'calling')));
-  document.getElementById('distribute-btn')?.addEventListener('click', buildAssignments);
 
   const tasks = [loadStats(),
     isSpecialist ? loadRecentCheckins() : loadRecentCalls(),
     isSpecialist ? loadSpecialistPeople(role) : loadDueToday(isIntake),
     loadSaturdayCard(role), loadResourceReplies(), loadDocsWaitingCard()];
-  if (isAdmin) { tasks.push(loadIntakeSummary(), loadInsights(), loadBlockedCard()); }
-  else if (isCaller) tasks.push(loadCallerAvailability());
+  if (isCaller) tasks.push(loadCallerAvailability());
   await Promise.all(tasks);
-}
-
-// Next Saturday circle: visible to everyone (callers invite patients on
-// their calls); loggable by the teams who run them.
-async function loadSaturdayCard(role) {
-  const el = document.getElementById('saturday-card');
-  if (!el) return;
-  try {
-    const next = await suggestNextSession();
-    const canLog = ['admin', 'manager', 'therapist', 'nutritionist'].includes(role);
-    const nice = next.date.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
-    const lastLine = next.last
-      ? `Last circle: ${next.last.session_type === 'nutrition' ? 'nutrition' : 'well-being'} on ${new Date(next.last.session_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}.`
-      : 'No circles logged yet.';
-    el.innerHTML = `
-      <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:16px 20px">
-        <div style="display:flex;align-items:center;gap:12px;min-width:0;flex:1">
-          <span class="stat-ico ${next.type === 'nutrition' ? 'ok' : 'violet'}">${icon(next.type === 'nutrition' ? 'leaf' : 'heart')}</span>
-          <div style="min-width:0"><div class="info-value">Next circle: <strong>${next.type === 'nutrition' ? 'Nutrition' : 'Well-being'}</strong> · ${nice}</div>
-            <div class="due-meta">${lastLine} Invite your patients on this week's calls.</div></div>
-        </div>
-        ${canLog ? `<button class="btn btn-secondary btn-sm" id="sat-log-btn">${icon('plus')}Log a session</button>` : ''}
-      </div>`;
-    document.getElementById('sat-log-btn')?.addEventListener('click', () =>
-      openSessionForm({ defaults: { type: next.type }, onSaved: () => loadSaturdayCard(role) }));
-  } catch { el.innerHTML = ''; }
-}
-
-// Patients who replied on WhatsApp to resources this mentor sent. The POC sees
-// their messages and can follow up. Reply text is sanitized (patient-typed).
-// Self-hides when there are no replies. Tap a row to expand the conversation.
-async function loadResourceReplies() {
-  const el = document.getElementById('resource-replies');
-  if (!el) return;
-  const me = getCurrentProfile();
-  if (!me?.id) { el.innerHTML = ''; return; }
-  try {
-    const { data: sess } = await getSupabase().auth.getSession();
-    const token = sess?.session?.access_token;
-    if (!token) { el.innerHTML = ''; return; }
-    const res = await fetch(RESOURCE_REPLIES_URL, {
-      method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ mentorId: me.id }),
-    });
-    const body = await res.json().catch(() => ({}));
-    const threads = (body.threads || []).filter(t => (t.messages || []).some(m => m.dir === 'in'));
-    if (!threads.length) { el.innerHTML = ''; return; }
-    el.innerHTML = `
-      <div class="card card-flush">
-        <div class="card-head"><h3>Replies to resources you sent</h3><span class="badge badge-primary">${threads.length}</span></div>
-        <div class="due-list">${threads.slice(0, 8).map((t, i) => resourceThread(t, i)).join('')}</div>
-      </div>`;
-    el.querySelectorAll('[data-thr]').forEach(row => row.addEventListener('click', () => {
-      const m = document.getElementById('thr-msgs-' + row.dataset.thr);
-      if (m) m.style.display = m.style.display === 'none' ? '' : 'none';
-    }));
-  } catch (e) { console.warn('Resource replies error:', e); el.innerHTML = ''; }
-}
-
-function resourceThread(t, i) {
-  const name = t.patient_name || t.phone || 'Patient';
-  const msgs = t.messages || [];
-  const lastIn = [...msgs].reverse().find(m => m.dir === 'in');
-  const snippet = lastIn ? lastIn.text : '';
-  return `
-    <div>
-      <div class="due-row clickable" data-thr="${i}" style="cursor:pointer">
-        <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span>
-        <div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(name)}</div><div class="due-meta cell-clamp">“${sanitize(snippet)}”</div></div>
-        <span class="badge badge-neutral">${formatRelativeTime(t.last_reply_at)}</span>
-      </div>
-      <div id="thr-msgs-${i}" style="display:none;padding:6px 16px 12px;background:var(--surface-2)">
-        ${msgs.map(m => `<div style="display:flex;justify-content:${m.dir === 'in' ? 'flex-start' : 'flex-end'};margin:3px 0">
-          <div style="max-width:78%;padding:7px 11px;border-radius:12px;font-size:13px;line-height:1.4;background:${m.dir === 'in' ? 'var(--surface-3)' : 'var(--primary-soft)'};color:var(--ink)">${sanitize(m.text)}<div style="font-size:12px;color:var(--ink-3);margin-top:3px">${formatRelativeTime(m.at)}</div></div>
-        </div>`).join('')}
-      </div>
-    </div>`;
-}
-
-// Blocked patients on the dashboard (field request 19/09): managers see who
-// is blocked and why without opening Team > Blocked. Nobody is handed these
-// patients while blocked; this is the heads-up, the review queue stays on
-// the Team page. Self-hides when nobody is blocked.
-async function loadBlockedCard() {
-  const el = document.getElementById('blocked-card');
-  if (!el) return;
-  try {
-    const { data, count, error } = await getSupabase().from('v_blacklisted_patients')
-      .select('patient_id,full_name,patient_code,blacklist_reason', { count: 'exact' }).limit(5);
-    if (error) throw error;
-    const rows = data || [];
-    if (!rows.length) { el.innerHTML = ''; return; }
-    const total = count ?? rows.length;
-    el.innerHTML = `
-      <div class="card card-flush" style="border-left:3px solid var(--danger)">
-        <div class="card-head"><h3>Blocked patients</h3><span class="badge badge-danger">${total}</span></div>
-        <div class="due-list">${rows.map(r => `
-          <div class="due-row clickable" data-patient="${r.patient_id}" style="cursor:pointer">
-            <span class="avatar avatar-sm" style="background:var(--danger)">${initials(r.full_name || '?')}</span>
-            <div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(r.full_name || 'Unknown')} <span class="due-meta">${sanitize(r.patient_code || '')}</span></div><div class="due-meta cell-clamp">${sanitize(r.blacklist_reason || 'No reason recorded')}</div></div>
-          </div>`).join('')}</div>
-        <div class="card-foot"><a id="open-blocked">Review on the Team page ${icon('arrowRight')}</a></div>
-      </div>`;
-    el.querySelectorAll('[data-patient]').forEach(row => row.addEventListener('click', () => navigate('patients/' + row.dataset.patient)));
-    document.getElementById('open-blocked')?.addEventListener('click', () => navigate('team'));
-  } catch { el.innerHTML = ''; }
-}
-
-// Document reads waiting for a person (sql/143): a finished read nobody has
-// reviewed, or a read that stopped part way with its pages stored. Two sat for
-// 16 and 26 days in Sep 2026 because nothing told anyone. The view is
-// security_invoker, so each person sees only the families they can open.
-// That is still too wide for "waiting for you": a nutritionist can open the
-// whole nutrition pool, and saw other mentors' uploads here. Managers see
-// every read waiting; everyone else sees the uploads they made.
-// Self-hides when nothing is waiting.
-async function loadDocsWaitingCard() {
-  const el = document.getElementById('docs-waiting-card');
-  if (!el) return;
-  try {
-    const sb = getSupabase();
-    let query = sb.from('v_document_batches_needing_action')
-      .select('batch_id,patient_id,patient_code,action,days_waiting,page_count', { count: 'exact' })
-      .order('days_waiting', { ascending: false }).limit(6);
-    const me = getCurrentProfile();
-    if (!isManagerOrAdmin() && me?.id) query = query.eq('uploaded_by', me.id);
-    const { data, count, error } = await query;
-    if (error) throw error;
-    const rows = data || [];
-    if (!rows.length) { el.innerHTML = ''; return; }
-    const ids = [...new Set(rows.map(r => r.patient_id))];
-    const { data: people } = await sb.from('patients').select('id,full_name').in('id', ids);
-    const nameOf = Object.fromEntries((people || []).map(p => [p.id, p.full_name]));
-    el.innerHTML = `
-      <div class="card card-flush" style="border-left:3px solid var(--warn)">
-        <div class="card-head"><h3>Documents waiting for you</h3><span class="badge badge-warn">${count ?? rows.length}</span></div>
-        <div class="due-list">${rows.map(r => `
-          <div class="due-row clickable" data-patient="${r.patient_id}" style="cursor:pointer">
-            <span class="avatar avatar-sm" style="background:var(--warn)">${initials(nameOf[r.patient_id] || '?')}</span>
-            <div class="grow" style="flex:1;min-width:0"><div class="due-name" style="white-space:normal">${sanitize(nameOf[r.patient_id] || r.patient_code || 'Unknown')} <span class="due-meta">${sanitize(r.patient_code || '')}</span></div>
-            <div class="due-meta" style="white-space:normal">${r.action === 'review' ? 'Read, waiting for your review' : 'Reading stopped part way: open Documents, Finish reading'} · ${r.page_count || 0} page(s) · ${r.days_waiting} day(s) waiting</div></div>
-          </div>`).join('')}</div>
-      </div>`;
-    el.querySelectorAll('[data-patient]').forEach(row => row.addEventListener('click', () => navigate('patients/' + row.dataset.patient)));
-  } catch { el.innerHTML = ''; }
 }
 
 async function loadCallerAvailability() {
@@ -309,10 +145,10 @@ async function loadCallerAvailability() {
   try { const { data } = await sb.rpc('get_worklist_summary', { p_caller_id: me.id }); if (data) summary = data; } catch {}
   el.innerHTML = `
     <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:16px 20px">
-      <div id="avail-open" style="display:flex;align-items:center;gap:12px;cursor:pointer" title="Open your worklist">
+      <div id="avail-open" style="display:flex;align-items:center;gap:12px;cursor:pointer;min-width:0" title="Open your worklist">
         <span class="stat-ico ${available ? 'ok' : 'warn'}">${icon(available ? 'checkCircle' : 'clock')}</span>
-        <div><div class="info-value">${available ? "You're on for calls today" : "You're marked off today"}</div>
-          <div class="due-meta">${summary.pending} to reach · ${summary.follow_ups} follow-ups · ${summary.new_leads} new · ${summary.done_today} done ${icon('arrowRight')}</div></div>
+        <div style="min-width:0"><div class="info-value">${available ? "You're on for calls today" : "You're marked off today"}</div>
+          <div class="due-meta wraps">${summary.pending} to reach · ${summary.follow_ups} follow-ups · ${summary.new_leads} new · ${summary.done_today} done ${icon('arrowRight')}</div></div>
       </div>
       <button class="btn ${available ? 'btn-secondary' : 'btn-primary'} btn-sm" id="dash-avail">${available ? 'Mark me off today' : "I'm calling today"}</button>
     </div>`;
@@ -323,101 +159,6 @@ async function loadCallerAvailability() {
       loadCallerAvailability();
     } catch (e) { showToast(e.message, 'error'); }
   });
-}
-
-async function buildAssignments() {
-  const sb = getSupabase();
-  const btns = [document.getElementById('distribute-btn'), document.getElementById('qa-build')].filter(Boolean);
-  btns.forEach(b => { b.dataset.html = b.innerHTML; b.style.pointerEvents = 'none'; });
-  const main = document.getElementById('distribute-btn');
-  if (main) { main.disabled = true; main.innerHTML = '<span class="spinner" style="width:18px;height:18px;border-width:2px"></span>Building…'; }
-  try {
-    await sb.rpc('distribute_new_patients'); // give every unowned, callable lead an owner first
-    const { data, error } = await sb.rpc('build_daily_assignments');
-    if (error) throw error;
-    if (data?.error) { showToast('Could not build: ' + data.error, 'warning'); }
-    else showToast(`Today's list ready: ${data.follow_ups} follow-ups + ${data.new_leads} new across ${data.available_callers} caregiver mentors${data.covered ? ` (${data.covered} covered)` : ''}`, 'success');
-    await Promise.all([loadStats(true), loadDueToday(), loadIntakeSummary()]);
-  } catch (err) { showToast('Could not build assignments: ' + err.message, 'error'); }
-  finally { if (main) { main.disabled = false; main.innerHTML = `${icon('users')}Build today's assignments`; } btns.forEach(b => { b.style.pointerEvents = ''; }); }
-}
-
-// Thousands of minutes is not a number anyone can feel. Past two hours it
-// reads as hours; the exact minutes stay available in the Data room export.
-function talkTime(mins) {
-  const m = Math.round(Number(mins) || 0);
-  if (m < 120) return `${m} min`;
-  const h = Math.round(m / 60);
-  return h < 1000 ? `${h} hrs` : `${(h / 1000).toFixed(1)}k hrs`;
-}
-
-async function loadInsights() {
-  const sb = getSupabase();
-  const el = document.getElementById('insights');
-  if (!el) return;
-  try {
-    const [fin, reach, pipe, reqs] = await Promise.all([
-      sb.rpc('get_insight_financial'), sb.rpc('get_insight_reach'), sb.rpc('get_insight_pipeline'),
-      // Asks come from get_requirements_by_cancer, which counts one ask per
-      // call per category across BOTH the ticked list and the typed note. The
-      // old get_insight_requirements added a keyword sweep of caller_notes on
-      // top of the ticked list, so every ticked call was counted twice and the
-      // headline read roughly double. See sql/62.
-      sb.rpc('get_requirements_by_cancer', { p_gi_subtype: 'all', p_metric: 'mentions' }),
-    ]);
-    const f = fin.data || []; const r = reach.data || {}; const p = pipe.data || {};
-    const rq = reqs.data?.rows || [];
-    const totalP = f.reduce((a, x) => a + Number(x.n), 0) || 1;
-    const uninsured = (f.find(x => x.status === 'uninsured')?.n) || 0;
-    const uninsuredPct = Math.round((uninsured / totalP) * 100);
-    const connectPct = r.total ? Math.round((r.connected / r.total) * 100) : 0;
-    const topReq = rq[0]?.label || 'N/A';
-    const cards = [
-      { ico: 'shieldCheck', cls: 'warn', big: `${uninsuredPct}%`, label: 'Uninsured: need financial aid', sub: `${uninsured} of ${totalP} people` },
-      { ico: 'phoneCall', cls: 'ok', big: `${connectPct}%`, label: 'Calls connected', sub: `${r.connected || 0} of ${r.total || 0} · ${r.avg_duration || 0} min avg` },
-      // Talk time. The connect rate says how many families picked up; this says
-      // whether the team actually sat with them once they did.
-      { ico: 'clock', cls: 'violet', big: talkTime(r.talk_mins), label: 'Time with families',
-        sub: `${r.avg_connected_duration || 0} min per connected call` },
-      { ico: 'inbox', cls: '', big: `${p.never_called || 0}`, label: 'New leads waiting', sub: `${p.unassigned || 0} unassigned · ${p.engaged || 0} engaged` },
-      { ico: 'heart', cls: 'violet', big: topReq, label: 'Most asked for',
-        sub: rq[0] ? `${rq[0].n} asks from ${rq[0].patients} families` : 'Start capturing on calls' },
-    ];
-    el.innerHTML = `<div class="stats">${cards.map(c => `
-      <div class="stat"><span class="stat-ico ${c.cls}">${icon(c.ico)}</span>
-        <div style="min-width:0"><div class="stat-num" style="font-size:${String(c.big).length > 6 ? '16px' : '24px'}">${c.big}</div><div class="stat-lbl">${c.label}</div>
-        <div class="due-meta" style="margin-top:2px">${c.sub}</div></div></div>`).join('')}</div>
-      <div id="care-insights" style="margin-top:var(--s4)"></div>`;
-    loadCareInsights();
-  } catch (err) { console.error('Insights error:', err); el.innerHTML = ''; }
-}
-
-// Second insight row: lifecycle mix, support delivered, measurable impact.
-async function loadCareInsights() {
-  const sb = getSupabase();
-  const el = document.getElementById('care-insights');
-  if (!el) return;
-  try {
-    const [mixR, covR, deltaR] = await Promise.all([
-      sb.rpc('get_status_mix'), sb.rpc('get_support_coverage'), sb.rpc('get_impact_deltas'),
-    ]);
-    const mix = mixR.data || [], cov = covR.data || [], deltas = deltaR.data || [];
-    const n = (k) => Number(mix.find(m => m.status === k)?.n || 0);
-    const totalSupports = cov.reduce((a, c) => a + Number(c.n), 0);
-    const aidTotal = cov.reduce((a, c) => a + Number(c.total_amount || 0), 0);
-    const sessions = cov.reduce((a, c) => a + Number(c.total_sessions || 0), 0);
-    const withFollowup = deltas.reduce((a, d) => a + Number(d.with_followup || 0), 0);
-    const cards = [
-      { ico: 'users', cls: '', big: `${n('active')}`, label: 'Actively supported', sub: `${n('new_lead')} new leads · ${n('inactive')} inactive · ${n('deceased')} remembered` },
-      { ico: 'handHeart', cls: 'ok', big: `${totalSupports}`, label: 'Support levers delivered', sub: totalSupports ? `${cov.length} kinds of help` : 'Flip levers on patient pages' },
-      { ico: 'shieldCheck', cls: 'warn', big: aidTotal ? `₹${Math.round(aidTotal).toLocaleString('en-IN')}` : `${sessions}`, label: aidTotal ? 'Financial aid availed' : 'Care sessions held', sub: aidTotal ? `${sessions} care sessions on top` : 'nutrition + well-being' },
-      { ico: 'activity', cls: 'violet', big: `${withFollowup}`, label: 'Wellbeing re-assessed', sub: withFollowup ? 'baseline → follow-up tracked' : 'Add baseline scores to begin' },
-    ];
-    el.innerHTML = `<div class="stats">${cards.map(c => `
-      <div class="stat"><span class="stat-ico ${c.cls}">${icon(c.ico)}</span>
-        <div style="min-width:0"><div class="stat-num" style="font-size:${String(c.big).length > 8 ? '16px' : '24px'}">${c.big}</div><div class="stat-lbl">${c.label}</div>
-        <div class="due-meta" style="margin-top:2px">${c.sub}</div></div></div>`).join('')}</div>`;
-  } catch (err) { console.error('Care insights error:', err); el.innerHTML = ''; }
 }
 
 async function renderSpecialistStats(id) {
@@ -712,17 +453,4 @@ async function loadMyWorklistCard() {
     console.error('Worklist card error:', err);
     el.innerHTML = `<div class="empty" style="padding:var(--s6)"><p>Could not load the list.</p></div>`;
   }
-}
-
-async function loadIntakeSummary() {
-  const sb = getSupabase();
-  try {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const [{ count: newToday }, { count: unassigned }] = await Promise.all([
-      sb.from('patients').select('*', { count: 'exact', head: true }).gte('created_at', since),
-      sb.from('patients').select('*', { count: 'exact', head: true }).is('assigned_to', null).eq('do_not_call', false).not('patient_status', 'in', '(deceased,inactive)'),
-    ]);
-    const el = document.getElementById('intake-nums'); if (!el) return;
-    el.innerHTML = `<div class="intake-num"><div class="n">${newToday || 0}</div><div class="l">Added today</div></div><div class="intake-num warn${(unassigned || 0) === 0 ? ' zero' : ''}"><div class="n">${unassigned || 0}</div><div class="l">Not yet assigned</div></div>`;
-  } catch (err) { console.error('Intake summary error:', err); }
 }

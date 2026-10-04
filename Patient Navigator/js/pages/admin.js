@@ -3,6 +3,7 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
+import { avatarColor } from '../utils/avatar.js';
 import { isAdmin, isManagerOrAdmin, startImpersonation } from '../auth.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, confirmModal } from '../components/modal.js';
@@ -10,8 +11,8 @@ import { formatDateTime, getRoleBadge } from '../utils/formatters.js';
 import { sanitize, validateEmail } from '../utils/validators.js';
 import { icon } from '../components/icons.js';
 
-const AV_COLORS = ['#006469', '#7A4C00', '#5B4892', '#295B86', '#106841', '#953028'];
-function avColor(n) { let h = 0; for (let i = 0; i < (n || '').length; i++) h = n.charCodeAt(i) + ((h << 5) - h); return AV_COLORS[Math.abs(h) % AV_COLORS.length]; }
+// The one palette (js/utils/avatar.js); same hash, so nobody changes colour.
+const avColor = (n) => avatarColor(n);
 function inits(n) { return n ? n.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) : '?'; }
 
 export async function renderAdmin(container, params) {

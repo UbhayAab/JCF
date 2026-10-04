@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="description" content="Jarurat Care Patient Navigator: Secure, DPDPA-compliant patient data management system for cancer care navigation." />
-  <meta name="theme-color" content="#F6F2EA" />
+  <meta name="theme-color" content="#FFDFCA" />
   <meta name="robots" content="noindex, nofollow" />
 
   <!-- PWA: installable, launches standalone (looks like a native app) -->
@@ -16,18 +16,27 @@
   <meta name="application-name" content="Jarurat Care" />
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 
-  <!-- Apply the saved theme (light · dark · colorful) BEFORE first paint,
-       so there's no flash of the wrong palette on load. -->
+  <!-- Apply the saved theme (light · dark · colorful · classic) BEFORE first
+       paint, so there's no flash of the wrong palette on load. Classic (the
+       previous look) also needs its own fonts; js/theme.js adds the same link,
+       same id, when someone switches to it later. -->
   <script>
     (function(){
       try {
+        var ok = { light:'#FFDFCA', dark:'#1A110C', colorful:'#FFCDB0', classic:'#F6F2EA' };
+        var has = function (k) { return Object.prototype.hasOwnProperty.call(ok, k); };
         var q = new URLSearchParams(location.search).get('theme');
-        var t = (q === 'light' || q === 'dark' || q === 'colorful') ? q : localStorage.getItem('jcf_theme');
-        if (t !== 'light' && t !== 'dark' && t !== 'colorful') t = 'light';
+        var t = has(q) ? q : localStorage.getItem('jcf_theme');
+        if (!has(t)) t = 'light';
         document.documentElement.setAttribute('data-theme', t);
-        var m = { light:'#F6F2EA', dark:'#0A1516', colorful:'#EEEAFF' }[t];
         var meta = document.querySelector('meta[name="theme-color"]');
-        if (meta && m) meta.setAttribute('content', m);
+        if (meta) meta.setAttribute('content', ok[t]);
+        if (t === 'classic') {
+          var l = document.createElement('link');
+          l.id = 'classic-fonts'; l.rel = 'stylesheet';
+          l.href = 'https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&family=Spline+Sans+Mono:ital,wght@0,400..700;1,400..700&display=swap';
+          document.head.appendChild(l);
+        }
       } catch (e) {}
     })();
   </script>
@@ -54,8 +63,8 @@
 
   <!-- Critical inline CSS for the boot screen, which guarantees something paints
        even if every external resource (CDN/font/CSS) is blocked or slow.
-       The boot screen is a self-contained night panel (system fonts only,
-       styled hard: tracked uppercase wordmark + self-drawing pulse line). -->
+       The boot screen is a self-contained cocoa panel (system fonts until
+       Manrope lands: tracked uppercase wordmark + self-drawing pulse line). -->
   <style>
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     /* Paint the right ground BEFORE the stylesheets land, then get out of the way.
@@ -66,43 +75,54 @@
        reset background-image, which deleted dark's ambient wash entirely.
        :where() drops these to zero specificity so the real stylesheet always
        wins once loaded, and background-color cannot touch the image. */
-    :where(html),:where(body){background-color:#F6F2EA;color:#201B12;font-family:'Archivo',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased}
-    :where(html[data-theme="dark"]),:where(html[data-theme="dark"] body){background-color:#0A1516;color:#E2F1F1}
-    :where(html[data-theme="colorful"]),:where(html[data-theme="colorful"] body){background-color:#EEEAFF;color:#1D192B}
+    :where(html),:where(body){background-color:#FFEFEA;color:#27130A;font-family:'Manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased}
+    :where(html[data-theme="dark"]),:where(html[data-theme="dark"] body){background-color:#1A110C;color:#F8ECE6}
+    :where(html[data-theme="colorful"]),:where(html[data-theme="colorful"] body){background-color:#FFD8E2;color:#2A0F16}
+    :where(html[data-theme="classic"]),:where(html[data-theme="classic"] body){background-color:#F6F2EA;color:#201B12;font-family:'Archivo',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
     .boot-screen{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;padding:24px;text-align:center;
-      background:radial-gradient(90% 60% at 80% -10%,rgba(0,170,177,.26),transparent 55%),radial-gradient(70% 50% at -10% 110%,rgba(199,134,47,.10),transparent 60%),linear-gradient(160deg,#1F3031 0%,#111F1F 46%,#0A1516 100%)}
-    .boot-logo{width:52px;height:52px;border-radius:15px;display:grid;place-items:center;color:#fff;background:linear-gradient(180deg,#00979E,#006469 58%,#005255);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 8px 24px rgba(0,100,105,.5);animation:bootfloat 5s ease-in-out infinite}
+      background:radial-gradient(90% 60% at 80% -10%,rgba(255,181,154,.20),transparent 55%),radial-gradient(70% 50% at -10% 110%,rgba(254,185,212,.12),transparent 60%),linear-gradient(160deg,#4A3022 0%,#3C251A 46%,#27130A 100%)}
+    .boot-logo{width:52px;height:52px;border-radius:15px;display:grid;place-items:center;color:#FFF3ED;background:rgba(255,243,237,.10);box-shadow:inset 0 1px 0 rgba(255,255,255,.12);animation:bootfloat 5s ease-in-out infinite}
     @keyframes bootfloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
-    .boot-word{font-weight:800;font-size:clamp(20px,5.4vw,28px);line-height:1;letter-spacing:.26em;padding-left:.26em;text-transform:uppercase;color:#EAF5F5}
-    .boot-tag{font-size:10px;font-weight:600;letter-spacing:.4em;padding-left:.4em;text-transform:uppercase;color:#9CB6B6;margin-top:10px}
-    .boot-ecg{width:min(280px,70vw);height:36px;color:#00AAB1;filter:drop-shadow(0 0 7px rgba(0,170,177,.6))}
+    .boot-word{font-weight:800;font-size:clamp(20px,5.4vw,28px);line-height:1;letter-spacing:.2em;padding-left:.2em;text-transform:uppercase;color:#FFF3ED}
+    .boot-tag{font-size:10px;font-weight:700;letter-spacing:.32em;padding-left:.32em;text-transform:uppercase;color:#C7AEA2;margin-top:10px}
+    .boot-ecg{width:min(280px,70vw);height:36px;color:#FFB59A;filter:drop-shadow(0 0 7px rgba(255,181,154,.5))}
     .boot-ecg path{stroke-dasharray:430;stroke-dashoffset:430;animation:bootecg 2.6s cubic-bezier(.22,.68,.16,1) infinite}
     @keyframes bootecg{0%{stroke-dashoffset:430;opacity:0}10%{opacity:1}60%{stroke-dashoffset:0;opacity:1}82%{opacity:0}100%{stroke-dashoffset:0;opacity:0}}
-    .boot-msg{color:#BFD7D8;font-size:13.5px;line-height:1.5;max-width:340px}
-    .boot-link{color:#94C0E8;font-size:13px;text-decoration:underline;cursor:pointer;background:none;border:none;font-family:inherit;padding:8px 16px}
-    .boot-link:hover{color:#CAE0F5}
-    .boot-error{color:#FC9D91}
+    .boot-msg{color:#E5D0C6;font-size:13.5px;line-height:1.5;max-width:340px}
+    .boot-link{color:#FFCFBC;font-size:13px;text-decoration:underline;cursor:pointer;background:none;border:none;font-family:inherit;padding:8px 16px}
+    .boot-link:hover{color:#FFE4D8}
+    .boot-error{color:#FFB4AB}
+    /* Classic (the previous look) keeps its slate night panel while booting */
+    html[data-theme="classic"] .boot-screen{background:radial-gradient(90% 60% at 80% -10%,rgba(0,170,177,.26),transparent 55%),radial-gradient(70% 50% at -10% 110%,rgba(199,134,47,.10),transparent 60%),linear-gradient(160deg,#1F3031 0%,#111F1F 46%,#0A1516 100%)}
+    html[data-theme="classic"] .boot-logo{color:#fff;background:linear-gradient(180deg,#00979E,#006469 58%,#005255);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 8px 24px rgba(0,100,105,.5)}
+    html[data-theme="classic"] .boot-word{color:#EAF5F5}
+    html[data-theme="classic"] .boot-tag{color:#9CB6B6}
+    html[data-theme="classic"] .boot-ecg{color:#00AAB1;filter:drop-shadow(0 0 7px rgba(0,170,177,.6))}
+    html[data-theme="classic"] .boot-msg{color:#BFD7D8}
+    html[data-theme="classic"] .boot-link{color:#94C0E8}
+    html[data-theme="classic"] .boot-error{color:#FC9D91}
   </style>
 
   <!-- Non-blocking font load: preload-as-style trick + noscript fallback -->
-  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&family=Spline+Sans+Mono:ital,wght@0,400..700;1,400..700&display=swap" onload="this.onload=null;this.rel='stylesheet'" />
-  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,100..900;1,62..125,100..900&family=Spline+Sans+Mono:ital,wght@0,400..700;1,400..700&display=swap" /></noscript>
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400..800&display=swap" onload="this.onload=null;this.rel='stylesheet'" />
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400..800&display=swap" /></noscript>
 
   <!-- App stylesheets: the query string busts the cache when CSS changes -->
-  <link rel="stylesheet" href="css/variables.css?v=20260929b" />
-  <link rel="stylesheet" href="css/base.css?v=20260929b" />
-  <link rel="stylesheet" href="css/components.css?v=20260929b" />
-  <link rel="stylesheet" href="css/layout.css?v=20260929b" />
+  <link rel="stylesheet" href="css/variables.css?v=20261004a" />
+  <link rel="stylesheet" href="css/base.css?v=20261004a" />
+  <link rel="stylesheet" href="css/components.css?v=20261004a" />
+  <link rel="stylesheet" href="css/layout.css?v=20261004a" />
+  <link rel="stylesheet" href="css/dashboard.css?v=20261004a" />
 
   <!-- Favicon (inline SVG data URI) -->
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23006469' stroke-width='2'><path d='M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z'/></svg>" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2327130A' stroke-width='2'><path d='M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z'/></svg>" />
 </head>
 <body>
   <!-- Boot screen: paints immediately, no external dependencies. -->
   <div id="app">
     <div class="boot-screen" id="boot-screen">
       <div class="boot-logo">
-        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/></svg>
       </div>
       <div>
         <div class="boot-word">Jarurat Care</div>
@@ -123,7 +143,7 @@
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1"></script>
 
   <!-- App entry point: the query string busts the browser cache when JS changes -->
-  <script type="module" src="js/app.js?v=20260929b"></script>
+  <script type="module" src="js/app.js?v=20261004a"></script>
 
   <!-- Boot watchdog: surfaces a clear error if external scripts fail to load
        (network blocked, CDN down, captive portal, etc.) instead of leaving

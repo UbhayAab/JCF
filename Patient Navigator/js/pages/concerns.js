@@ -14,8 +14,15 @@ import { icon } from '../components/icons.js';
 import { formatRelativeTime } from '../utils/formatters.js';
 import { concernReason } from '../utils/catalog.js';
 
+// Local on purpose, not imported: catalog.js only gained isCareGap in this
+// release, and a device still holding the old catalog.js for a few minutes
+// after a deploy would fail to start the whole app on a missing import.
+const isCareGap = (k) => String(k || '').startsWith('care_gap_');
+
 const SEV_RANK = { urgent: 0, high: 1, watch: 2 };
-const SEV_COLOR = { urgent: 'var(--danger)', high: 'var(--clay)', watch: 'var(--info)' };
+// Group titles sit straight on the page ground; the light ground's blush end
+// took the plain danger red to 4.0:1, so urgent is nudged toward the ink.
+const SEV_COLOR = { urgent: 'color-mix(in srgb, var(--danger) 84%, var(--ink))', high: 'var(--clay)', watch: 'var(--info)' };
 
 let rows = [];
 let containerEl = null;
@@ -242,7 +249,7 @@ function paint() {
                 <span class="badge badge-neutral">${concernReason(r.reason).label}</span>
                 <span class="hist-meta">resolved by ${r.resolver?.full_name || 'N/A'} · ${formatRelativeTime(r.resolved_at)}</span>
               </div>
-              ${r.resolution_note ? `<div style="font:var(--t-xs);color:var(--ink-2);margin-top:4px">${r.resolution_note}</div>` : ''}
+              ${r.resolution_note ? `<div style="font:var(--t-xs);color:var(--ink-2);margin-top:4px">${sanitizeText(r.resolution_note)}</div>` : ''}
             </div>`).join('')}
         </div>
       </details>` : ''}`;
@@ -519,12 +526,16 @@ function concernCard(r, compact = false) {
             ${r.reassign_status === 'declined' ? `<span class="badge badge-neutral">Reassignment declined</span>` : ''}
             ${acked ? `<span class="badge badge-primary">Being handled · ${r.acknowledger?.full_name || ''}</span>` : ''}
             ${r.resolve_requested ? `<span class="badge badge-gold" title="Someone covering this patient says the need is met. A supervisor reviews the call notes before closing.">Resolve requested${r.requester?.full_name ? ' · ' + sanitizeText(r.requester.full_name) : ''}</span>` : ''}
-            ${r.source === 'auto' ? `<span class="badge badge-gold" title="Raised automatically from a score threshold">Auto-flag</span>` : ''}
+            ${r.source === 'auto' ? (isCareGap(r.reason)
+              ? `<span class="badge badge-warn" title="Raised automatically because the team has not acted on this family in time. It closes by itself once someone does.">Care gap</span>`
+              : `<span class="badge badge-gold" title="Raised automatically from a score threshold">Auto-flag</span>`) : ''}
+            ${r.care_gap_since ? `<span class="badge badge-warn" title="${sanitizeText(r.care_gap_note || 'No call logged since this was raised')}">Nobody has called</span>` : ''}
             <span class="hist-meta">${r.patient?.patient_code || ''}${place ? ' · ' + place : ''}</span>
             ${phone ? `<a class="cg-call" href="tel:${phone.replace(/[^+\d]/g, '')}" style="padding:3px 9px;font-size:13px"
               onclick="event.stopPropagation()">${icon('phone')}<span class="tnum">${sanitizeText(phone)}</span></a>` : ''}
           </div>
-          ${r.note ? `<p style="font:var(--t-sm);color:var(--ink-2);margin:7px 0 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${r.note}</p>` : ''}
+          ${r.note ? `<p style="font:var(--t-sm);color:var(--ink-2);margin:7px 0 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${sanitizeText(r.note)}</p>` : ''}
+          ${r.care_gap_note ? `<p style="font:var(--t-sm);color:var(--warn);margin:6px 0 0">${sanitizeText(r.care_gap_note)}</p>` : ''}
           ${reviewLine(r)}
           <div class="hist-meta" style="margin-top:6px">
             ${r.source === 'auto' ? 'Flagged automatically' : `Raised by ${r.raiser?.full_name || 'N/A'}`} · ${formatRelativeTime(r.created_at)}

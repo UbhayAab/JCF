@@ -20,17 +20,17 @@ import { giLabel, TRAJECTORIES, PATIENT_STATUSES } from '../utils/catalog.js';
 // what cancer, who they are, what the household can absorb, where they are,
 // and what we have done for them so far.
 export const FILTER_GROUPS = [
-  { id: 'clinical', label: 'Clinical', color: '#0C6E74',
+  { id: 'clinical', label: 'Clinical', color: '#4A70D6',
     facets: ['cancer', 'stage', 'trajectory', 'ecog'] },
   { id: 'person', label: 'The person', color: '#C98738',
     facets: ['age_band', 'gender', 'lang', 'literacy'] },
-  { id: 'household', label: 'The household', color: '#6A57A6',
+  { id: 'household', label: 'The household', color: '#6E52BE',
     facets: ['vuln', 'economic', 'insurance', 'cg_rel', 'cg_gender'] },
-  { id: 'place', label: 'Place and care', color: '#356690',
+  { id: 'place', label: 'Place and care', color: '#1A43A8',
     facets: ['state', 'city', 'hospital'] },
-  { id: 'ourwork', label: 'Our work with them', color: '#2E7D55',
+  { id: 'ourwork', label: 'Our work with them', color: '#1E6A4F',
     facets: ['mentor', 'contact', 'support', 'concern', 'assessed', 'nutrition', 'consent', 'status', 'on_file'] },
-  { id: 'time', label: 'When they joined', color: '#B0433A',
+  { id: 'time', label: 'When they joined', color: '#BA1A1A',
     facets: ['joined_month'] },
 ];
 
@@ -291,7 +291,7 @@ function renderBar() {
         ? `<span class="af-dot"></span><span title="Archived records are kept for audit but left out of every chart, so chart totals stop at this number.">${fmtIN(cohort.live_rows)} live · ${fmtIN(matched - cohort.live_rows)} archived</span>` : ''}
       ${cohort?.calls != null ? `<span class="af-dot"></span>${fmtIN(cohort.calls)} calls · ${fmtIN(cohort.connected)} connected` : ''}
       ${cohort?.levers != null ? `<span class="af-dot"></span>${fmtIN(cohort.levers)} support levers` : ''}
-      ${cohort?.open_concerns ? `<span class="af-dot"></span><span style="color:#B0433A">${fmtIN(cohort.open_concerns)} open concerns</span>` : ''}
+      ${cohort?.open_concerns ? `<span class="af-dot"></span><span style="color:var(--danger)">${fmtIN(cohort.open_concerns)} open concerns</span>` : ''}
       ${cohort?.no_support ? `<span class="af-dot"></span>${fmtIN(cohort.no_support)} with no support yet` : ''}
     </div>
     ${savedViewsHTML()}`;
@@ -385,7 +385,7 @@ function renderPanel() {
       <div class="af-grid">${g.facets.map(f => facetHTML(f, g.color)).join('')}</div>
     </section>`).join('') + `
     <section class="af-group">
-      <div class="af-group-h"><span class="af-group-dot" style="background:#7B8783"></span>Exact ranges</div>
+      <div class="af-group-h"><span class="af-group-dot" style="background:#6E625F"></span>Exact ranges</div>
       <div class="af-grid">
         <div class="af-facet">
           <div class="af-facet-h"><span class="af-facet-t">Age between</span></div>

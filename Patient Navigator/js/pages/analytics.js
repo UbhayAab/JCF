@@ -82,7 +82,7 @@ function markClickable(canvasId, facet) {
   const header = document.getElementById(canvasId)?.closest('.chart-card')?.querySelector('.chart-header > div:last-child');
   if (!header || header.querySelector('.js-clickable')) return;
   header.insertAdjacentHTML('afterbegin',
-    `<span class="badge js-clickable" style="opacity:.7" title="Click any bar or slice to filter every chart on this page by that ${FACET_WORD[facet] || 'value'}">click to filter</span>`);
+    `<span class="badge js-clickable" title="Click any bar or slice to filter every chart on this page by that ${FACET_WORD[facet] || 'value'}">click to filter</span>`);
 }
 const FACET_WORD = {
   cancer: 'cancer type', stage: 'stage', vuln: 'vulnerability band', trajectory: 'disease path',
@@ -134,7 +134,7 @@ function setPill(state) {
   if (state === 'refreshing') {
     pill.innerHTML = '<span style="width:7px;height:7px;border-radius:50%;background:#B0780E;box-shadow:0 0 0 3px #B0780E22"></span>UPDATING…';
   } else {
-    pill.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;background:#2C7A52;box-shadow:0 0 0 3px #2C7A5222"></span>LIVE · updated ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
+    pill.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;background:#1E6A4F;box-shadow:0 0 0 3px #1E6A4F22"></span>LIVE · updated ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
   }
 }
 
@@ -193,12 +193,12 @@ function chartCard(canvasId, title, { scope = 'range', badge = '', full = false,
   const filtered = isFiltered();
   const cohortWord = filtered
     ? `<span class="badge badge-primary" title="${escAttr(filterSummary())}">filtered cohort${cohortStats()?.matched != null ? ` · n=${fmtIN(cohortStats().matched)}` : ''}</span>`
-    : `<span class="badge" style="opacity:.75" title="Every active patient we currently hold. This chart is a snapshot of the whole registry and is NOT affected by the time-range control.">whole cohort · not dated</span>`;
+    : `<span class="badge" title="Every active patient we currently hold. This chart is a snapshot of the whole registry and is NOT affected by the time-range control.">whole cohort · not dated</span>`;
   const scopeBadge = scope === 'range'
     ? `<span class="badge badge-primary js-range-badge">last ${rangeLabel()}${filtered ? ' · filtered' : ''}</span>`
     : scope === 'snapshot'
       ? cohortWord
-      : `<span class="badge" style="opacity:.75">${scope}${filtered ? ' · filtered' : ''}</span>`;
+      : `<span class="badge">${scope}${filtered ? ' · filtered' : ''}</span>`;
   const wrapSize = full ? '' : (scope === 'snapshot' ? ' short' : '');
   // The title itself is the definition target (hover/tap/keyboard → what the
   // metric is, how to read it, why it matters). Auto-keyed from the canvas id.
@@ -285,7 +285,8 @@ function deltaChip(cur, prev, goodUp = true) {
   const ch = Math.round(((cur - prev) / prev) * 100);
   if (!isFinite(ch)) return '';
   const up = ch > 0;
-  const col = ch === 0 ? 'var(--ink-3)' : (up === goodUp) ? '#2C7A52' : '#953028';
+  // theme tokens, not light-theme hex: on the dark card these were 2.6:1
+  const col = ch === 0 ? 'var(--ink-3)' : (up === goodUp) ? 'var(--ok)' : 'var(--danger)';
   const arrow = ch === 0 ? '·' : up ? '▲' : '▼';
   return `<span title="vs previous ${rangeLabel()}" style="font-size:10.5px;font-weight:600;color:${col};font-family:var(--font-mono);white-space:nowrap">${arrow} ${Math.abs(ch)}%</span>`;
 }
@@ -308,7 +309,7 @@ export async function renderAnalytics(container) {
         <div class="flex gap-2 items-center" style="flex-wrap:wrap">
           <a href="#report" class="btn btn-secondary btn-sm" title="Open the monthly impact report and download it as a PDF"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>Monthly report</a>
           <span id="live-pill" style="display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:11px;color:var(--ink-3);padding:5px 10px;border:1px solid var(--line-2);border-radius:99px">
-            <span style="width:7px;height:7px;border-radius:50%;background:#2C7A52;box-shadow:0 0 0 3px #2C7A5222"></span>
+            <span style="width:7px;height:7px;border-radius:50%;background:#1E6A4F;box-shadow:0 0 0 3px #1E6A4F22"></span>
             LIVE · loading…
           </span>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
@@ -322,7 +323,7 @@ export async function renderAnalytics(container) {
 
       <!-- Jump nav: the upper-level view first, then dig in -->
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:var(--s4)">
-        ${[['reach', 'REACH', '#7A4C00'], ['action', 'ACTION', '#006469'], ['safetynet', 'SAFETY NET', '#953028'], ['nutrition', 'NUTRITION', '#106841'], ['impact', 'IMPACT', '#5B4892'], ['correlate', 'CORRELATE', '#7A4C00']]
+        ${[['reach', 'REACH', '#7A4A00'], ['action', 'ACTION', '#1A43A8'], ['safetynet', 'SAFETY NET', '#BA1A1A'], ['nutrition', 'NUTRITION', '#1E6A4F'], ['impact', 'IMPACT', '#5B3FA0'], ['correlate', 'CORRELATE', '#7A4A00']]
           .map(([id, label, color]) => `<button class="jump-btn" data-target="band-${id}" style="border:1px solid ${color}44;background:${color}0d;color:var(--ink-2);border-radius:99px;padding:4px 12px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;cursor:pointer">${label}</button>`).join('')}
       </div>
 
@@ -404,7 +405,7 @@ export async function renderAnalytics(container) {
 // The chart sections. Rebuilt on range change so cards/badges stay honest.
 function chartsScaffold() {
   return `
-    ${sectionBand('REACH', 'Who we reach', 'The people and clinical reality behind the numbers', '#7A4C00')}
+    ${sectionBand('REACH', 'Who we reach', 'The people and clinical reality behind the numbers', '#7A4A00')}
     <div class="chart-grid">
       ${chartCard('chart-intake', 'Registry growth: new patients per day', { full: true, height: 90 })}
       ${chartCard('chart-cancer-types', 'GI cancer subtypes', { scope: 'snapshot' })}
@@ -419,7 +420,7 @@ function chartsScaffold() {
       ${chartCard('chart-status-mix', 'Patient lifecycle', { scope: 'snapshot', delay: 320 })}
       <div class="chart-card animate-fade-in" style="animation-delay:330ms">
         <div class="chart-header">${metricTitle('navigation_outcomes', 'Navigation outcomes')}
-          <span class="badge" style="opacity:.75" title="Derived from each patient's CURRENT status: a whole-registry snapshot since the program began, NOT affected by the time-range control.">whole cohort · all-time</span>
+          <span class="badge" title="Derived from each patient's CURRENT status: a whole-registry snapshot since the program began, NOT affected by the time-range control.">whole cohort · all-time</span>
         </div>
         <div id="nav-outcomes" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;padding:6px 0"></div>
         ${storySlot('nav-outcomes')}
@@ -428,7 +429,7 @@ function chartsScaffold() {
       ${chartCard('chart-completeness', 'What we know vs. what’s still vague', { scope: 'snapshot', badge: '<span class="badge badge-warn">caregiver mentors get prompted for the gaps</span>', full: true, height: 100, delay: 360 })}
     </div>
 
-    ${sectionBand('ACTION', 'What we do', 'Every dial, every support lever, and how far the relationship travels', '#006469')}
+    ${sectionBand('ACTION', 'What we do', 'Every dial, every support lever, and how far the relationship travels', '#1A43A8')}
     <div class="chart-grid">
       ${chartCard('chart-calls-timeline', 'Calls over time', { full: true, height: 100, badge: '<span class="badge badge-primary badge-dot">Total</span><span class="badge badge-success badge-dot">Connected</span>' })}
       ${chartCard('chart-outcomes', 'What happened to every dial', { delay: 40 })}
@@ -447,7 +448,7 @@ function chartsScaffold() {
       ${chartCard('chart-caller-perf', 'Caregiver mentor performance', { full: true, height: 90, delay: 360 })}
     </div>
 
-    ${sectionBand('SAFETY NET', 'Concerns we caught', 'Red flags stop living in people’s memories. This is the escalation queue as data', '#953028')}
+    ${sectionBand('SAFETY NET', 'Concerns we caught', 'Red flags stop living in people’s memories. This is the escalation queue as data', '#BA1A1A')}
     <div class="chart-grid">
       ${chartCard('chart-concerns', 'Why patients get flagged', { full: true, height: 90 })}
       <div class="chart-card animate-fade-in" style="animation-delay:60ms">
@@ -457,14 +458,14 @@ function chartsScaffold() {
       </div>
     </div>
 
-    ${sectionBand('NUTRITION', 'The nutrition arm', 'From assignment to plans to malnutrition risk, and who on the team is carrying it', '#106841')}
+    ${sectionBand('NUTRITION', 'The nutrition arm', 'From assignment to plans to malnutrition risk, and who on the team is carrying it', '#1E6A4F')}
     <div class="chart-grid">
       ${chartCard('chart-nutrition-funnel', 'From touched to fed', { scope: 'snapshot', badge: '<span class="badge badge-ok">nutrition funnel</span>' })}
       ${chartCard('chart-nutrition-must', 'MUST malnutrition risk', { scope: 'snapshot', badge: '<span class="badge badge-warn">latest score per patient</span>', delay: 60 })}
       ${chartCard('chart-nutrition-team', 'Nutrition team performance', { badge: '<span class="badge badge-info">check-ins · patients · 1:1s held</span>', full: true, height: 90, delay: 120 })}
     </div>
 
-    ${sectionBand('IMPACT', 'The change we see', 'In oncology a STABLE score is a win. Quality of life holding up is the outcome', '#5B4892')}
+    ${sectionBand('IMPACT', 'The change we see', 'In oncology a STABLE score is a win. Quality of life holding up is the outcome', '#5B3FA0')}
     <div class="chart-grid">
       <div class="chart-card chart-full-width animate-fade-in">
         <div class="chart-header">
@@ -483,7 +484,7 @@ function chartsScaffold() {
       ${chartCard('chart-activation', 'Patient activation', { scope: 'snapshot', badge: '<span class="badge badge-info">“I know what to do if…”</span>', delay: 200 })}
     </div>
 
-    ${sectionBand('CORRELATE', 'What moves with what', 'Does the support, the trust, the time actually correlate with better lives', '#7A4C00')}
+    ${sectionBand('CORRELATE', 'What moves with what', 'Does the support, the trust, the time actually correlate with better lives', '#7A4A00')}
     <div class="chart-grid">
       ${chartCard('chart-dose-response', 'Support dose vs well-being', { scope: 'snapshot', badge: '<span class="badge badge-gold">levers received → trajectory</span>' })}
       ${chartCard('chart-warming', 'The warming curve', { scope: 'snapshot', badge: '<span class="badge badge-info">receptiveness by nth conversation</span>', delay: 60 })}
@@ -593,7 +594,7 @@ async function loadPulse() {
       const resolvedTxt = Number(c.concerns_resolved)
         ? `${fmtIN(c.concerns_resolved)} were resolved in this window`
         : `<strong>none resolved in this window</strong>`;
-      parts.push(`<span style="color:#B0433A">⚑ <strong>${fmtIN(d.open_concerns)} concerns are open</strong> (${fmtIN(d.urgent_open)} urgent); ${fmtIN(c.concerns_opened)} were raised and ${resolvedTxt}. The Safety Net section below is today's first stop.</span>`);
+      parts.push(`<span style="color:var(--danger)">⚑ <strong>${fmtIN(d.open_concerns)} concerns are open</strong> (${fmtIN(d.urgent_open)} urgent); ${fmtIN(c.concerns_opened)} were raised and ${resolvedTxt}. The Safety Net section below is today's first stop.</span>`);
     } else {
       parts.push(`The escalation queue is clear, no open concerns right now.`);
     }
@@ -648,12 +649,12 @@ async function loadHeadline() {
     const el = document.getElementById('impact-headline');
     if (!el) return;
     el.innerHTML =
-      card(fmtRs(d.aid_disbursed), metricTerm('hero_aid', 'Financial aid disbursed'), `${d.aid_families || 0} families`, '#006469', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>') +
-      card(d.patients_improved || 0, metricTerm('hero_improved', 'Patients improved'), 'on ≥1 wellbeing measure', '#2C7A52', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>') +
-      card(d.support_delivered || 0, metricTerm('hero_support', 'Support actions delivered'), `${d.wellbeing_sessions || 0} well-being sessions`, '#5B4892', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 1 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg>') +
+      card(fmtRs(d.aid_disbursed), metricTerm('hero_aid', 'Financial aid disbursed'), `${d.aid_families || 0} families`, '#1A43A8', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>') +
+      card(d.patients_improved || 0, metricTerm('hero_improved', 'Patients improved'), 'on ≥1 wellbeing measure', '#1E6A4F', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>') +
+      card(d.support_delivered || 0, metricTerm('hero_support', 'Support actions delivered'), `${d.wellbeing_sessions || 0} well-being sessions`, '#5B3FA0', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 1 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg>') +
       card(d.assessments || 0, 'Wellbeing check-ins logged',
         `${instrumentChip('phq4_patient', 'PHQ-4')} ${instrumentChip('qol_physical', 'QoL')} ${instrumentChip('must_malnutrition', 'MUST')} ${instrumentChip('zarit_burden', 'Zarit')} <span style="color:var(--ink-4)">(hover any to see the questions)</span>`,
-        '#5B4892', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>');
+        '#5B3FA0', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>');
   } catch (err) { console.error('Headline error:', err); }
 }
 
@@ -996,15 +997,15 @@ async function loadNavigationOutcomes() {
     const other = data.filter(d => !['active', 'inactive', 'deceased'].includes(d.status))
       .reduce((a, d) => a + Number(d.n), 0);
     const OUTCOMES = [
-      { label: 'Successfully completed', nn: 0, color: '#2C7A52', note: 'no status marks completion yet',
+      { label: 'Successfully completed', nn: 0, color: '#1E6A4F', note: 'no status marks completion yet',
         tip: 'The program is ongoing. No patient status marks a completed navigation episode yet, so this reads 0 by definition, not because nobody finished treatment.' },
-      { label: 'Ongoing navigation', nn: n('active'), color: '#006469', note: 'active in our care',
+      { label: 'Ongoing navigation', nn: n('active'), color: '#1A43A8', note: 'active in our care',
         tip: 'Patients with status "Active": currently being called and supported.' },
       { label: 'Lost to follow-up', nn: n('inactive'), color: '#B0780E', note: 'inactive · unreachable',
         tip: 'Patients with status "Inactive". We could not stay in touch with the family.' },
-      { label: 'Deceased', nn: n('deceased'), color: '#5B4892', note: 'families stay for bereavement care',
+      { label: 'Deceased', nn: n('deceased'), color: '#5B3FA0', note: 'families stay for bereavement care',
         tip: 'Patients with status "Deceased". Their families stay with us for bereavement support.' },
-      { label: 'Other', nn: other, color: '#7B8783', note: 'new leads awaiting first call',
+      { label: 'Other', nn: other, color: '#6E625F', note: 'new leads awaiting first call',
         tip: 'New leads: registered but navigation has not started yet (plus any status outside the four standard ones).' },
     ];
     el.innerHTML = OUTCOMES.map(o => `
@@ -1781,11 +1782,12 @@ async function loadConcerns() {
     const bk = document.getElementById('concerns-backlog');
     if (bk) {
       const backlog = data.backlog || [];
-      const sevMeta = { urgent: ['URGENT', '#953028'], high: ['HIGH', '#B0780E'], watch: ['WATCH', '#356690'] };
+      // theme tokens: the hex inks were ~3:1 in light (HIGH) and ~2:1 on the dark card
+      const sevMeta = { urgent: ['URGENT', 'var(--danger)'], high: ['HIGH', 'var(--warn)'], watch: ['WATCH', 'var(--info)'] };
       const openTotal = backlog.reduce((a, b) => a + Number(b.n), 0);
       bk.innerHTML = backlog.length ? backlog.map(b => {
         const [lbl, col] = sevMeta[b.severity] || [b.severity, 'var(--ink-2)'];
-        return `<div style="border:1px solid ${col}33;background:${col}0d;border-radius:var(--r-sm);padding:12px 14px;text-align:center">
+        return `<div style="border:1px solid color-mix(in srgb, ${col} 20%, transparent);background:color-mix(in srgb, ${col} 5%, transparent);border-radius:var(--r-sm);padding:12px 14px;text-align:center">
           <div style="font-family:var(--font-display);font-size:26px;font-weight:790;color:${col}">${fmtIN(b.n)}</div>
           <div style="font-family:var(--font-mono);font-size:9.5px;letter-spacing:.18em;color:${col}">${lbl}</div>
           <div style="font-size:11px;color:var(--ink-3);margin-top:3px">avg ${b.avg_age_days}d old · oldest ${b.oldest_days}d</div>
@@ -2275,7 +2277,7 @@ function drawCohort() {
   const cohorts = (data.cohorts || []).filter(c => (c.points || []).length);
   const months = data.months || [];
   const monLabel = (m) => { const [y, mo] = m.split('-'); return new Date(y, mo - 1).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }); };
-  const palette = [CHART_COLORS.primary, CHART_COLORS.success, CHART_COLORS.accent, '#5B4892', CHART_COLORS.warning, '#356690', CHART_COLORS.danger, '#9C5A3C'];
+  const palette = [CHART_COLORS.primary, CHART_COLORS.success, CHART_COLORS.accent, '#5B3FA0', CHART_COLORS.warning, '#1A43A8', CHART_COLORS.danger, '#9C5A3C'];
   const isAll = cohortSel === 'all';
   const datasets = cohorts.map((c, i) => {
     const on = isAll || c.cohort === cohortSel;

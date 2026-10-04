@@ -38,7 +38,7 @@ export async function renderSessions(container) {
       <button class="fchip ${kindFilter === 'all' ? 'on' : ''}" data-kind="all">All</button>
       ${SESSION_KINDS.map(k => `<button class="fchip ${kindFilter === k.key ? 'on' : ''}" data-kind="${k.key}">${k.label}</button>`).join('')}
     </div>
-    <div id="ss-def" class="due-meta" style="margin-bottom:var(--s5);max-width:720px"></div>
+    <div id="ss-def" class="due-meta wraps" style="margin-bottom:var(--s5);max-width:720px"></div>
     <div id="ss-body"><div class="card" style="padding:28px;text-align:center;color:var(--ink-3)">Loading sessions…</div></div>`;
 
   container.querySelector('#ss-refresh')?.addEventListener('click', load);
@@ -158,7 +158,7 @@ function statCard(label, n, tone, ico) {
   return `
     <div class="card" style="padding:14px 16px;display:flex;align-items:center;gap:12px">
       <span class="stat-ico ${tone}">${icon(ico)}</span>
-      <div><div style="font:var(--t-h3);line-height:1.1">${n}</div><div class="due-meta">${label}</div></div>
+      <div><div style="font:var(--t-h3);line-height:1.1">${n}</div><div class="due-meta wraps">${label}</div></div>
     </div>`;
 }
 

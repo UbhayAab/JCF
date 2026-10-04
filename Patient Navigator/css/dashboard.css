@@ -1,0 +1,235 @@
+/* ============================================================
+   Patient Navigator: the v11 manager and admin dashboard
+   (js/pages/dashboardAdmin.js), plus the header search and the
+   phone card lists the redesign brought in. Loaded after layout.css.
+   Sizes are the mockups' at 1440 wide: 20px cards, 40px icon wells,
+   32px headline numbers, a 2:1 working/side split.
+   ============================================================ */
+
+.dash-v11 { max-width: 1240px; gap: var(--s5); }
+
+/* ---- headline numbers ---- */
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(188px, 100%), 1fr)); gap: var(--s4); }
+.kpi { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 146px;
+  padding: 18px 20px; background: var(--surface); border: 1px solid var(--card-line); border-radius: var(--r-card);
+  box-shadow: var(--hi), var(--sh-1); transition: transform var(--base) var(--ease), box-shadow var(--base) var(--ease); }
+.kpi.clickable { cursor: pointer; }
+.kpi.clickable:hover { transform: translateY(-2px); box-shadow: var(--sh-2); }
+.kpi.clickable:focus-visible { outline: none; box-shadow: var(--ring); }
+.kpi-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.kpi-label { font: 600 12.5px/1.3 var(--font-ui); text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-2); min-width: 0; }
+.kpi-ico { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; flex: none; color: var(--ink); }
+.kpi-ico svg { width: 20px; height: 20px; }
+.well-stone { background: var(--surface-3); }
+.well-lav { background: var(--av-3); }
+.well-beige { background: var(--beige-soft); }
+.kpi-num { font: 700 32px/1 var(--font-ui); letter-spacing: -0.02em; color: var(--ink); margin-top: auto; padding-top: 12px; }
+.kpi-sub { font: 600 13.5px/1.35 var(--font-ui); color: var(--ink-2); margin-top: 6px; }
+/* the mockups' pink tile: the one number that is a need, not a count */
+.kpi.is-hot { background: var(--tile-pink); border-color: transparent; }
+.kpi.is-hot .kpi-label, .kpi.is-hot .kpi-num, .kpi.is-hot .kpi-sub, .kpi.is-hot .kpi-ico { color: var(--tile-pink-ink); }
+.kpi.is-hot .kpi-ico { background: transparent; }
+
+/* ---- the working column and the side column ---- */
+.dash-cols { display: grid; grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); gap: var(--s5); align-items: start; }
+.dash-main, .dash-side { display: flex; flex-direction: column; gap: var(--s5); min-width: 0; }
+.dash-main > *, .dash-side > * { min-width: 0; }
+.dash-side:empty, .dash-side > div:empty { display: none; }
+.dash-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s5); align-items: stretch; }
+.dash-pair > .card { display: flex; flex-direction: column; }
+.dash-pair > .card > .card-foot { margin-top: auto; }
+
+.card-head h3.is-urgent { color: var(--danger); }
+.card-head > div { min-width: 0; }
+.card-flag.is-danger { border-left: 3px solid var(--danger); }
+.card-flag.is-warn { border-left: 3px solid var(--warn); }
+.row-go { flex: none; width: 16px; height: 16px; color: var(--ink-4); }
+.row-go svg { width: 16px; height: 16px; }
+
+/* ---- Today's queue ---- */
+.dq-queue { padding: 20px 24px 22px; }
+.dq-queue-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.dq-counters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.dq-counters > div { text-align: center; padding: 4px 8px; min-width: 0; }
+.dq-counters > div + div { border-left: 1px solid var(--line-2); }
+.dq-counters .l { font: 600 13px/1.25 var(--font-ui); color: var(--ink-2); }
+.dq-counters .n { font: 700 32px/1.1 var(--font-ui); letter-spacing: -0.02em; color: var(--ink); margin-top: 6px; }
+
+/* ---- rows: due today, calls with no one, urgent flags ---- */
+.dq-row { cursor: pointer; align-items: center; }
+.dq-sub { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px; min-width: 0; }
+.dq-sub .due-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.dq-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
+.dq-status { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.dq-status .od { font: 700 12.5px/1.2 var(--font-ui); color: var(--danger); white-space: nowrap; }
+.dq-move { min-height: 30px; padding: 4px 12px; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
+.dq-temp { white-space: nowrap; }
+
+/* ---- recent conversations ---- */
+.convo-list { display: flex; flex-direction: column; }
+.convo { display: flex; gap: 12px; padding: 14px 22px; border-bottom: 1px solid var(--line); cursor: pointer; transition: background var(--fast) var(--ease); }
+.convo:last-child { border-bottom: none; }
+.convo:hover { background: var(--surface-2); }
+.convo-main { flex: 1; min-width: 0; }
+.convo-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.convo-top .due-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.convo-when { font: 500 12.5px/1.3 var(--font-ui); color: var(--ink-3); white-space: nowrap; flex: none; }
+.convo-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 7px 0 0; }
+.convo-note { font: 400 13.5px/1.45 var(--font-ui); color: var(--ink-2); margin: 7px 0 0; max-width: 62ch;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* ---- side column: Saturday circle, back from leave ---- */
+.sat-card { padding: 20px 22px 22px; }
+.sat-row { display: flex; align-items: center; gap: 12px; margin: 14px 0 10px; }
+.sat-ico { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--av-3); color: var(--ink); }
+.sat-ico svg { width: 20px; height: 20px; }
+.sat-kind { font: 700 15px/1.3 var(--font-ui); color: var(--ink); }
+.sat-note { font: 400 13.5px/1.45 var(--font-ui); color: var(--ink-2); margin: 0 0 16px; }
+
+.rs-list { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+.rs-item { background: var(--surface-2); border-radius: 14px; padding: 12px 14px; }
+.rs-top { display: flex; align-items: center; gap: 10px; }
+.rs-name { flex: 1; min-width: 0; font: 700 15px/1.3 var(--font-ui); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-more { margin-top: 10px; }
+.rs-more > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer;
+  padding: 8px 12px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px;
+  font: 600 12.5px/1.3 var(--font-ui); color: var(--ink-2); }
+.rs-more > summary::after { content: ""; width: 7px; height: 7px; flex: none; border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3); transform: rotate(45deg); transition: transform var(--fast) var(--ease); }
+.rs-more[open] > summary::after { transform: rotate(-135deg); }
+.rs-more[open] > summary { border-radius: 10px 10px 0 0; }
+.rs-pats { background: var(--surface); border: 1px solid var(--line-2); border-top: none; border-radius: 0 0 10px 10px; padding: 6px 10px; }
+.rs-pat { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 2px; border-top: 1px solid var(--line); cursor: pointer; }
+.rs-pat:first-child { border-top: none; }
+.rs-pat svg { width: 16px; height: 16px; color: var(--ink-4); flex: none; }
+
+/* ---- How we're doing: the pastel wall ---- */
+.dash-wall { background: var(--surface); border: 1px solid var(--card-line); border-radius: var(--r-2xl); padding: 18px; box-shadow: var(--hi), var(--sh-1); }
+.wall-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 2px 4px 14px; }
+.wall-head h2 { font: 700 21px/1.2 var(--font-ui); letter-spacing: -0.015em; }
+.link-u { display: inline-flex; align-items: center; gap: 6px; font: 600 14px/1.3 var(--font-ui); color: var(--primary);
+  text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1.5px; cursor: pointer; }
+.link-u svg { width: 16px; height: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.tile { display: flex; flex-direction: column; min-width: 0; min-height: 118px; padding: 14px 16px; border-radius: 16px; background: var(--surface-3); color: var(--ink); }
+.tile.wide { grid-column: span 2; }
+.tile-label { font: 700 13px/1.3 var(--font-ui); }
+.tile-big { font: 700 30px/1.1 var(--font-ui); letter-spacing: -0.02em; margin-top: 8px; overflow-wrap: anywhere; }
+.tile-big.is-text { font-size: 22px; line-height: 1.2; }
+.tile-sub { font: 500 12.5px/1.35 var(--font-ui); margin-top: auto; padding-top: 8px; }
+.tile-blue { background: var(--tile-blue); color: var(--tile-blue-ink); }
+.tile-lime { background: var(--tile-lime); color: var(--tile-lime-ink); }
+.tile-pink { background: var(--tile-pink); color: var(--tile-pink-ink); }
+.tile-amber { background: var(--tile-amber); color: var(--tile-amber-ink); }
+.tile-cyan { background: var(--tile-cyan); color: var(--tile-cyan-ink); }
+.tile-rose { background: var(--tile-rose); color: var(--tile-rose-ink); }
+.tile-peach { background: var(--tile-peach); color: var(--tile-peach-ink); }
+.tile-mint { background: var(--tile-mint); color: var(--tile-mint-ink); }
+.tile-lav { background: var(--tile-lav); color: var(--tile-lav-ink); }
+.tile-cream { background: var(--tile-cream); color: var(--tile-cream-ink); }
+
+/* ---- 30 days of calls ---- */
+.dq-chart { padding: 20px 24px 22px; }
+.dq-chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.dq-chart .legend { display: flex; gap: 14px; font: 600 12.5px/1 var(--font-ui); color: var(--ink-2); padding-top: 4px; }
+.dq-chart .legend span { display: inline-flex; align-items: center; gap: 6px; }
+.dq-chart .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+/* ---- responsive ---- */
+@media (max-width: 1180px) {
+  .dash-cols { grid-template-columns: minmax(0, 1fr); }
+  .dash-side { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); align-items: start; }
+}
+@media (max-width: 860px) {
+  .dash-pair { grid-template-columns: minmax(0, 1fr); }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .kpi-row > .kpi:last-child:nth-child(odd) { grid-column: span 2; }
+  .kpi { min-height: 0; padding: 12px 13px; }
+  .kpi-ico { display: none; }
+  .kpi-label { font-size: 11.5px; letter-spacing: 0.03em; }
+  .kpi-num { font-size: 26px; padding-top: 8px; }
+  .kpi-sub { font-size: 12.5px; }
+  .dq-queue { padding: 14px 14px 16px; }
+  .dq-counters { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 12px; }
+  .dq-counters > div:nth-child(3) { border-left: none; }
+  .dq-counters .n { font-size: 26px; }
+  .dq-row { flex-wrap: wrap; }
+  /* (0,3,0) on purpose: layout.css's phone rule .due-row > div:last-child
+     { max-width: 96px } is for a badge column and would squeeze this one. */
+  .due-row.dq-row > .dq-side { flex: 1 1 100%; max-width: none; flex-direction: row; align-items: center; justify-content: flex-end; padding-left: 40px; }
+  .dq-row .dq-status { flex-direction: row; align-items: center; gap: 8px; margin-right: auto; }
+  .convo { padding: 12px 14px; }
+  .dash-wall { padding: 12px; border-radius: var(--r-xl); }
+  .tiles { gap: 8px; }
+  .tile { min-height: 0; padding: 12px 13px; }
+  .tile-big { font-size: 24px; }
+  .tile-big.is-text { font-size: 18px; }
+  .rs-list { padding: 10px 12px 12px; }
+}
+
+/* ============================================================
+   Phone lists (v11): patients and call logs as cards
+   (js/pages/patients.js patientCards, js/pages/calls.js callCards).
+   Both are rendered next to their table; this picks one per width.
+   ============================================================ */
+.pcards, .ccards { display: none; }
+.pcard-m { display: flex; flex-direction: column; gap: 10px; padding: 14px; background: var(--surface); border: 1px solid var(--card-line); border-radius: var(--r-lg); box-shadow: var(--sh-1); cursor: pointer; }
+.pcard-m:focus-visible { outline: none; box-shadow: var(--ring); }
+.pcm-top { display: flex; align-items: center; gap: 11px; }
+.pcm-id { flex: 1; min-width: 0; }
+.pcm-name { font: 700 15.5px/1.3 var(--font-ui); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcm-sub { font: 500 12.5px/1.35 var(--font-ui); color: var(--ink-3); margin-top: 1px; }
+.pcm-why { font: 500 13px/1.4 var(--font-ui); color: var(--ink-2); background: var(--surface-2); border-radius: 10px; padding: 7px 10px; }
+.pcm-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 0; }
+.pcm-facts > div { min-width: 0; }
+.pcm-facts dt { font: 600 11.5px/1.2 var(--font-ui); text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); }
+.pcm-facts dd { margin: 2px 0 0; font: 600 13.5px/1.35 var(--font-ui); color: var(--ink); display: flex; gap: 4px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.pcm-open { pointer-events: none; }
+
+.cc-day { font: 700 12px/1.2 var(--font-ui); text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-2); padding: 8px 4px 2px; }
+.cc { display: flex; gap: 12px; padding: 13px 14px; background: var(--surface); border: 1px solid var(--card-line); border-radius: var(--r-lg); box-shadow: var(--sh-1); cursor: pointer; }
+.cc:focus-visible { outline: none; box-shadow: var(--ring); }
+.cc-ico { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; flex: none; }
+.cc-ico svg { width: 16px; height: 16px; }
+.cc-ico.tone-ok { background: var(--ok-soft); color: var(--ok); }
+.cc-ico.tone-danger { background: var(--danger-soft); color: var(--danger); }
+.cc-ico.tone-warn { background: var(--warn-soft); color: var(--warn); }
+.cc-ico.tone-beige { background: var(--beige-soft); color: var(--beige); }
+.cc-ico.tone-neutral { background: var(--surface-3); color: var(--ink-2); }
+.cc-main { flex: 1; min-width: 0; }
+.cc-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.cc-name { font: 700 15px/1.3 var(--font-ui); color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-when { font: 500 12.5px/1.3 var(--font-ui); color: var(--ink-3); white-space: nowrap; flex: none; }
+.cc-sub { font: 500 12.5px/1.35 var(--font-ui); color: var(--ink-3); margin-top: 2px; overflow-wrap: anywhere; }
+.cc-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+.cc-note { font: 400 13px/1.4 var(--font-ui); color: var(--ink-2); margin-top: 7px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cc-next { font: 600 12.5px/1.3 var(--font-ui); color: var(--ok); margin-top: 6px; }
+
+/* the patient record's action row: everything in a row on wide screens */
+.detail-actions.pa .pa-toggle { display: none; }
+
+@media (max-width: 560px) {
+  #patients-table-body > .data-table, #calls-table-body > .data-table { display: none; }
+  .pcards, .ccards { display: flex; flex-direction: column; gap: 10px; }
+
+  .detail-actions.pa { gap: 8px; width: 100%; }
+  .detail-actions.pa > * { flex: 1 1 calc(50% - 4px); justify-content: center; min-width: 0; }
+  .detail-actions.pa #log-call-btn { order: -4; }
+  .detail-actions.pa #wa-share-btn { order: -3; }
+  .detail-actions.pa #escalate-btn { order: -2; }
+  .detail-actions.pa .pa-toggle { display: inline-flex; order: -1; }
+  .detail-actions.pa .pa-more { display: none; order: 1; }
+  .detail-actions.pa.show-more .pa-more { display: inline-flex; }
+  .detail-actions.pa.show-more select.pa-more { display: block; width: 100% !important; flex-basis: 100%; }
+}
+
+/* ---- care gaps (sql/151): families the team has not reached ---- */
+.cg-counts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: var(--s4) var(--s5) var(--s2); }
+.cg-count { background: var(--warn-soft); border-radius: var(--r-md); padding: 10px 12px; }
+.cg-count .n { font: 700 22px/1.1 var(--font-ui); color: var(--warn); font-variant-numeric: tabular-nums; }
+.cg-count .l { font: var(--t-xs); color: var(--ink-2); margin-top: 2px; }
+.cg-count.zero { background: var(--surface-2); }
+.cg-count.zero .n { color: var(--ink-3); }
+.cg-card .due-list { padding-top: var(--s2); }

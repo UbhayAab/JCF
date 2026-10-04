@@ -45,5 +45,8 @@ export function sanitize(str) {
   if (!str) return '';
   const div = document.createElement('div');
   div.textContent = str;
-  return div.innerHTML;
+  // textContent escapes & < > only. Quotes too, so the result is also safe
+  // inside an attribute: data-name="${sanitize(full_name)}" with a " in the
+  // name used to end the attribute early, and anyone can set their own name.
+  return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }

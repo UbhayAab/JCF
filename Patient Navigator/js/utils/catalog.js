@@ -217,7 +217,18 @@ export const CONCERN_SEVERITIES = [
   { key: 'high',   label: 'High: this week',      tone: 'warn' },
   { key: 'watch',  label: 'Watch: keep an eye',   tone: 'info' },
 ];
-export const concernReason   = (k) => CONCERN_REASONS.find(r => r.key === k)    || { key: k, label: k, hint: '' };
+// sql/151: automatic care-gap flags, raised and closed by the database when
+// the TEAM has not acted on a family. Kept out of CONCERN_REASONS on purpose:
+// escalate.js and calling.js build the "raise a flag" chips from that list, and
+// the database refuses these reasons from a person.
+export const CARE_GAP_REASONS = [
+  { key: 'care_gap_never_reached',    label: 'Never reached',     hint: 'Nobody has called this family since they joined the programme' },
+  { key: 'care_gap_followup_overdue', label: 'Follow-up overdue', hint: 'A follow-up call is a week or more past its day' },
+  { key: 'care_gap_session_stalled',  label: 'Session stalled',   hint: 'An agreed session has not been held or scheduled' },
+];
+export const isCareGap = (k) => String(k || '').startsWith('care_gap_');
+export const concernReason   = (k) => CONCERN_REASONS.find(r => r.key === k) || CARE_GAP_REASONS.find(r => r.key === k)
+  || { key: k, label: k, hint: '' };
 export const concernSeverity = (k) => CONCERN_SEVERITIES.find(s => s.key === k) || CONCERN_SEVERITIES[1];
 
 // ---- 1:1 care sessions: keys mirror sql/43 CHECKs ----

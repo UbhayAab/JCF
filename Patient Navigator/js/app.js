@@ -270,6 +270,15 @@ function renderAppShell() {
             <button class="mobile-menu-btn" id="mobile-menu-btn" aria-label="Open menu">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
             </button>
+            <!-- The redesign's header search: find a family from any page. It
+                 opens Patients with the same search box filled in, so it finds
+                 exactly what that box finds (name, ID, city, cancer type) and
+                 only the families this person may see. Wide screens only:
+                 phones have Patients one tap away in the bottom bar. -->
+            <form class="hdr-search" id="hdr-search" role="search" autocomplete="off">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input type="search" id="hdr-search-input" maxlength="80" placeholder="Find a patient: name, ID or city" aria-label="Find a patient by name, ID or city" />
+            </form>
           </div>
           <div class="header-right">
             <!-- "Refresh app" first, and labelled. The sidebar copy of this
@@ -299,6 +308,23 @@ function renderAppShell() {
   // Theme switch (light · dark · colorful): lives in the header, everywhere.
   const themeSlot = document.getElementById('theme-switch-slot');
   if (themeSlot) themeSlot.appendChild(renderThemeSwitch());
+
+  // Header search -> Patients, with its search box filled (js/pages/patients.js
+  // reads #patients?q=). Same words twice is not a hash change, so then the
+  // box already on screen is refilled and re-run instead.
+  document.getElementById('hdr-search')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const input = document.getElementById('hdr-search-input');
+    const q = (input?.value || '').trim();
+    const target = q ? `patients?q=${encodeURIComponent(q)}` : 'patients';
+    if (window.location.hash === '#' + target) {
+      const box = document.getElementById('patient-search');
+      if (box) { box.value = q; box.dispatchEvent(new Event('input')); }
+    } else {
+      navigate(target);
+    }
+    input?.blur();
+  });
 
   // Mobile menu
   document.getElementById('mobile-menu-btn')?.addEventListener('click', () => {
@@ -475,7 +501,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20260929b';  // bumped on every breaking deploy
+const APP_BUILD = '20261004a';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];

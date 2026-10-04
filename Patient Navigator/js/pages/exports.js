@@ -546,12 +546,16 @@ function datasetDefs() {
       desc: 'Every clinical escalation ever raised: reason, severity, who flagged it, and how (or whether) it was resolved.',
       file: 'jcf_concerns_raw',
       countFrom: 'patient_concerns',
+      // the card's count must match the file, which leaves care gaps out
+      countFilter: (q) => q.not('reason', 'like', 'care_gap_%'),
       build: async (sb) => {
         const rows = await fetchAll(() => sb.from('patient_concerns')
           .select('patient_id, source, reason, severity, note, status, created_at, acknowledged_at, resolved_at, resolution_note, ' +
             'patient:patients(patient_code, full_name), ' +
             'raiser:profiles!patient_concerns_raised_by_fkey(full_name), ' +
             'resolver:profiles!patient_concerns_resolved_by_fkey(full_name)')
+          // clinical escalations only: care gaps (sql/151) are the team's misses
+          .not('reason', 'like', 'care_gap_%')
           .order('created_at').order('id'));
         const columns = [
           { label: 'Patient code',    accessor: (r) => v(r.patient?.patient_code) },
@@ -767,7 +771,9 @@ export async function renderExports(container) {
     // not worth it: the row count lands in the toast when they download.
     if (!ds.countFrom) { if (el) el.textContent = 'built on download'; return; }
     try {
-      const { count, error } = await sb.from(ds.countFrom).select('*', { count: 'exact', head: true });
+      let q = sb.from(ds.countFrom).select('*', { count: 'exact', head: true });
+      if (ds.countFilter) q = ds.countFilter(q);
+      const { count, error } = await q;
       if (error) throw error;
       if (el) el.textContent = (count ?? 0).toLocaleString('en-IN') + ' rows';
     } catch { if (el) el.textContent = 'count unavailable'; }
