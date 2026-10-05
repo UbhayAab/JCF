@@ -747,6 +747,10 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
             : `<button class="btn btn-secondary pa-more" id="block-btn" style="color:var(--danger)" title="Severe cases: block for everyone until a manager reviews">${icon('x')}Block patient</button>`) : ''}
           <button class="btn btn-secondary pa-more" id="edit-patient-btn">${icon('edit')}Edit</button>
           <button class="btn btn-secondary pa-more" id="read-docs-btn">${icon('upload')}Upload documents</button>
+          <!-- DPDPA: the consent script promises deletion on request. Admins
+               only (the database refuses anyone else, sql/155); the record of
+               who erased what keeps no content. js/components/fileErasure.js -->
+          ${getUserRole() === 'admin' ? `<button class="btn btn-secondary pa-more" id="erase-files-btn" style="color:var(--danger)" title="Delete every stored page, thumbnail, WhatsApp file and call recording of this family, for good">${icon('trash')}Erase files</button>` : ''}
           <button class="btn btn-secondary pa-more" id="assess-btn">${icon('activity')}Record wellbeing</button>
           ${!deceased ? `<button class="btn btn-secondary pa-more" id="org-report-btn" title="Record what happened when this family contacted an NGO or organisation">${icon('message')}Report an NGO</button>` : ''}
           ${!deceased ? `<button class="btn btn-gold pa-main" id="wa-share-btn">${icon('phone')}WhatsApp</button>` : ''}
@@ -790,6 +794,10 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
     container.querySelector('#read-docs-btn')?.addEventListener('click', async () => {
       const { openDocumentBatch } = await import('./docBatch.js');
       await openDocumentBatch(patientId);
+    });
+    container.querySelector('#erase-files-btn')?.addEventListener('click', async () => {
+      const { openEraseFiles } = await import('../components/fileErasure.js');
+      openEraseFiles({ patientId: patient.id, label: patient.patient_code, onDone: (r) => { if (r) reload(); } });
     });
     window.addEventListener('patient-updated', function once(e) {
       if (e.detail?.patientId !== patientId) return;

@@ -656,8 +656,9 @@ async function loadPatientPitches(patientId) {
   } catch { currentPatientPitches = {}; }
 }
 // Live 1:1 sessions for the invitation moment + the "session coming up"
-// banner (care_sessions is team-readable, so this works even for patients
-// whose row RLS hides from this mentor).
+// banner. Since sql/153 care_sessions shows a member the sessions of the
+// families she can see (the family on her call is always one, through her
+// queue row) plus the sessions she runs or invited.
 // The one line of context a mentor should have BEFORE she dials: which band
 // this family is in and what put them there. Same row the patients list sorts
 // by (v_patient_priority, sql/80), so the queue, the list and this card cannot

@@ -494,6 +494,18 @@ function chartsScaffold() {
 }
 
 
+// One load asks the database once per distinct question. get_status_mix and
+// get_patient_demographics each feed two cards, and both cards used to ask.
+// A supabase-js builder sends a new request every time it is awaited, so the
+// shared thing is the promise of its result. Cleared at the start of every
+// load, so a refresh or a filter change always reads fresh numbers.
+let rpcOnceMemo = new Map();
+function rpcOnce(name, args) {
+  const key = `${name}|${JSON.stringify(args)}`;
+  if (!rpcOnceMemo.has(key)) rpcOnceMemo.set(key, (async () => getSupabase().rpc(name, args))());
+  return rpcOnceMemo.get(key);
+}
+
 // Run thunks with a bounded number in flight. Each is already wrapped in its
 // own try/catch, so one failure never stops the rest.
 async function runPooled(tasks, limit = 6) {
@@ -509,6 +521,7 @@ async function runPooled(tasks, limit = 6) {
 
 async function loadAllCharts() {
   destroyAllCharts();
+  rpcOnceMemo = new Map();
   // Firing all ~34 queries at once used to blow Postgres' statement timeout:
   // they queue behind each other on a shared instance and the slowest ones get
   // cancelled, leaving blank charts. A pool of 6 keeps every query fast, costs
@@ -895,9 +908,8 @@ async function loadGeographic() {
 
 // Demographics: age bands (ordinal ramp), languages; gender told in the story.
 async function loadDemographics() {
-  const sb = getSupabase();
   try {
-    const { data, error } = await sb.rpc('get_patient_demographics', { p_filters: F() });
+    const { data, error } = await rpcOnce('get_patient_demographics', { p_filters: F() });
     if (error) throw error;
     if (!data || data.error) return;
     const ages = data.age_bands || [];
@@ -952,9 +964,8 @@ async function loadDemographics() {
 }
 
 async function loadStatusMix() {
-  const sb = getSupabase();
   try {
-    const { data, error } = await sb.rpc('get_status_mix', { p_filters: F() });
+    const { data, error } = await rpcOnce('get_status_mix', { p_filters: F() });
     if (error) throw error;
     if (!data || data.length === 0) return;
     const labelOf = (k) => PATIENT_STATUSES.find(s => s.key === k)?.label || capitalize(k);
@@ -984,9 +995,8 @@ async function loadStatusMix() {
 // live status. Same data as the lifecycle chart (get_status_mix), retold in the
 // language our reports use.
 async function loadNavigationOutcomes() {
-  const sb = getSupabase();
   try {
-    const { data, error } = await sb.rpc('get_status_mix', { p_filters: F() });
+    const { data, error } = await rpcOnce('get_status_mix', { p_filters: F() });
     if (error) throw error;
     const el = document.getElementById('nav-outcomes');
     if (!el || !data || data.length === 0) return;
@@ -2134,9 +2144,8 @@ async function loadTrustCurve() {
 
 // ── Gender: patient vs. primary caregiver (a real story for doctors) ──
 async function loadGenderSplit() {
-  const sb = getSupabase();
   try {
-    const { data, error } = await sb.rpc('get_patient_demographics', { p_filters: F() });
+    const { data, error } = await rpcOnce('get_patient_demographics', { p_filters: F() });
     if (error) throw error;
     if (!data || data.error) return;
     // Fold the enum into three visible buckets; keep "not recorded" aside.

@@ -22,6 +22,7 @@ export async function renderAdmin(container, params) {
   }
 
   const isAudit = (params?.id === 'audit' || window.location.hash.includes('audit'));
+  const isFiles = isAdmin() && (params?.id === 'files' || window.location.hash.includes('admin/files'));
   container.innerHTML = `
     <div class="page-header">
       <h1>Administration</h1>
@@ -33,9 +34,10 @@ export async function renderAdmin(container, params) {
       </div>
     </div>
     <div class="tabs" id="admin-tabs">
-      <button class="tab ${!isAudit ? 'active' : ''}" data-tab="users">User Management</button>
+      <button class="tab ${!isAudit && !isFiles ? 'active' : ''}" data-tab="users">User Management</button>
       ${isAdmin() ? `<button class="tab" data-tab="assignment">Assignment policy</button>` : ''}
       ${isAdmin() ? `<button class="tab ${isAudit ? 'active' : ''}" data-tab="audit">Audit Log</button>` : ''}
+      ${isAdmin() ? `<button class="tab ${isFiles ? 'active' : ''}" data-tab="files">Stored files</button>` : ''}
     </div>
     <div id="admin-content"></div>
   `;
@@ -48,12 +50,114 @@ export async function renderAdmin(container, params) {
       tab.classList.add('active');
       if (tab.dataset.tab === 'audit') loadAuditLog();
       else if (tab.dataset.tab === 'assignment') loadAssignmentPolicy();
+      else if (tab.dataset.tab === 'files') loadStoredFiles();
       else loadUsers();
     });
   });
 
   if (isAudit) loadAuditLog();
+  else if (isFiles) loadStoredFiles();
   else loadUsers();
+}
+
+// ---- Stored files: what is left behind, and who erased what (sql/155) ----
+// DPDPA: the consent script promises deletion on request. Files of families
+// that no longer exist, and pages of uploads that ended discarded or failed,
+// stay in storage until someone erases them. This lists them; erasing stays
+// one admin's click per row (js/components/fileErasure.js), never a sweep.
+async function loadStoredFiles() {
+  const sb = getSupabase();
+  const content = document.getElementById('admin-content');
+  content.innerHTML = '<div class="card"><div class="spinner"></div></div>';
+  let rep;
+  let recent = [];
+  try {
+    const [r1, r2] = await Promise.all([
+      sb.rpc('get_leftover_patient_files'),
+      sb.from('patient_file_erasures')
+        .select('id, patient_id, patient_code, batch_id, reason, requested_by_name, started_at, status, files_found, files_removed, files_left')
+        .order('started_at', { ascending: false }).limit(20),
+    ]);
+    if (r1.error) throw r1.error;
+    rep = r1.data || {};
+    recent = r2.error ? [] : (r2.data || []);
+  } catch (e) {
+    content.innerHTML = `<div class="empty-state"><h3>Could not read the stored files</h3><p>${sanitize(e.message)}</p>
+      <p class="text-muted">If this says the function does not exist, sql/155 has not been applied yet.</p></div>`;
+    return;
+  }
+  const { fmtBytes } = await import('../components/fileErasure.js');
+  const t = rep.totals || {};
+  const short = (id) => sanitize(String(id || '').slice(0, 8));
+  const gone = rep.families_gone || [];
+  const dead = rep.dead_uploads || [];
+  const statusLabel = { discarded: 'Discarded', failed: 'Failed', reviewed: 'Reviewed' };
+
+  content.innerHTML = `
+    <div class="card" style="padding:18px 20px;margin-bottom:var(--s4)">
+      <h3 style="margin:0 0 6px">Files nobody needs any more</h3>
+      <p class="text-muted" style="margin:0">Nothing here is erased until an admin presses Erase on its row. Each erasure is
+        recorded below: who, when, why and a fingerprint of each file, never its name or content.</p>
+      <div class="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:var(--s3);margin-top:var(--s3)">
+        <div class="stat-card"><div class="stat-value">${t.files_of_families_gone || 0}</div><div class="stat-label">files of ${t.families_gone || 0} famil${t.families_gone === 1 ? 'y' : 'ies'} no longer in the registry</div></div>
+        <div class="stat-card"><div class="stat-value">${t.pages_of_dead_uploads || 0}</div><div class="stat-label">pages (${t.files_of_dead_uploads || 0} files) of ${t.dead_uploads || 0} discarded or failed upload${t.dead_uploads === 1 ? '' : 's'}</div></div>
+      </div>
+    </div>
+
+    <div class="card" style="padding:16px 18px;margin-bottom:var(--s4)">
+      <h3 style="margin:0 0 10px">Families no longer in the registry</h3>
+      ${gone.length ? `<div class="table-container"><table class="data-table">
+        <thead><tr><th>Folder</th><th>Files</th><th>Size</th><th>Stored</th><th>Last erasure</th><th></th></tr></thead>
+        <tbody>${gone.map((g) => `<tr>
+          <td class="cell-mono">${short(g.patient_id)}</td><td>${g.files}</td><td>${fmtBytes(g.bytes)}</td>
+          <td>${formatDateTime(g.first_at)}${g.last_at !== g.first_at ? ` to ${formatDateTime(g.last_at)}` : ''}</td>
+          <td>${g.last_erasure ? `${sanitize(g.last_erasure.status)}, ${formatDateTime(g.last_erasure.at)}` : 'none'}</td>
+          <td><button class="btn btn-secondary btn-sm" style="color:var(--danger)" data-erase-family="${sanitize(g.patient_id)}">${icon('trash')}Erase</button></td>
+        </tr>`).join('')}</tbody></table></div>` : '<p class="text-muted" style="margin:0">None.</p>'}
+    </div>
+
+    <div class="card" style="padding:16px 18px;margin-bottom:var(--s4)">
+      <h3 style="margin:0 0 10px">Uploads that ended discarded or failed</h3>
+      ${dead.length ? `<div class="table-container"><table class="data-table">
+        <thead><tr><th>Family</th><th>Upload</th><th>Pages</th><th>Files</th><th>Size</th><th>Uploaded</th><th></th></tr></thead>
+        <tbody>${dead.map((d) => `<tr>
+          <td class="cell-mono">${sanitize(d.patient_code || short(d.patient_id))}</td>
+          <td>${sanitize(statusLabel[d.status] || d.status)}${d.deleted ? ' (deleted)' : ''}</td>
+          <td>${d.pages}</td><td>${d.files}</td><td>${fmtBytes(d.bytes)}</td><td>${formatDateTime(d.uploaded_at)}</td>
+          <td><button class="btn btn-secondary btn-sm" style="color:var(--danger)" data-erase-batch="${sanitize(d.batch_id)}" data-patient="${sanitize(d.patient_id)}" data-code="${sanitize(d.patient_code || '')}">${icon('trash')}Erase</button></td>
+        </tr>`).join('')}</tbody></table></div>` : '<p class="text-muted" style="margin:0">None.</p>'}
+    </div>
+
+    <div class="card" style="padding:16px 18px">
+      <h3 style="margin:0 0 10px">Erasures on record</h3>
+      ${recent.length ? `<div class="table-container"><table class="data-table">
+        <thead><tr><th>When</th><th>By</th><th>Family</th><th>What</th><th>Files</th><th>Result</th><th>Why</th></tr></thead>
+        <tbody>${recent.map((r) => `<tr>
+          <td>${formatDateTime(r.started_at)}</td><td>${sanitize(r.requested_by_name || 'an admin')}</td>
+          <td class="cell-mono">${sanitize(r.patient_code || short(r.patient_id))}</td>
+          <td>${r.batch_id ? 'one upload' : 'every file'}</td>
+          <td>${r.files_removed ?? 0} of ${r.files_found}</td>
+          <td><span class="badge ${r.status === 'done' ? 'badge-success' : r.status === 'partial' ? 'badge-warning' : 'badge-info'}">${sanitize(r.status)}</span></td>
+          <td>${sanitize(r.reason)}</td>
+        </tr>`).join('')}</tbody></table></div>` : '<p class="text-muted" style="margin:0">No erasures yet.</p>'}
+    </div>`;
+
+  const { openEraseFiles } = await import('../components/fileErasure.js');
+  content.querySelectorAll('[data-erase-family]').forEach((b) => b.addEventListener('click', () =>
+    openEraseFiles({
+      patientId: b.dataset.eraseFamily,
+      label: `a family no longer in the registry (${b.dataset.eraseFamily.slice(0, 8)})`,
+      defaultReason: 'Leftover files of a family that no longer exists',
+      onDone: () => loadStoredFiles(),
+    })));
+  content.querySelectorAll('[data-erase-batch]').forEach((b) => b.addEventListener('click', () =>
+    openEraseFiles({
+      patientId: b.dataset.patient,
+      batchId: b.dataset.eraseBatch,
+      label: `an upload of ${b.dataset.code || 'a family'}`,
+      defaultReason: 'Pages of an upload that was discarded or failed',
+      onDone: () => loadStoredFiles(),
+    })));
 }
 
 // ---- Create User (server-side, org default password) ----
