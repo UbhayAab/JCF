@@ -19,10 +19,12 @@ import { measureLabel, leverLabel, giLabel } from '../utils/catalog.js';
 import { valueLabel } from '../components/analyticsFilters.js';
 import { exportToXLSX } from '../utils/xlsx.js';
 import { renderAskTab, renderFilesTab } from './dataRoomAsk.js';
-// Past the 800-line soft ceiling by a few lines on purpose: the journeys half
-// lives in its own module. The next addition here should first move the cohort
-// filter (F, roster, FACETS and friends) into a module of its own.
 import { journeyDefs, renderJourneysTab } from './dataRoomJourneys.js';
+import { renderCanvasTab } from './dataRoomCanvas.js';
+import { canvasDefs } from './dataRoomCanvasData.js';
+import {
+  setRoster, isFiltered, allowedIds, allowedCodes, fileSuffix, filterSentence, renderFilter,
+} from './dataRoomFilter.js';
 
 const DATA_ROOM_ROLES = ['admin', 'manager', 'content'];
 
@@ -49,69 +51,8 @@ const b = (x) => (x === true ? 'true' : x === false ? 'false' : '');
 const d = (x) => (x ? String(x).slice(0, 10) : '');
 const istDate = (ts) => (ts ? new Date(new Date(ts).getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10) : '');
 
-// ============================================================
-// Cohort filter: pick a state, a city, a stage, a cancer type, and every
-// download on the page narrows to those patients. The place names are
-// normalised exactly the way pf_place() does it on the database side
-// ("west bengal", "West  Bengal" → "West Bengal"), so the list you choose
-// from here reads the same as the analytics cohort filter.
-// ============================================================
-const F = { state: '', city: '', stage: '', cancer: '' };
-let roster = [];   // one light row per patient, the filter's whole universe
-
-const place = (t) => {
-  const s = String(t ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
-  return s ? s.replace(/(^|[^a-z])([a-z])/g, (_, a, c) => a + c.toUpperCase()) : '';
-};
-
-const FACETS = [
-  { key: 'state',  label: 'State',       of: (p) => place(p.state) },
-  { key: 'city',   label: 'City',        of: (p) => place(p.city) },
-  { key: 'stage',  label: 'Cancer stage', of: (p) => p.cancer_stage || 'unknown', lbl: (x) => valueLabel('stage', x) },
-  { key: 'cancer', label: 'Cancer type',  of: (p) => p.gi_subtype || '',          lbl: (x) => valueLabel('cancer', x) },
-];
-
-const matchesFilter = (p, f) => FACETS.every((x) => !f[x.key] || x.of(p) === f[x.key]);
-
-const isFiltered = () => FACETS.some((x) => F[x.key]);
-
-// Every patient id the current filter allows: null when nothing is filtered,
-// which the builders read as "no narrowing, ship the whole dataset".
-function allowedIds() {
-  if (!isFiltered()) return null;
-  return new Set(roster.filter((p) => matchesFilter(p, F)).map((p) => p.id));
-}
-// The journey datasets carry patient_code, not the row id.
-function allowedCodes() {
-  if (!isFiltered()) return null;
-  return new Set(roster.filter((p) => matchesFilter(p, F)).map((p) => p.patient_code));
-}
-
-// Options for one dropdown, counted with that dropdown's OWN filter removed:
-// otherwise picking Maharashtra leaves Maharashtra as the only state you can
-// ever choose again.
-function facetOptions(facet) {
-  const others = { ...F, [facet.key]: '' };
-  const counts = new Map();
-  roster.filter((p) => matchesFilter(p, others)).forEach((p) => {
-    const val = facet.of(p);
-    if (!val) return;
-    counts.set(val, (counts.get(val) || 0) + 1);
-  });
-  return [...counts.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
-}
-
-// The filter, folded into the file name, so three downloads for three states
-// do not all land in the folder as the same file.
-function fileSuffix() {
-  const bits = FACETS.filter((x) => F[x.key]).map((x) => String(F[x.key]).toLowerCase().replace(/[^a-z0-9]+/g, '-'));
-  return bits.length ? '_' + bits.join('_') : '';
-}
-
-function filterSentence() {
-  const bits = FACETS.filter((x) => F[x.key]).map((x) => `${x.label}: ${x.lbl ? x.lbl(F[x.key]) : F[x.key]}`);
-  return bits.join(' · ');
-}
+// The cohort filter (state, city, stage, cancer type) lives in
+// dataRoomFilter.js; every builder below is cut to it in buildDataset().
 
 // ---- shared column sets ----
 const PATIENT_RESEARCH_COLS = [
@@ -388,6 +329,7 @@ function datasetDefs() {
 
   defs.push(...impactDefs());
   defs.push(...journeyDefs());
+  defs.push(...canvasDefs());
 
   if (!managerish) return defs;
 
@@ -605,7 +547,8 @@ export async function renderExports(container) {
   const defs = datasetDefs();
   const impact = defs.filter((x) => x.impact);
   const journeys = defs.filter((x) => x.journey);
-  const research = defs.filter((x) => x.research && !x.impact && !x.journey);
+  const medical = defs.filter((x) => x.medical);
+  const research = defs.filter((x) => x.research && !x.impact && !x.journey && !x.medical);
   const operational = defs.filter((x) => !x.research);
 
   const card = (ds) => `
@@ -646,12 +589,14 @@ export async function renderExports(container) {
     </div>
 
     <div class="tab-strip" id="dr-tabs" style="display:flex;gap:4px;margin-bottom:var(--s5);border-bottom:1px solid var(--line);overflow-x:auto">
-      <button class="btn btn-ghost btn-sm dr-tab is-active" data-tab="datasets">${icon('download')}Datasets</button>
-      <button class="btn btn-ghost btn-sm dr-tab" data-tab="journeys">${icon('activity')}Journeys</button>
-      <button class="btn btn-ghost btn-sm dr-tab" data-tab="ask">${icon('search')}Ask in English</button>
-      <button class="btn btn-ghost btn-sm dr-tab" data-tab="files">${icon('fileText')}Shared files</button>
+      <button class="btn btn-ghost btn-sm dr-tab is-active" style="flex:none" data-tab="datasets">${icon('download')}Datasets</button>
+      <button class="btn btn-ghost btn-sm dr-tab" style="flex:none" data-tab="canvas">${icon('stethoscope')}Patient canvas</button>
+      <button class="btn btn-ghost btn-sm dr-tab" style="flex:none" data-tab="journeys">${icon('activity')}Journeys</button>
+      <button class="btn btn-ghost btn-sm dr-tab" style="flex:none" data-tab="ask">${icon('search')}Ask in English</button>
+      <button class="btn btn-ghost btn-sm dr-tab" style="flex:none" data-tab="files">${icon('fileText')}Shared files</button>
     </div>
 
+    <div id="dr-pane-canvas" hidden></div>
     <div id="dr-pane-journeys" hidden></div>
     <div id="dr-pane-ask" hidden></div>
     <div id="dr-pane-files" hidden></div>
@@ -668,23 +613,29 @@ export async function renderExports(container) {
       'The tables people keep asking for over WhatsApp. Registry growth here counts the day a mentor first reached the family, not the day the old registry was migrated in, so it does not show the 504-patient spike the current chart does.', impact)}
     ${section('Patient journeys (longitudinal)',
       'Every patient followed from the day a mentor first reached the family: one row per patient, one row per patient per month, and every event on the timeline. Patient codes only. The Journeys tab draws the same data.', journeys)}
+    ${section('Medical record (longitudinal)',
+      'Every report a family has sent us, in date order, with the values read off it: scans, biopsies, blood tests, markers and chemotherapy cycles. Patient codes only. The Patient canvas tab draws one family at a time and downloads it as one workbook.', medical)}
     ${section('Research-grade (de-identified)', 'Safe to share with the research team: no names, no phone numbers.', research)}
     ${section('Operational (contains personal data)', 'Names, phones and free-text notes: for internal coordination only.', operational)}
     </div>
   `;
 
-  // ---- tabs. Ask and Files are built on first visit, not on page load:
-  // most people come here for a CSV and should not pay for the rest. ----
-  const panes = { datasets: '#dr-pane-datasets', journeys: '#dr-pane-journeys', ask: '#dr-pane-ask', files: '#dr-pane-files' };
+  // ---- tabs. Everything but Datasets is built on first visit, not on page
+  // load: most people come here for a CSV and should not pay for the rest.
+  // #exports?tab=canvas&code=PAT-... opens a tab, and a family, directly. ----
+  const panes = { datasets: '#dr-pane-datasets', canvas: '#dr-pane-canvas', journeys: '#dr-pane-journeys',
+    ask: '#dr-pane-ask', files: '#dr-pane-files' };
   const built = { datasets: true };
-  container.querySelectorAll('.dr-tab').forEach((tab) => tab.addEventListener('click', () => {
-    const want = tab.dataset.tab;
+  const showTab = (want, { code = '', keepHash = false } = {}) => {
+    const tab = container.querySelector(`.dr-tab[data-tab="${want}"]`);
+    if (!tab) return;
     container.querySelectorAll('.dr-tab').forEach((t) => t.classList.toggle('is-active', t === tab));
     Object.entries(panes).forEach(([k, sel]) => { container.querySelector(sel).hidden = (k !== want); });
     // The header button and the cohort filter belong to the datasets tab only.
-    const own = want === 'datasets';
     const allBtnEl = container.querySelector('#dr-all');
-    if (allBtnEl) allBtnEl.hidden = !own;
+    if (allBtnEl) allBtnEl.hidden = want !== 'datasets';
+    // replaceState fires no hashchange, so the router does not draw the page again.
+    if (!keepHash) { try { history.replaceState(null, '', want === 'datasets' ? '#exports' : `#exports?tab=${want}`); } catch { /* file:// */ } }
     if (!built[want]) {
       built[want] = true;
       const host = container.querySelector(panes[want]);
@@ -692,74 +643,26 @@ export async function renderExports(container) {
         if (want === 'ask') renderAskTab(host);
         if (want === 'files') renderFilesTab(host);
         if (want === 'journeys') renderJourneysTab(host);
+        if (want === 'canvas') renderCanvasTab(host, { code });
       } catch (e) {
         host.innerHTML = `<div class="card"><p style="font:var(--t-xs);color:var(--ink-3)">This tab failed to load: ${e.message}</p></div>`;
       }
     }
-  }));
+  };
+  container.querySelectorAll('.dr-tab').forEach((tab) => tab.addEventListener('click', () => showTab(tab.dataset.tab)));
+  const asked = new URLSearchParams(window.location.hash.split('?')[1] || '');
+  if (panes[asked.get('tab')] && asked.get('tab') !== 'datasets') {
+    showTab(asked.get('tab'), { code: asked.get('code') || '', keepHash: true });
+  }
 
   const sb = getSupabase();
 
-  // ---- the filter bar ----
+  // ---- the filter bar (dataRoomFilter.js) ----
   const filterEl = container.querySelector('#dr-filter');
-
-  function renderFilter() {
-    const matched = isFiltered() ? roster.filter((p) => matchesFilter(p, F)).length : roster.length;
-    const selects = FACETS.map((facet) => {
-      const opts = facetOptions(facet);
-      const chosen = F[facet.key];
-      // A value can go missing from the list once another filter narrows the
-      // cohort past it; keep it selectable so the dropdown never lies about
-      // what is actually filtering the downloads.
-      const has = opts.some(([val]) => val === chosen);
-      return `
-        <label style="display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 180px">
-          <span style="font:var(--t-xs);color:var(--ink-3)">${facet.label}</span>
-          <select class="form-select" data-facet="${facet.key}">
-            <option value="">All (${opts.length})</option>
-            ${!has && chosen ? `<option value="${chosen}" selected>${facet.lbl ? facet.lbl(chosen) : chosen}</option>` : ''}
-            ${opts.map(([val, n]) =>
-              `<option value="${String(val).replace(/"/g, '&quot;')}" ${val === chosen ? 'selected' : ''}>${facet.lbl ? facet.lbl(val) : val} (${n})</option>`).join('')}
-          </select>
-        </label>`;
-    }).join('');
-
-    filterEl.innerHTML = `
-      <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px">
-        <span style="width:17px;height:17px;display:inline-flex;flex:none;color:var(--ink-3)">${icon('filter')}</span>
-        <strong style="font:var(--t-body-strong)">Filter the download</strong>
-        <span style="font:var(--t-xs);color:var(--ink-3)">Pick a state or a city and every file below comes down for just those patients.</span>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:var(--s3);align-items:flex-end">
-        ${selects}
-        <button class="btn btn-ghost btn-sm" id="dr-clear" ${isFiltered() ? '' : 'disabled'} style="flex:none">Clear</button>
-      </div>
-      <div style="margin-top:10px;font:var(--t-xs);color:${isFiltered() ? 'var(--gold)' : 'var(--ink-3)'}">
-        ${roster.length === 0 ? 'Reading the registry…'
-          : isFiltered()
-            ? `<strong>${matched.toLocaleString('en-IN')}</strong> of ${roster.length.toLocaleString('en-IN')} patients match: ${filterSentence()}. Every download on this page is cut to these patients, including the call, session and concern files.`
-            : `No filter. Every file covers all ${roster.length.toLocaleString('en-IN')} patients on file.`}
-      </div>`;
-
-    filterEl.querySelectorAll('[data-facet]').forEach((sel) => sel.addEventListener('change', () => {
-      F[sel.dataset.facet] = sel.value;
-      // Picking a state must not leave a city from a different state applied.
-      if (sel.dataset.facet === 'state' && F.city) {
-        const stillThere = roster.some((p) => matchesFilter(p, F));
-        if (!stillThere) F.city = '';
-      }
-      renderFilter();
-    }));
-    filterEl.querySelector('#dr-clear')?.addEventListener('click', () => {
-      FACETS.forEach((x) => { F[x.key] = ''; });
-      renderFilter();
-    });
-  }
-
-  roster = [];
-  renderFilter();
+  setRoster([]);
+  renderFilter(filterEl);
   fetchAll(() => sb.from('patients').select('id, patient_code, state, city, cancer_stage, gi_subtype').order('id'))
-    .then((rows) => { roster = rows; renderFilter(); })
+    .then((rows) => { setRoster(rows); if (filterEl.isConnected) renderFilter(filterEl); })
     .catch((e) => { console.error('Filter roster failed:', e); filterEl.innerHTML =
       '<div style="font:var(--t-xs);color:var(--ink-3)">Filters unavailable. Downloads will cover every patient.</div>'; });
 

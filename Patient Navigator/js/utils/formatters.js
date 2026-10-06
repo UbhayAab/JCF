@@ -130,9 +130,16 @@ function needsTextCell(value, column) {
   return /^[+\d][\d\s()+-]{5,}$/.test(value);
 }
 
+// A cell that starts with = + - or @ is a formula to Excel, and free text read
+// off a report or typed by a mentor can start that way. The same leading tab
+// keeps it text (the OWASP CSV-injection fix); a plain signed number such as
+// -1.5 stays a number.
+const FORMULA_START = /^[=+\-@\t\r]/;
+const SIGNED_NUMBER = /^[+-]?\d+(\.\d+)?$/;
+
 function csvCell(value, column) {
   let val = String(value).replace(/"/g, '""');
-  if (needsTextCell(val, column)) return `"\t${val}"`;
+  if (needsTextCell(val, column) || (FORMULA_START.test(val) && !SIGNED_NUMBER.test(val))) return `"\t${val}"`;
   if (/[",\r\n]/.test(val)) return `"${val}"`;
   return val;
 }

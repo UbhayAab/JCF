@@ -245,9 +245,13 @@ async function loadCohort() {
 // ── Rendering ────────────────────────────────────────────────
 const fmtIN = (n) => Number(n || 0).toLocaleString('en-IN');
 
+// City and state come from the patient form as typed, so a value is text
+// wherever it lands in markup: the chip, the option and its search key.
+const escHTML = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
 function chipHTML(facet, value) {
   return `<button class="af-chip" data-off="${facet}|${encodeURIComponent(value)}" title="Remove this filter">
-    <span class="af-chip-k">${FACET_META[facet].label}</span>${valueLabel(facet, value)}
+    <span class="af-chip-k">${FACET_META[facet].label}</span>${escHTML(valueLabel(facet, value))}
     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M18 6 6 18M6 6l12 12"/></svg>
   </button>`;
 }
@@ -352,9 +356,9 @@ function facetHTML(facet, color) {
   const rows = opts.map(o => {
     const on = sel.includes(String(o.value));
     const share = total ? Math.round((Number(o.n) / total) * 100) : 0;
-    return `<button class="af-opt ${on ? 'on' : ''}" data-pick="${facet}|${encodeURIComponent(o.value)}" data-search="${String(valueLabel(facet, o.value)).toLowerCase()}">
+    return `<button class="af-opt ${on ? 'on' : ''}" data-pick="${facet}|${encodeURIComponent(o.value)}" data-search="${escHTML(String(valueLabel(facet, o.value)).toLowerCase())}">
       <span class="af-box">${on ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4"><path d="M20 6 9 17l-5-5"/></svg>' : ''}</span>
-      <span class="af-opt-l">${valueLabel(facet, o.value)}</span>
+      <span class="af-opt-l">${escHTML(valueLabel(facet, o.value))}</span>
       <span class="af-opt-n">${fmtIN(o.n)}</span>
       <span class="af-opt-bar" style="width:${share}%;background:${color}"></span>
     </button>`;

@@ -29,12 +29,15 @@ export function showToast(message, type = 'info', duration = 4000) {
     <div class="toast-icon">${ICONS[type] || ICONS.info}</div>
     <div class="toast-content">
       <div class="toast-title">${type.charAt(0).toUpperCase() + type.slice(1)}</div>
-      <div class="toast-message">${message}</div>
+      <div class="toast-message"></div>
     </div>
     <button class="toast-close" aria-label="Close">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
     </button>
   `;
+  // Text, never markup: messages carry city names, file names and error text
+  // that came from the database, and none of the 347 callers passes HTML.
+  toast.querySelector('.toast-message').textContent = String(message ?? '');
 
   toast.querySelector('.toast-close').addEventListener('click', () => removeToast(toast));
   c.appendChild(toast);
