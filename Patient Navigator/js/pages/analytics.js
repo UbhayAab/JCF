@@ -1021,7 +1021,7 @@ async function loadNavigationOutcomes() {
     el.innerHTML = OUTCOMES.map(o => `
       <div title="${o.tip}" style="border:1px solid ${o.color}33;background:${o.color}0d;border-radius:var(--r-sm);padding:12px 14px;text-align:center">
         <div style="font-family:var(--font-display);font-size:26px;font-weight:790;color:${o.color}">${fmtIN(o.nn)}</div>
-        <div style="font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;color:${o.color}">${pct(o.nn, total)}% OF ${fmtIN(total)}</div>
+        <div style="font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;color:var(--ink-3)">${pct(o.nn, total)}% OF ${fmtIN(total)}</div>
         <div style="font-size:11.5px;font-weight:600;color:var(--ink-2);margin-top:4px;line-height:1.25">${o.label}</div>
         <div style="font-size:10.5px;color:var(--ink-3);margin-top:2px">${o.note}</div>
       </div>`).join('');
