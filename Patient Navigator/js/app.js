@@ -6,6 +6,7 @@ import { initAuth, getCurrentUser, getCurrentProfile, getUserRole, signIn, isImp
 import { registerRoute, initRouter, navigate, setAuthGuard, setRoleGuard } from './router.js';
 import { renderSidebar, bindSidebarSync } from './components/sidebar.js';
 import { showToast } from './components/toast.js';
+import { maybeAskForPhone } from './components/phonePrompt.js';
 import { renderDashboard } from './pages/dashboard.js';
 import { renderPatients } from './pages/patients.js';
 import { renderCalls } from './pages/calls.js';
@@ -501,7 +502,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261005a';  // bumped on every breaking deploy
+const APP_BUILD = '20261006a';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -527,6 +528,9 @@ function bootApp() {
     initRouter();
     console.log('[boot] router initialized');
     maybeAutoBuild();
+    // Once per member until they confirm their WhatsApp number (Fixboard #10,
+    // sql/157). After the first page has painted, so it never races it.
+    setTimeout(maybeAskForPhone, 900);
   } catch (e) {
     console.error('[boot] FAILED to render shell:', e);
     appBooted = false;

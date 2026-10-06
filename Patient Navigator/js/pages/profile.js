@@ -2,14 +2,24 @@
 // Patient Navigator: Profile Page
 // ============================================================
 
-import { getCurrentProfile, updateProfile, changePassword, getUserRole } from '../auth.js';
+import { getCurrentProfile, getRealProfile, isImpersonating, updateProfile, changePassword, getUserRole } from '../auth.js';
 import { getSupabase } from '../supabase.js';
 import { showToast } from '../components/toast.js';
+import { confirmMyPhone, normalizeTeamPhone, formatTeamPhone } from '../components/phonePrompt.js';
 import { formatDate, capitalize } from '../utils/formatters.js';
-import { validatePassword } from '../utils/validators.js';
+import { validatePassword, sanitize } from '../utils/validators.js';
+
+/** Whether HopeBot knows this member by their number (sql/157, Fixboard #10). */
+function phoneStatus(profile) {
+  if (isImpersonating()) return 'Only the member themselves can confirm their number.';
+  return profile?.phone_confirmed_at
+    ? `Confirmed on ${formatDate(profile.phone_confirmed_at)}. HopeBot knows you by this number.`
+    : 'Not confirmed yet. Save the number you use on WhatsApp so HopeBot knows you by it.';
+}
 
 export async function renderProfile(container) {
   const profile = getCurrentProfile();
+  const shownPhone = profile?.phone ? formatTeamPhone(normalizeTeamPhone(profile.phone) || profile.phone) : '';
   container.innerHTML = `
     <div class="page-header"><h1>My Profile</h1></div>
     <div class="content-grid">
@@ -19,11 +29,13 @@ export async function renderProfile(container) {
           <form id="profile-form">
             <div class="form-group">
               <label class="form-label">Full Name</label>
-              <input class="form-input" id="prof-name" value="${profile?.full_name || ''}" />
+              <input class="form-input" id="prof-name" value="${sanitize(profile?.full_name || '')}" />
             </div>
             <div class="form-group">
-              <label class="form-label">Phone</label>
-              <input class="form-input" id="prof-phone" value="${profile?.phone || ''}" placeholder="Optional" />
+              <label class="form-label" for="prof-phone">WhatsApp number</label>
+              <input class="form-input" id="prof-phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="20"
+                     value="${sanitize(shownPhone)}" placeholder="98765 43210" />
+              <span class="form-hint" id="prof-phone-status">${phoneStatus(profile)}</span>
             </div>
             <div class="form-group">
               <label class="form-label">Role</label>
@@ -106,13 +118,29 @@ export async function renderProfile(container) {
     btn.disabled = false;
   });
 
+  // The name saves as it always has. The number goes through confirm_my_phone
+  // (sql/157), the one path that puts it on the active team list HopeBot reads;
+  // emptying the box takes it off. Nobody confirms a number while viewing as
+  // someone else: the save would land on their own account.
   document.getElementById('profile-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const rawPhone = document.getElementById('prof-phone').value.trim();
+    const norm = rawPhone ? normalizeTeamPhone(rawPhone) : null;
+    if (rawPhone && !norm && !isImpersonating()) {
+      showToast('That does not look like a mobile number. Type the 10 digits, or + and the country code for a number outside India.', 'warning');
+      return;
+    }
     try {
-      await updateProfile({
-        full_name: document.getElementById('prof-name').value.trim(),
-        phone: document.getElementById('prof-phone').value.trim() || null,
-      });
+      await updateProfile({ full_name: document.getElementById('prof-name').value.trim() });
+      if (!isImpersonating()) {
+        const mine = getRealProfile();
+        if (norm && (norm !== mine?.phone || !mine?.phone_confirmed_at)) await confirmMyPhone(rawPhone);
+        else if (!rawPhone && mine?.phone) await updateProfile({ full_name: mine.full_name, phone: null });
+      }
+      const now = getRealProfile();
+      const status = document.getElementById('prof-phone-status');
+      if (status) status.textContent = phoneStatus(now);
+      if (now?.phone && !isImpersonating()) document.getElementById('prof-phone').value = formatTeamPhone(now.phone);
       showToast('Profile updated', 'success');
     } catch (err) { showToast(err.message, 'error'); }
   });

@@ -42,6 +42,7 @@ export async function renderTeam(container) {
       <button class="tab" data-tab="sessions">Saturday circles</button>
       <button class="tab" data-tab="holds">Not taking part</button>
       <button class="tab" data-tab="blocked">Blocked</button>
+      <button class="tab" data-tab="phones">Phone numbers</button>
     </div>
     <div id="team-content">${Array(5).fill('<div class="sk skeleton-row"></div>').join('')}</div>`;
 
@@ -56,6 +57,7 @@ export async function renderTeam(container) {
     else if (tab.dataset.tab === 'nutrition') loadNutritionRoster();
     else if (tab.dataset.tab === 'holds') loadEngagementHolds();
     else if (tab.dataset.tab === 'blocked') loadBlockedPatients();
+    else if (tab.dataset.tab === 'phones') loadPhoneNumbers();
     else loadAvailability();
   }));
 
@@ -66,6 +68,42 @@ export async function renderTeam(container) {
   const tabBtn = wantTab && document.querySelector(`#team-tabs .tab[data-tab="${wantTab}"]`);
   if (tabBtn) tabBtn.click();
   else await loadAvailability();
+}
+
+// ---- Phone numbers: who HopeBot knows (sql/157, Fixboard #10) ----
+// HopeBot files the papers a team member forwards only when it knows their
+// number, and it knows only numbers the member confirmed themselves. Anyone
+// switched off drops off on their own. The last four digits are enough to
+// chase someone, so the full number is never shown here.
+async function loadPhoneNumbers() {
+  const content = document.getElementById('team-content');
+  content.innerHTML = Array(4).fill('<div class="sk skeleton-row"></div>').join('');
+  const { data, error } = await getSupabase().rpc('team_phone_status');
+  if (error) {
+    content.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertTriangle')}</div>
+      <h4>Could not load the phone numbers</h4><p>${sanitize(error.message)}</p></div>`;
+    return;
+  }
+  const rows = data || [];
+  const done = rows.filter((r) => r.confirmed).length;
+  content.innerHTML = `
+    <div class="hist-meta" style="margin-bottom:var(--s2)">${done} of ${rows.length} active member${rows.length === 1 ? '' : 's'}
+      ${rows.length === 1 ? 'has' : 'have'} confirmed the number they use on WhatsApp. Everyone else is asked the next time they open
+      the Navigator. HopeBot only knows confirmed numbers, and anyone whose account is switched off drops off the list at once.</div>
+    <div class="table-container"><table class="data-table">
+      <thead><tr><th>Member</th><th>WhatsApp number</th></tr></thead>
+      <tbody>
+        ${rows.map((r) => `
+          <tr>
+            <td><strong>${sanitize(r.full_name || '')}</strong>
+              <div style="margin-top:4px">${getRoleBadge(r.role)}</div></td>
+            <td>${r.confirmed
+              ? `<span class="badge badge-ok">Confirmed</span>
+                 <div class="hist-meta">ends in ${sanitize(r.phone_last4 || '')}, ${formatDate(r.confirmed_at)}</div>`
+              : '<span class="badge badge-warn">Not yet</span>'}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table></div>`;
 }
 
 const TEAM_TAB_KEY = 'pn_team_tab';
