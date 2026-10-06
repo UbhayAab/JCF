@@ -9,7 +9,7 @@
 const KEY = 'jcf_theme';
 export const THEMES = ['light', 'dark', 'colorful', 'classic'];
 const META = {
-  light: '#FFDFCA',
+  light: '#F5F6F8',
   dark: '#1A110C',
   colorful: '#FFCDB0',
   classic: '#F6F2EA',

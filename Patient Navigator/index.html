@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="description" content="Jarurat Care Patient Navigator: Secure, DPDPA-compliant patient data management system for cancer care navigation." />
-  <meta name="theme-color" content="#FFDFCA" />
+  <meta name="theme-color" content="#F5F6F8" />
   <meta name="robots" content="noindex, nofollow" />
 
   <!-- PWA: installable, launches standalone (looks like a native app) -->
@@ -23,7 +23,7 @@
   <script>
     (function(){
       try {
-        var ok = { light:'#FFDFCA', dark:'#1A110C', colorful:'#FFCDB0', classic:'#F6F2EA' };
+        var ok = { light:'#F5F6F8', dark:'#1A110C', colorful:'#FFCDB0', classic:'#F6F2EA' };
         var has = function (k) { return Object.prototype.hasOwnProperty.call(ok, k); };
         var q = new URLSearchParams(location.search).get('theme');
         var t = has(q) ? q : localStorage.getItem('jcf_theme');
@@ -75,7 +75,7 @@
        reset background-image, which deleted dark's ambient wash entirely.
        :where() drops these to zero specificity so the real stylesheet always
        wins once loaded, and background-color cannot touch the image. */
-    :where(html),:where(body){background-color:#FFEFEA;color:#27130A;font-family:'Manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased}
+    :where(html),:where(body){background-color:#F5F6F8;color:#27130A;font-family:'Manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased}
     :where(html[data-theme="dark"]),:where(html[data-theme="dark"] body){background-color:#1A110C;color:#F8ECE6}
     :where(html[data-theme="colorful"]),:where(html[data-theme="colorful"] body){background-color:#FFD8E2;color:#2A0F16}
     :where(html[data-theme="classic"]),:where(html[data-theme="classic"] body){background-color:#F6F2EA;color:#201B12;font-family:'Archivo',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
@@ -108,11 +108,11 @@
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400..800&display=swap" /></noscript>
 
   <!-- App stylesheets: the query string busts the cache when CSS changes -->
-  <link rel="stylesheet" href="css/variables.css?v=20261006j" />
-  <link rel="stylesheet" href="css/base.css?v=20261006j" />
-  <link rel="stylesheet" href="css/components.css?v=20261006j" />
-  <link rel="stylesheet" href="css/layout.css?v=20261006j" />
-  <link rel="stylesheet" href="css/dashboard.css?v=20261006j" />
+  <link rel="stylesheet" href="css/variables.css?v=20261007k" />
+  <link rel="stylesheet" href="css/base.css?v=20261007k" />
+  <link rel="stylesheet" href="css/components.css?v=20261007k" />
+  <link rel="stylesheet" href="css/layout.css?v=20261007k" />
+  <link rel="stylesheet" href="css/dashboard.css?v=20261007k" />
 
   <!-- Favicon (inline SVG data URI) -->
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2327130A' stroke-width='2'><path d='M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z'/></svg>" />
@@ -143,7 +143,7 @@
   <script defer crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1"></script>
 
   <!-- App entry point: the query string busts the browser cache when JS changes -->
-  <script type="module" src="js/app.js?v=20261006j"></script>
+  <script type="module" src="js/app.js?v=20261007k"></script>
 
   <!-- Boot watchdog: surfaces a clear error if external scripts fail to load
        (network blocked, CDN down, captive portal, etc.) instead of leaving

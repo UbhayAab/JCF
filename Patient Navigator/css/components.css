@@ -798,7 +798,9 @@ button { -webkit-tap-highlight-color: transparent; }
   transition: all var(--fast) var(--ease); }
 .cohort-chip:hover { border-color: var(--primary-soft-2); color: var(--ink); }
 .cohort-chip.on { background: var(--panel-2); color: var(--panel-text); border-color: var(--panel-3); }
-.cohort-chip .cc-n { opacity: 0.6; margin-left: 5px; }
+/* The count is quieter by ink, not opacity: --ink-2 at 0.6 on white was 3.18:1. */
+.cohort-chip .cc-n { color: var(--ink-3); margin-left: 5px; }
+.cohort-chip.on .cc-n { color: var(--panel-text-2); }
 
 /* ============================================================
    Analytics cohort filters
