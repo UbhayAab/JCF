@@ -1410,5 +1410,13 @@ button { -webkit-tap-highlight-color: transparent; }
 .ci-fallback p { margin: 0; font-size: 15px; line-height: 1.55; color: #eee; max-width: 420px; }
 .ci-fallback[hidden] { display: none; }
 .ci-camera.ci-nolive { background: #151515; }
+.ci-fallback .ci-copy { color: #fff; }
+/* The number check is a sentence that decides what happens to the papers: phones wrap it, never cut it. */
+#ci-phone-status .due-meta { white-space: normal; overflow: visible; }
+#mode-camera { scroll-margin-top: calc(var(--header-h) + 12px); }
+.ci-next { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
+.ci-next[hidden] { display: none; }
+.ci-next-line { display: flex; align-items: flex-start; gap: 10px; font-weight: 600; line-height: 1.45; }
+.ci-next-line svg { flex: none; width: 22px; height: 22px; color: var(--ok); }
 .ci-agree { display: flex; align-items: center; gap: 10px; min-height: 44px; font-weight: 600; cursor: pointer; }
 .ci-agree input { width: 22px; height: 22px; accent-color: var(--primary); }

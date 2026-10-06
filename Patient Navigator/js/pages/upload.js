@@ -255,7 +255,7 @@ export async function renderUpload(container) {
     <div class="page-header">
       <div>
         <h1>Upload leads &amp; documents</h1>
-        <p class="header-subtitle" style="margin:0">Add the numbers you've gathered. A hospital + phone is enough; include more columns if you have them. The manager allots them to caregiver mentors from the auto-distribute. Photograph the family's hospital papers while they are with you: <strong>Camera</strong> takes one family after another, page after page, <strong>Add one</strong> takes them with a detailed form, and <strong>Upload documents</strong> adds them to anyone you added before.</p>
+        <p class="header-subtitle" style="margin:0">Add the numbers you've gathered. A hospital + phone is enough; include more columns if you have them. The manager allots them to caregiver mentors from the auto-distribute. Photograph the family's hospital papers while they are with you: <strong>Camera</strong> takes one family after another, page after page, <strong>Add one</strong> takes them with a detailed form, and <strong>Upload documents</strong> adds them to anyone you added before, with the same camera or from your files.</p>
       </div>
     </div>
 
@@ -364,9 +364,12 @@ export async function renderUpload(container) {
 
     <div class="card" id="mode-docs" style="max-width:760px;display:none">
       <div class="field" style="margin-bottom:var(--s3)">
-        <label>Upload documents for a patient you added</label>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+          <label for="d-search" style="margin:0">Upload documents for a patient you added</label>
+          <button type="button" class="btn btn-secondary btn-sm" id="d-new">${icon('plus')}New patient</button>
+        </div>
         <input class="input" id="d-search" type="search" placeholder="Search by name, phone or PAT code" autocomplete="off" />
-        <span class="form-hint" style="display:block;margin-top:6px">Everyone you have added is listed, newest first, with the documents already on file. Upload opens your camera or files; the family has to agree once before anything is read.</span>
+        <span class="form-hint" style="display:block;margin-top:6px">Everyone you have added is listed, newest first, with the documents already on file. Camera photographs page after page for that patient; Upload picks photos or PDFs already on the phone. The family has to agree once before anything is read.</span>
       </div>
       <div id="d-list" class="wrap-meta"><div class="sk skeleton-row"></div><div class="sk skeleton-row"></div></div>
       <div style="margin-top:var(--s5)">
@@ -530,19 +533,32 @@ export async function renderUpload(container) {
   // ---- Camera: Add patient, photograph every page, Close file (Fixboard #8) ----
   // Loaded the first time the tab opens; the files of this visit and their
   // uploads live in the module, so they carry on when this page is redrawn.
-  let cameraMounted = false;
-  async function mountCamera() {
-    if (cameraMounted) return;
-    cameraMounted = true;
-    const host = $('#mode-camera');
-    host.innerHTML = '<div class="sk skeleton-row"></div>';
-    try {
-      const { mountCameraIntake } = await import('../components/cameraIntake.js');
-      mountCameraIntake(host, { hospital: selectedHospital });
-    } catch (e) {
-      cameraMounted = false;
-      host.innerHTML = `<div class="card due-meta" style="max-width:760px;color:var(--danger)">The camera could not load: ${sanitize(e.message)}. Refresh the app, or use Add one.</div>`;
+  let cameraMount = null;
+  function mountCamera() {
+    if (!cameraMount) {
+      cameraMount = (async () => {
+        const host = $('#mode-camera');
+        host.innerHTML = '<div class="sk skeleton-row"></div>';
+        try {
+          const { mountCameraIntake } = await import('../components/cameraIntake.js');
+          mountCameraIntake(host, { hospital: selectedHospital });
+          return true;
+        } catch (e) {
+          cameraMount = null;
+          host.innerHTML = `<div class="card due-meta" style="max-width:760px;color:var(--danger)">The camera could not load: ${sanitize(e.message)}. Refresh the app, or use Add one.</div>`;
+          return false;
+        }
+      })();
     }
+    return cameraMount;
+  }
+  // Fixboard #15: the same camera for someone already added (their number and
+  // name filled in), or empty for a new patient.
+  async function cameraFor(phone, name) {
+    showMode('camera');
+    if (!(await mountCamera())) return;
+    const { prefillCameraIntake } = await import('../components/cameraIntake.js');
+    if (typeof prefillCameraIntake === 'function') prefillCameraIntake({ phone, name });
   }
   // The Ground POC's job at the hospital is the camera loop, so the page opens on it.
   if (['ground_poc', 'uploader'].includes(role)) showMode('camera');
@@ -582,7 +598,8 @@ export async function renderUpload(container) {
             </div>
             <div class="row-actions">
               ${d && d.uploads ? `<button type="button" class="btn btn-ghost btn-sm" data-d-view="${p.id}" data-name="${sanitize(name)}">${icon('fileText')}View</button>` : ''}
-              <button type="button" class="btn btn-primary btn-sm" data-d-up="${p.id}">${icon('upload')}Upload</button>
+              ${p.phone_full ? `<button type="button" class="btn btn-primary btn-sm" data-d-cam="${p.id}" data-phone="${sanitize(p.phone_full)}" data-name="${sanitize(p.full_name || '')}">${icon('camera')}Camera</button>` : ''}
+              <button type="button" class="btn btn-secondary btn-sm" data-d-up="${p.id}">${icon('upload')}Upload</button>
             </div>
           </div>`;
         }).join('')}</div>`;
@@ -590,6 +607,8 @@ export async function renderUpload(container) {
           const { openDocumentBatch } = await import('./docBatch.js');
           await openDocumentBatch(b.dataset.dUp);
         }));
+        list.querySelectorAll('[data-d-cam]').forEach(b => b.addEventListener('click', () =>
+          cameraFor(b.dataset.phone, b.dataset.name)));
         list.querySelectorAll('[data-d-view]').forEach(b => b.addEventListener('click', () =>
           openDocumentViewer({ patientId: b.dataset.dView, patientName: b.dataset.name || '' })));
       }
@@ -625,6 +644,7 @@ export async function renderUpload(container) {
 
   let searchTimer = null;
   $('#d-search')?.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadDocsTab, 350); });
+  $('#d-new')?.addEventListener('click', () => cameraFor('', ''));
 
   // ---- Documents picked on the Add one form --------------------------------
   let pickedDocs = [];

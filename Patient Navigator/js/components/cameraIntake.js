@@ -8,10 +8,17 @@
 //   Add patient   the phone number (the key), a name, anything else in one box
 //   Camera        page after page without leaving the app
 //   Close file    filed under that patient and read by the same document reader
+//   New patient   the empty form, for the next family (Fixboard #15)
 // Photos upload one at a time as they are taken and keep trying on a weak
 // network, so Close file never waits for the hospital's signal. A browser that
-// will not lend the app its camera (the Android wrapper app, until its next
-// release) gets the phone's own camera or gallery instead, one tap per photo.
+// will not lend the app its camera gets the phone's own camera or gallery
+// instead, one tap per photo. The Android wrapper app lends neither until its
+// next release (no camera permission, and its file chooser ignores `capture`),
+// so there the fallback says so and offers the gallery and Chrome.
+//
+// There is no limit on photos (Fixboard #15). The reader sorts at most 80
+// pages per batch, so a long file is filed as several batches of PART_PAGES,
+// and a photo's full-size copy is let go once it has uploaded.
 //
 // Loaded on demand by the Upload page, and it loads the reader the same way, so
 // a phone still holding yesterday's modules can start today's app
@@ -24,12 +31,14 @@ import { icon } from './icons.js';
 import { sanitize } from '../utils/validators.js';
 
 const BUCKET = 'patient-docs';
-const MAX_PHOTOS = 60;                       // per family; a file this long is two visits
+const PART_PAGES = 60;                       // photos per batch; doc-parse sorts up to 80
 const RETRY_DELAYS_S = [2, 4, 8, 15, 30, 30, 60, 60, 120, 120];
 const STILL_TIMEOUT_MS = 4000;               // a still that takes longer falls back to a frame
 const CONSENT_LINE = 'If you let me photograph your hospital papers, we will read them so that we can help '
   + 'you better, and you will not have to explain everything again on every call. We keep them safely, and '
   + 'you can ask us to delete them at any time. Is that all right?';
+// The Android wrapper app names itself in its user agent (MainActivity) and adds a bridge.
+const IN_APP = /CarcinomeNavigator/i.test(navigator.userAgent || '') || !!window.CarcinomeNative;
 
 /** Every file opened in this visit, newest first. It outlives the tab view: uploads carry on elsewhere. */
 const files = [];
@@ -123,15 +132,7 @@ async function prepare(file) {
     const docs = await import('../pages/documents.js');
     const agreed = await withRetry(() => docs.hasDocumentConsent(file.patientId), { onWait: () => setState(file, 'waiting') });
     if (!agreed) await withRetry(() => docs.recordConsent(file.patientId, true, 'in_person'), { onWait: () => setState(file, 'waiting') });
-    const sb = getSupabase();
-    const batch = await withRetry(async () => {
-      const { data, error } = await sb.from('document_batches').insert({
-        patient_id: file.patientId, uploaded_by: getCurrentUser()?.id, source_files: 0, status: 'uploading',
-      }).select('id').single();
-      if (error) throw error;
-      return data;
-    }, { onWait: () => setState(file, 'waiting') });
-    file.batchId = batch.id;
+    file.batchId = await withRetry(() => batchFor(file, 0), { onWait: () => setState(file, 'waiting') });
     setState(file, 'uploading');
     pump();
     maybeFinalize(file);
@@ -140,15 +141,27 @@ async function prepare(file) {
   }
 }
 
+/**
+ * The batch that holds one part of a file, made the first time a photo of that
+ * part needs it. Uploads run one at a time (pump), so a part never gets two.
+ * The caller retries.
+ */
+async function batchFor(file, part) {
+  if (!file.batches[part]) {
+    const { data, error } = await getSupabase().from('document_batches').insert({
+      patient_id: file.patientId, uploaded_by: getCurrentUser()?.id, source_files: 0, status: 'uploading',
+    }).select('id').single();
+    if (error) throw error;
+    file.batches[part] = data.id;
+  }
+  return file.batches[part];
+}
+
 // ------------------------------------------------------------------ photos
 
 async function addPhoto(file, blob, name) {
-  const live = file.pages.filter((p) => !p.removed).length;
-  if (live >= MAX_PHOTOS) {
-    showToast(`That is ${MAX_PHOTOS} photos for one family. Close this file and open another for the rest.`, 'warning');
-    return;
-  }
-  const page = { n: file.next++, name, state: 'rendering', url: URL.createObjectURL(blob) };
+  const n = file.next++;
+  const page = { n, part: Math.floor(n / PART_PAGES), name, state: 'rendering', url: URL.createObjectURL(blob) };
   file.pages.push(page);
   paintStrip(file);
   file.render = file.render.then(async () => {
@@ -185,15 +198,21 @@ function removePhoto(file, n) {
 
 async function uploadPage(file, page) {
   const sb = getSupabase();
-  const stem = `${file.patientId}/${file.batchId}/p${String(page.n).padStart(3, '0')}`;
+  const batchId = await batchFor(file, page.part);
+  const stem = `${file.patientId}/${batchId}/p${String(page.n).padStart(3, '0')}`;
   for (const [path, blob] of [[`${stem}.jpg`, page.full.blob], [`${stem}_t.jpg`, page.thumb.blob]]) {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const { error } = await sb.storage.from(BUCKET).upload(path, bytes, { contentType: 'image/jpeg', upsert: false });
     // A retry after a reply that never arrived finds its own object already there.
     if (error && !/already exists|duplicate/i.test(error.message || '')) throw error;
   }
+  page.batchId = batchId;
   page.path = `${stem}.jpg`;
   page.thumbPath = `${stem}_t.jpg`;
+  // Stored now: keep what filing needs, and let a long file's photos leave memory.
+  page.meta = { width: page.full.width, height: page.full.height, size: page.full.blob.size };
+  page.full = null;
+  page.thumb = null;
 }
 
 async function forgetStored(page) {
@@ -254,65 +273,82 @@ function maybeFinalize(file) {
   finalize(file, kept).finally(() => { file.finalizing = false; });
 }
 
-async function finalize(file, kept) {
+/** One batch's pages, in the order they were taken, handed over for reading. Safe to run twice. */
+async function fileBatch(file, batchId, pages) {
   const sb = getSupabase();
+  // One insert, all or nothing: a retry after a lost reply finds the rows there.
+  const { data: already } = await sb.from('document_pages').select('id').eq('batch_id', batchId).limit(1);
+  if (!already?.length) {
+    const rows = pages.map((p, i) => ({
+      batch_id: batchId, patient_id: file.patientId, page_index: i,
+      source_name: p.name, source_kind: 'image', source_page_no: null,
+      storage_path: p.path, thumb_path: p.thumbPath,
+      width: p.meta.width, height: p.meta.height, byte_size: p.meta.size, sha256: p.sha256,
+    }));
+    await withRetry(async () => {
+      const { error } = await sb.from('document_pages').insert(rows);
+      if (error && error.code !== '23505') throw error;
+    });
+  }
+  // The same page twice (a gallery pick of a photo already taken) is read once.
+  const { data: stored } = await sb.from('document_pages').select('id, page_index, sha256')
+    .eq('batch_id', batchId).order('page_index');
+  const first = {};
+  for (const r of stored || []) {
+    if (first[r.sha256] === undefined) first[r.sha256] = r.id;
+    else await sb.from('document_pages').update({ duplicate_of: first[r.sha256] }).eq('id', r.id);
+  }
+  await withRetry(async () => {
+    const { error } = await sb.from('document_batches')
+      .update({ status: 'segmenting', page_count: pages.length, source_files: pages.length }).eq('id', batchId);
+    if (error) throw error;
+  });
+}
+
+async function discardBatch(batchId) {
+  await withRetry(async () => {
+    const { error } = await getSupabase().from('document_batches')
+      .update({ status: 'discarded', note: 'Closed on the camera without photos.' }).eq('id', batchId);
+    if (error) throw error;
+  });
+}
+
+async function finalize(file, kept) {
   try {
     setState(file, 'filing');
-    if (!kept.length) {
-      await withRetry(async () => {
-        const { error } = await sb.from('document_batches')
-          .update({ status: 'discarded', note: 'Closed on the camera without photos.' }).eq('id', file.batchId);
-        if (error) throw error;
-      });
-      file.filed = true;
-      setState(file, 'empty');
-      return;
+    const filed = [];
+    // Every batch the file opened; one whose photos were all taken back is discarded.
+    for (const batchId of file.batches.filter(Boolean)) {
+      const pages = kept.filter((p) => p.batchId === batchId);
+      if (pages.length) {
+        await fileBatch(file, batchId, pages);
+        filed.push(batchId);
+      } else {
+        await discardBatch(batchId);
+      }
     }
-    // One insert, all or nothing: a retry after a lost reply finds the rows there.
-    const { data: already } = await sb.from('document_pages').select('id').eq('batch_id', file.batchId).limit(1);
-    if (!already?.length) {
-      const rows = kept.map((p, i) => ({
-        batch_id: file.batchId, patient_id: file.patientId, page_index: i,
-        source_name: p.name, source_kind: 'image', source_page_no: null,
-        storage_path: p.path, thumb_path: p.thumbPath,
-        width: p.full.width, height: p.full.height, byte_size: p.full.blob.size, sha256: p.sha256,
-      }));
-      await withRetry(async () => {
-        const { error } = await sb.from('document_pages').insert(rows);
-        if (error && error.code !== '23505') throw error;
-      });
-    }
-    // The same page twice (a gallery pick of a photo already taken) is read once.
-    const { data: stored } = await sb.from('document_pages').select('id, page_index, sha256')
-      .eq('batch_id', file.batchId).order('page_index');
-    const first = {};
-    for (const r of stored || []) {
-      if (first[r.sha256] === undefined) first[r.sha256] = r.id;
-      else await sb.from('document_pages').update({ duplicate_of: first[r.sha256] }).eq('id', r.id);
-    }
-    await withRetry(async () => {
-      const { error } = await sb.from('document_batches')
-        .update({ status: 'segmenting', page_count: kept.length, source_files: kept.length }).eq('id', file.batchId);
-      if (error) throw error;
-    });
     file.filed = true;
+    if (!filed.length) { setState(file, 'empty'); return; }
     file.pages.forEach((p) => { if (p.url) URL.revokeObjectURL(p.url); p.full = null; });
-    queueRead(file);
+    queueRead(file, filed);
   } catch (e) {
     setState(file, 'stuck', e.message);
   }
 }
 
 /** One family at a time, so a run of files does not race itself for the reader. */
-function queueRead(file) {
+function queueRead(file, batchIds) {
   setState(file, 'queued');
   reading = reading.then(async () => {
     setState(file, 'reading');
-    let ok = false;
-    try {
-      const mod = await import('../pages/docBatch.js');
-      ok = typeof mod.readStoredBatch === 'function' ? await mod.readStoredBatch(file.batchId) : false;
-    } catch { ok = false; }
+    let ok = true;
+    for (const batchId of batchIds) {
+      try {
+        const mod = await import('../pages/docBatch.js');
+        const read = typeof mod.readStoredBatch === 'function' ? await mod.readStoredBatch(batchId) : false;
+        ok = ok && !!read;
+      } catch { ok = false; }
+    }
     setState(file, ok ? 'read' : 'filed');
   });
 }
@@ -357,6 +393,17 @@ async function grab(cam) {
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
 }
 
+/** The address to paste into Chrome, where the page may use the camera. */
+async function copyChromeLink() {
+  const link = location.origin + location.pathname;
+  try {
+    await navigator.clipboard.writeText(link);
+    showToast('Link copied. Open Chrome, paste it into the address bar and sign in once.', 'success');
+  } catch {
+    showToast(`Open Chrome and go to ${link}`, 'info');
+  }
+}
+
 function stopCamera(cam) {
   cam.stream?.getTracks().forEach((t) => t.stop());
   cam.stream = null;
@@ -392,10 +439,15 @@ function openCamera(file) {
       <div class="ci-who">${sanitize(file.name || 'New patient')} <span>ends ${sanitize(file.phone.slice(-4))}</span></div>
       <button type="button" class="ci-done">Close file</button>
     </div>
-    <div class="ci-fallback" hidden>
+    <div class="ci-fallback" hidden>${IN_APP ? `
+      <p>The Navigator app cannot open the camera yet. Take the photos with the phone's camera, then tap
+        Pick photos and choose them all at once. Or open the Navigator in Chrome: the camera works there.</p>
+      <label class="btn btn-primary btn-lg">${icon('upload')}Pick photos
+        <input type="file" accept="image/*" multiple class="ci-native" hidden></label>
+      <button type="button" class="btn btn-ghost ci-copy">Copy the link for Chrome</button>` : `
       <p>This phone did not let the app use its camera directly. Take each page with the phone's camera instead: every photo comes straight back here.</p>
       <label class="btn btn-primary btn-lg">${icon('camera')}Take a photo
-        <input type="file" accept="image/*" capture="environment" class="ci-native" hidden></label>
+        <input type="file" accept="image/*" capture="environment" class="ci-native" hidden></label>`}
     </div>
     <div class="ci-bottom">
       <div class="ci-strip" aria-label="Photos in this file"></div>
@@ -435,6 +487,7 @@ function openCamera(file) {
   };
   overlay.querySelector('.ci-native').addEventListener('change', fromFiles);
   overlay.querySelector('.ci-gallery').addEventListener('change', fromFiles);
+  overlay.querySelector('.ci-copy')?.addEventListener('click', copyChromeLink);
   overlay.querySelector('.ci-strip').addEventListener('click', (e) => {
     const rm = e.target.closest('.ci-rm');
     if (rm) removePhoto(file, Number(rm.dataset.n));
@@ -469,12 +522,26 @@ function closeFile(file, { fromBack }) {
   if (!fromBack && history.state?.pnCamera) history.back();
   file.closed = true;
   const n = file.pages.filter((p) => !p.removed).length;
-  showToast(n
-    ? `File closed: ${n} photo${n === 1 ? '' : 's'} for ${file.name || 'the patient'}. They keep uploading while you carry on.`
-    : 'File closed without photos.', 'success');
+  const who = file.name || `the number ending ${file.phone.slice(-4)}`;
   resetForm();
+  showNext(n ? `Saved: ${n} photo${n === 1 ? '' : 's'} for ${who}. They keep uploading on their own.`
+             : `Closed without photos for ${who}.`);
   renderFiles();
   maybeFinalize(file);
+}
+
+/** After a file closes: what was saved, and New patient for the next family (Fixboard #15). */
+function showNext(text) {
+  if (!host?.isConnected) return;
+  host.querySelector('#ci-next-text').textContent = text;
+  host.querySelector('#ci-form').hidden = true;
+  host.querySelector('#ci-next').hidden = false;
+}
+
+function showForm() {
+  if (!host?.isConnected) return;
+  host.querySelector('#ci-next').hidden = true;
+  host.querySelector('#ci-form').hidden = false;
 }
 
 // ------------------------------------------------------------------ the form and the list
@@ -555,7 +622,7 @@ function readForm() {
 
 function newFile(form) {
   const file = { id: ++seq, phone: form.phone, name: form.name, notes: form.notes, hospital: hospitalOf(),
-                 pages: [], next: 0, render: Promise.resolve(), state: 'preparing', closed: false };
+                 pages: [], batches: [], next: 0, render: Promise.resolve(), state: 'preparing', closed: false };
   files.unshift(file);
   return file;
 }
@@ -569,6 +636,11 @@ export function mountCameraIntake(el, { hospital } = {}) {
   hospitalOf = typeof hospital === 'function' ? hospital : () => null;
   el.innerHTML = `
     <div class="card" style="max-width:760px">
+      <div id="ci-next" class="ci-next" hidden>
+        <div class="ci-next-line">${icon('checkCircle')}<span id="ci-next-text"></span></div>
+        <button type="button" class="btn btn-primary btn-lg" id="ci-new">${icon('plus')}New patient</button>
+      </div>
+      <div id="ci-form">
       <h3 style="margin:0 0 4px">Add patient</h3>
       <p class="form-hint" style="margin:0 0 14px">Type the number, the name and anything else you know, then
         photograph every page. Close the file and go straight on to the next family. Photos upload on their own.</p>
@@ -587,8 +659,14 @@ export function mountCameraIntake(el, { hospital } = {}) {
         <button type="button" class="btn btn-primary btn-lg" id="ci-open">${icon('camera')}Open camera</button>
         <button type="button" class="btn btn-ghost" id="ci-refused">They said no</button>
       </div>
+      </div>
     </div>
     <div id="ci-files" class="wrap-meta" style="max-width:760px;margin-top:var(--s4)"></div>`;
+
+  el.querySelector('#ci-new').addEventListener('click', () => {
+    showForm();
+    el.querySelector('#ci-phone').focus();
+  });
 
   const status = el.querySelector('#ci-phone-status');
   const open = el.querySelector('#ci-open');
@@ -648,8 +726,9 @@ export function mountCameraIntake(el, { hospital } = {}) {
         const { recordConsent } = await import('../pages/documents.js');
         await recordConsent(st.patient_id, false, 'in_person');
       }
-      showToast('Saved without photos. Recorded that they did not agree.', 'success');
+      const who = form.name || `the number ending ${form.phone.slice(-4)}`;
       resetForm();
+      showNext(`Saved ${who} without photos, and recorded that the family did not agree.`);
     } catch (e) {
       showToast('Could not save: ' + (e.message || 'check the network and try again'), 'error');
     } finally {
@@ -658,6 +737,23 @@ export function mountCameraIntake(el, { hospital } = {}) {
   });
 
   renderFiles();
+}
+
+/**
+ * The form, filled in for a family already on record (the Camera button on
+ * Upload documents, Fixboard #15). The number runs the same check as typing it.
+ */
+export function prefillCameraIntake({ phone = '', name = '' } = {}) {
+  if (!host?.isConnected) return false;
+  showForm();
+  const input = host.querySelector('#ci-phone');
+  input.value = tenDigits(phone) || '';
+  host.querySelector('#ci-name').value = name;
+  host.querySelector('#ci-notes').value = '';
+  host.querySelector('#ci-consent').checked = false;
+  input.dispatchEvent(new Event('input'));
+  host.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  return true;
 }
 
 // Leaving the app while photos are still on the phone loses them, so ask first.
