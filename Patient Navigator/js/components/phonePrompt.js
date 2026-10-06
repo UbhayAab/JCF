@@ -9,7 +9,7 @@
 // pre-checks so a typo is caught before the round trip.
 // ============================================================
 
-import { getRealProfile, isImpersonating } from '../auth.js';
+import { getCurrentUser, getRealProfile, isImpersonating } from '../auth.js';
 import { getSupabase } from '../supabase.js';
 import { showModal, closeModal } from './modal.js';
 import { showToast } from './toast.js';
@@ -46,8 +46,17 @@ export async function confirmMyPhone(raw) {
   return data;
 }
 
+// Throwaway test accounts sign in with .invalid addresses (RFC 2606: never a
+// person's), and some hundred browser checks would find this sheet over the
+// page they came to test. They are not asked unless a check wants exactly that
+// (tools/phone_prompt_check.mjs sets the flag).
+function isTestAccount() {
+  if (!/\.invalid$/i.test(getCurrentUser()?.email || '')) return false;
+  try { return localStorage.getItem('pn_phone_prompt_test') !== '1'; } catch { return true; }
+}
+
 function wantsPrompt() {
-  if (isImpersonating()) return false;
+  if (isImpersonating() || isTestAccount()) return false;
   const prof = getRealProfile();
   if (!prof || prof.is_active === false || prof.phone_confirmed_at) return false;
   try { if (sessionStorage.getItem(LATER_KEY)) return false; } catch { /* private mode: ask */ }
