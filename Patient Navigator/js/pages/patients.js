@@ -919,8 +919,12 @@ function holdBadge(p) {
   if (!(until > new Date())) return '';
   const days = Math.max(0, Math.ceil((until - Date.now()) / 864e5));
   const what = DISINTEREST_LABEL[p.disinterest_level];
-  return `<span class="badge badge-warn" title="No automatic reassignment until ${formatDate(p.engagement_hold_until)}. A manager can still move them by hand.">${
-    what ? sanitize(what) + ' · ' : 'Reassignment held · '}${days} day${days === 1 ? '' : 's'} left</span>`;
+  // A mentor's "not taking part" mark keeps them off call lists; the automatic
+  // hold (no level) only keeps the same mentor, and calls go on. "Reassignment
+  // held" on a new lead read as "assigned in 30 days" (Fixboard #5, sql/159).
+  return what
+    ? `<span class="badge badge-warn" title="Not on call lists until ${formatDate(p.engagement_hold_until)}.">${sanitize(what)} · ${days} day${days === 1 ? '' : 's'} left</span>`
+    : `<span class="badge badge-neutral" title="Calls go on as usual. No automatic move to another mentor until ${formatDate(p.engagement_hold_until)}; a manager can still move them by hand.">Stays with current mentor · ${days} day${days === 1 ? '' : 's'}</span>`;
 }
 
 // ---- Notes tab ----
