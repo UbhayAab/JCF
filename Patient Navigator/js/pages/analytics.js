@@ -1006,20 +1006,21 @@ async function loadNavigationOutcomes() {
     // Other, so the five headings always sum to the whole registry.
     const other = data.filter(d => !['active', 'inactive', 'deceased'].includes(d.status))
       .reduce((a, d) => a + Number(d.n), 0);
+    // Theme tokens, not hex: the light-theme hexes were 1.9 to 2.8:1 in Dark.
     const OUTCOMES = [
-      { label: 'Successfully completed', nn: 0, color: '#1E6A4F', note: 'no status marks completion yet',
+      { label: 'Successfully completed', nn: 0, color: 'var(--ok)', note: 'no status marks completion yet',
         tip: 'The program is ongoing. No patient status marks a completed navigation episode yet, so this reads 0 by definition, not because nobody finished treatment.' },
-      { label: 'Ongoing navigation', nn: n('active'), color: '#1A43A8', note: 'active in our care',
+      { label: 'Ongoing navigation', nn: n('active'), color: 'var(--info)', note: 'active in our care',
         tip: 'Patients with status "Active": currently being called and supported.' },
-      { label: 'Lost to follow-up', nn: n('inactive'), color: '#B0780E', note: 'inactive · unreachable',
+      { label: 'Lost to follow-up', nn: n('inactive'), color: 'var(--warn)', note: 'inactive · unreachable',
         tip: 'Patients with status "Inactive". We could not stay in touch with the family.' },
-      { label: 'Deceased', nn: n('deceased'), color: '#5B3FA0', note: 'families stay for bereavement care',
+      { label: 'Deceased', nn: n('deceased'), color: 'var(--violet)', note: 'families stay for bereavement care',
         tip: 'Patients with status "Deceased". Their families stay with us for bereavement support.' },
-      { label: 'Other', nn: other, color: '#6E625F', note: 'new leads awaiting first call',
+      { label: 'Other', nn: other, color: 'var(--ink-4)', note: 'new leads awaiting first call',
         tip: 'New leads: registered but navigation has not started yet (plus any status outside the four standard ones).' },
     ];
     el.innerHTML = OUTCOMES.map(o => `
-      <div title="${o.tip}" style="border:1px solid ${o.color}33;background:${o.color}0d;border-radius:var(--r-sm);padding:12px 14px;text-align:center">
+      <div title="${o.tip}" style="border:1px solid color-mix(in srgb, ${o.color} 20%, transparent);background:color-mix(in srgb, ${o.color} 5%, transparent);border-radius:var(--r-sm);padding:12px 14px;text-align:center">
         <div style="font-family:var(--font-display);font-size:26px;font-weight:790;color:${o.color}">${fmtIN(o.nn)}</div>
         <div style="font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;color:var(--ink-3)">${pct(o.nn, total)}% OF ${fmtIN(total)}</div>
         <div style="font-size:11.5px;font-weight:600;color:var(--ink-2);margin-top:4px;line-height:1.25">${o.label}</div>
