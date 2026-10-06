@@ -87,7 +87,9 @@ const TIMELINE_COLS = [
   col('Days from diagnosis', (r) => r.from_diagnosis), col('Day of the JCF journey', (r) => r.journey_day),
   col('Phase of care', (r) => r.phase), col('Cycle', (r) => r.cycle), col('Lane', (r) => r.lane),
   col('What', (r) => r.what), col('Details', (r) => r.detail), col('Hospital', (r) => r.hospital),
-  col('Report ref', (r) => r.ref, { text: true }),
+  // No text flag: in a CSV it adds a leading tab, and the ref must match the
+  // report_ref column of the dataset files exactly to join on.
+  col('Report ref', (r) => r.ref),
 ];
 
 const reportCols = (cancer) => [
@@ -176,9 +178,14 @@ const BODY_COLS = [
 // The doctor's grid: one row per test, one column per day tested. A flagged
 // value carries L or H so it reads in a printout without colour.
 export function labMatrix(fam, { keyedOnly = false, lastDays = 0 } = {}) {
-  const labs = fam.labs.filter((l) => !l.read_again_from_another_copy && l.tested_on && (!keyedOnly || l.test_key));
+  let labs = fam.labs.filter((l) => !l.read_again_from_another_copy && l.tested_on && (!keyedOnly || l.test_key));
   let dates = [...new Set(labs.map((l) => day(l.tested_on)))].sort();
-  if (lastDays && dates.length > lastDays) dates = dates.slice(-lastDays);
+  if (lastDays && dates.length > lastDays) {
+    dates = dates.slice(-lastDays);
+    // A test seen only before the kept days would be a row of empty cells.
+    const kept = new Set(dates);
+    labs = labs.filter((l) => kept.has(day(l.tested_on)));
+  }
   const tests = new Map();
   labs.forEach((l) => {
     const k = `${l.test_group}|${l.test}|${l.unit || ''}`;

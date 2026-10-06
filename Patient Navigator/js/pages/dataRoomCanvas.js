@@ -50,13 +50,14 @@ const labelWidth = () => (window.matchMedia('(max-width: 600px)').matches ? 104 
 // ============================================================
 export function renderCanvasTab(host, { code } = {}) {
   injectCanvasStyles();
-  S = { roster: null, fam: null, clusters: [], req: 0, width: 0 };
+  S = { roster: null, fam: null, clusters: [], req: 0, width: 0, host };
   host.innerHTML = `<div class="pc"><div id="pc-pick">${pickerHtml()}</div><div id="pc-fam" hidden></div></div>`;
   bindPicker(host);
   loadRoster()
     .then((r) => { if (host.isConnected) { S.roster = r; renderRoster(host); } })
     .catch((e) => setStatus(host, 'The families could not be read: ' + e.message));
-  if (code && CODE_RE.test(code)) openFamily(host, code);
+  const asked = String(code || '').trim().toUpperCase();
+  if (asked && CODE_RE.test(asked)) openFamily(host, asked);
   watchWidth(host);
 }
 
@@ -68,8 +69,12 @@ function setStatus(host, text) {
 // Keeps the address bar on the family being read, so the page can be
 // bookmarked, sent to a colleague or reloaded. replaceState fires no
 // hashchange, so the router does not draw the Data room again.
+// The address also rides on the tab's own element, so exports.js can put it
+// back when the tab is shown again without importing anything new from here
+// (a new import of a new export is what tools/stale_import_check.mjs guards).
 function setHash(code) {
   const url = `#exports?tab=canvas${code ? '&code=' + encodeURIComponent(code) : ''}`;
+  if (S.host) S.host.dataset.hash = url;
   if (window.location.hash !== url) { try { history.replaceState(null, '', url); } catch { /* file:// */ } }
 }
 
@@ -387,6 +392,7 @@ function clusterLane(list) {
 }
 
 function ticks(lo, hi) {
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) return [];
   const span = (hi - lo) / DAY_MS;
   const fmt = (t, o) => new Date(t).toLocaleDateString('en-IN', { ...o, timeZone: 'UTC' });
   const out = [];
@@ -399,11 +405,13 @@ function ticks(lo, hi) {
   let y = d.getUTCFullYear();
   let m = d.getUTCMonth() + 1;
   while (m % step !== 0) m++;
-  for (;;) {
+  // "Oct 2026", never "Oct 26", which reads as a day. Bounded: 400 ticks is
+  // 33 years of months, far past any record.
+  for (let guard = 0; guard < 400; guard++) {
     y += Math.floor(m / 12); m %= 12;
     const t = Date.UTC(y, m, 1);
     if (t > hi) break;
-    out.push({ at: t, label: step >= 12 ? String(y) : fmt(t, { month: 'short', year: '2-digit' }) });
+    out.push({ at: t, label: step >= 12 ? String(y) : fmt(t, { month: 'short', year: 'numeric' }) });
     m += step;
   }
   return out;
@@ -674,14 +682,17 @@ function drawTrend(id, s) {
     ],
   }, {
     maintainAspectRatio: false, animation: false,
-    interaction: { mode: 'nearest', intersect: false },
+    // Nearest along x, so the dashed range lines never become the hovered point.
+    interaction: { mode: 'nearest', axis: 'x', intersect: false },
     plugins: { legend: { display: false }, tooltip: { filter: (c) => c.datasetIndex === 0, callbacks: {
-      title: (its) => fmtDay(s.pts[its[0].dataIndex].tested_on),
-      label: (c) => { const p = s.pts[c.dataIndex]; return ` ${fmtVal(c.parsed.y)} ${s.unit}${OUT_OF_RANGE.includes(p.flag) ? ` (${p.flag})` : ''}`; } } } },
+      title: (its) => (its.length ? fmtDay(s.pts[its[0].dataIndex]?.tested_on) : ''),
+      label: (c) => { const p = s.pts[c.dataIndex] || {}; return ` ${fmtVal(c.parsed.y)} ${s.unit}${OUT_OF_RANGE.includes(p.flag) ? ` (${p.flag})` : ''}`; } } } },
     scales: {
       x: { type: 'linear', min: 0, max: span, ticks: { maxTicksLimit: 4,
         callback: (v) => new Date(t0 + v * DAY_MS).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }) } },
-      y: { ticks: { maxTicksLimit: 4 } },
+      // The app's charts count whole things from zero. A blood value is not
+      // a count: haemoglobin 10.2 to 12.4 must not draw flat on a 0 to 20 axis.
+      y: { beginAtZero: false, ticks: { maxTicksLimit: 4, precision: undefined } },
     },
   });
 }

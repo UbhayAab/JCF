@@ -33,7 +33,8 @@ export const day = (x) => (x ? String(x).slice(0, 10) : '');
 // can move a report to the day before.
 export const dayMs = (x) => {
   const s = day(x);
-  return s ? Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) : null;
+  const t = s ? Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) : NaN;
+  return Number.isFinite(t) ? t : null;   // 'infinity' or a stray string is no date at all
 };
 export const fmtDay = (x) => (day(x)
   ? new Date(dayMs(x)).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '');
@@ -59,8 +60,14 @@ export function papersText(s) {
 export const TEST_GROUPS = ['Blood count (CBC)', 'Liver (LFT)', 'Kidney and salts (KFT)', 'Tumour markers', 'Sugar',
   'Clotting', 'Inflammation', 'Thyroid, hormones and vitamins', 'Infection screen', 'Urine', 'Cultures', 'Other tests'];
 export const groupRank = (g) => { const i = TEST_GROUPS.indexOf(g); return i < 0 ? 99 : i; };
-export const rangeText = (l) => (l.ref_text || (num(l.ref_low) !== null || num(l.ref_high) !== null
-  ? `${fmtVal(l.ref_low ?? '')} to ${fmtVal(l.ref_high ?? '')}` : ''));
+export const rangeText = (l) => {
+  if (l.ref_text) return l.ref_text;
+  const lo = num(l.ref_low), hi = num(l.ref_high);
+  if (lo !== null && hi !== null) return `${fmtVal(lo)} to ${fmtVal(hi)}`;
+  if (hi !== null) return `up to ${fmtVal(hi)}`;
+  if (lo !== null) return `${fmtVal(lo)} or more`;
+  return '';
+};
 
 export async function run(sql, limit = PAGE_ROWS) {
   const { data, error } = await getSupabase().rpc('data_room_run', { p_sql: sql, p_limit: limit });
@@ -262,12 +269,18 @@ export function whatChanged(fam) {
   fam.cycles.filter((c) => num(c.days_later_than_planned) > 7).forEach((c) => out.push({ tone: 'warn', date: c.administered_on,
     text: `Cycle ${c.cycle_no ?? ''} of ${c.regimen_name || 'treatment'} on ${fmtDay(c.administered_on)} was ${c.days_later_than_planned} days later than planned.` }));
 
+  // Only when the papers say more cycles are due: a planned total not yet
+  // reached, a regimen not marked completed or stopped, a patient alive.
   const lastCycle = [...fam.cycles].sort(byDay('administered_on')).pop();
   const plan = num(lastCycle?.cycle_length_days);
-  if (lastCycle && plan) {
+  const regimen = lastCycle ? fam.treatment.find((t) => t.regimen_name === lastCycle.regimen_name) : null;
+  const moreDue = lastCycle && num(lastCycle.total_cycles) !== null && num(lastCycle.cycle_no) !== null
+    && num(lastCycle.cycle_no) < num(lastCycle.total_cycles)
+    && !['completed', 'stopped'].includes(regimen?.status)
+    && fam.patient?.patient_status !== 'deceased';
+  if (moreDue && plan) {
     const gap = daysBetween(lastCycle.administered_on, todayIST());
-    const finished = num(lastCycle.total_cycles) && num(lastCycle.cycle_no) >= num(lastCycle.total_cycles);
-    if (!finished && gap > 2 * plan) {
+    if (gap > 2 * plan) {
       out.push({ tone: 'plain', date: lastCycle.administered_on,
         text: `The papers stop at cycle ${lastCycle.cycle_no ?? '?'}${lastCycle.total_cycles ? ` of ${lastCycle.total_cycles}` : ''} on ${fmtDay(lastCycle.administered_on)}, ${gap} days ago, on a ${plan}-day plan. The later sheets may be worth asking the family for.` });
     }

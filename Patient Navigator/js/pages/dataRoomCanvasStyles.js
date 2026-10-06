@@ -8,6 +8,7 @@
 
 const CSS = `
 .pc{display:grid;gap:var(--s4);min-width:0}
+.pc [hidden]{display:none!important}
 .pc-fam{display:grid;gap:var(--s4);min-width:0}
 .pc>*,.pc-fam>*,.pc-cols>*{min-width:0}
 .pc-h{font:var(--t-body-strong);color:var(--ink);margin:0}

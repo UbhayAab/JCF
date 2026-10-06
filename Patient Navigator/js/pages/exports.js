@@ -632,10 +632,16 @@ export async function renderExports(container) {
     container.querySelectorAll('.dr-tab').forEach((t) => t.classList.toggle('is-active', t === tab));
     Object.entries(panes).forEach(([k, sel]) => { container.querySelector(sel).hidden = (k !== want); });
     // The header button and the cohort filter belong to the datasets tab only.
+    // .btn sets display, which beats the hidden attribute, so set it directly.
     const allBtnEl = container.querySelector('#dr-all');
-    if (allBtnEl) allBtnEl.hidden = want !== 'datasets';
-    // replaceState fires no hashchange, so the router does not draw the page again.
-    if (!keepHash) { try { history.replaceState(null, '', want === 'datasets' ? '#exports' : `#exports?tab=${want}`); } catch { /* file:// */ } }
+    if (allBtnEl) allBtnEl.style.display = want === 'datasets' ? '' : 'none';
+    // replaceState fires no hashchange, so the router does not draw the page
+    // again. The canvas keeps the open family in its link (data-hash).
+    if (!keepHash) {
+      const pane = container.querySelector(panes[want]);
+      const url = want === 'datasets' ? '#exports' : (pane?.dataset.hash || `#exports?tab=${want}`);
+      try { history.replaceState(null, '', url); } catch { /* file:// */ }
+    }
     if (!built[want]) {
       built[want] = true;
       const host = container.querySelector(panes[want]);

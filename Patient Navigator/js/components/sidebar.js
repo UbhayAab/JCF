@@ -72,7 +72,8 @@ function getInitials(name) {
 // Which nav route should be highlighted for the current hash?
 // '#patients/abc-123' → 'patients'; '#admin/users' → 'admin/users'.
 function activeRouteFromHash() {
-  const hash = (window.location.hash || '').slice(1);
+  // '#exports?tab=canvas&code=...' and '#patients?q=...' carry a query; match the path.
+  const hash = (window.location.hash || '').slice(1).split('?')[0];
   if (!hash) return 'dashboard';
   const allRoutes = NAV_ITEMS.flatMap(s => s.items.map(i => i.route));
   if (allRoutes.includes(hash)) return hash;
