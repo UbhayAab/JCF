@@ -254,8 +254,9 @@ export function summaryPairs(fam) {
   // The AI summary, when the canvas loaded one: clearly marked, with its refs.
   const ai = fam.ai?.summary;
   if (ai) {
+    if (fam.ai.notice) pairs.push(['From the record', fam.ai.notice]);
     const lines = [ai.headline, ...(ai.points || []).map((p) => `${p.text} [${(p.refs || []).join(', ')}]`)].filter(Boolean);
-    lines.forEach((t, i) => pairs.push([i === 0 ? `Summary written by AI (${fam.ai.model}); check against the reports` : '', t]));
+    lines.forEach((t, i) => pairs.push([i === 0 ? `Summary written by AI (${fam.ai.model}), not reviewed by a person; check against the reports` : '', t]));
     (ai.not_on_file || []).forEach((g, i) => pairs.push([i === 0 ? 'Not on the papers (AI)' : '', g]));
   }
   whatChanged(fam).forEach((w, i) => pairs.push([i === 0 ? 'What changed' : '', w.text]));
@@ -331,7 +332,9 @@ function printHtml(fam) {
 <button type="button" onclick="window.print()">Print or save as PDF</button></div>
 <h1>${esc(fam.code)}</h1>
 <p class="sub">${sub.map(esc).join(' · ')}</p>
-${fam.ai?.summary ? `<h2>Summary (written by AI; check against the reports)</h2>
+${fam.ai?.summary ? `<h2>Summary written by AI, not reviewed by a person</h2>
+${fam.ai.notice ? `<p><strong>${esc(fam.ai.notice)}</strong> <span class="note">(from the record, not from the AI)</span></p>` : ''}
+<p class="note">The dates, figures, stage and low or high flags in each point were matched to the reports it cites. Open the report before relying on a sentence.</p>
 ${fam.ai.summary.headline ? `<p><strong>${esc(fam.ai.summary.headline)}</strong></p>` : ''}
 <ul>${(fam.ai.summary.points || []).map((p) => `<li>${esc(p.text)} <span class="note">[${esc((p.refs || []).join(', '))}]</span></li>`).join('')}</ul>
 ${(fam.ai.summary.not_on_file || []).length ? `<p class="note">Not on the papers: ${esc(fam.ai.summary.not_on_file.join('; '))}</p>` : ''}` : ''}

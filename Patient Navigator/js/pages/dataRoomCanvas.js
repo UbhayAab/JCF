@@ -245,13 +245,17 @@ function familyHtml(fam) {
     num(s.reports) ? `${plural(s.reports, 'report')}${s.first_report_on ? `, ${spanText(s.first_report_on, s.last_report_on)}` : ''}`
       : 'no medical papers on file yet'];
   const phase = s.care_phase_today || 'Phase not known';
+  // A death on the JCF record leads the page: nobody should read a treatment
+  // summary, or ring the family about one, without seeing it first.
+  const died = (fam.events || []).filter((e) => e.event_type === 'death').map((e) => e.event_date).filter(Boolean).sort().pop();
   return `
   <div class="pc-fam">
     ${backButton()}
     <div class="card pc-head">
       <div class="pc-head-main">
         <div class="pc-title"><h2 class="pc-code">${esc(fam.code)}</h2>
-          <span class="badge ${phase === 'During treatment' ? 'badge-info' : 'badge-neutral'}">${esc(phase)}</span></div>
+          <span class="badge ${phase === 'During treatment' ? 'badge-info' : 'badge-neutral'}">${esc(phase)}</span>
+          ${died ? `<span class="badge badge-solid" title="A death is recorded in the JCF record of calls and care">Died ${esc(fmtDay(died))}</span>` : ''}</div>
         <p class="pc-sub">${bits.filter(Boolean).map(esc).join(' · ')}</p>
       </div>
       <div class="pc-actions">
@@ -376,7 +380,7 @@ function bindFamily(host, fam) {
 // deterministic reading of the same papers.
 // ============================================================
 const AI_KIND = { diagnosis: 'Diagnosis', treatment: 'Treatment', scans: 'Scans', blood_tests: 'Blood tests', jcf: 'With JCF', other: 'Also' };
-const aiShell = (inner) => `<h3 class="pc-h" id="pc-ai-h">Summary <span class="badge badge-info">AI</span></h3>${inner}`;
+const aiShell = (inner) => `<h3 class="pc-h" id="pc-ai-h">Summary written by AI</h3>${inner}`;
 
 async function callSummary(code, force) {
   const { data, error } = await getSupabase().functions.invoke('canvas-summary', { body: { code, force } });
@@ -420,13 +424,18 @@ function aiHtml(fam, d) {
   const when = d.created_at ? new Date(d.created_at).toLocaleString('en-IN',
     { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '';
   const left = num(d.points_dropped)
-    ? ` ${plural(d.points_dropped, 'point was', 'points were')} left out because ${num(d.points_dropped) === 1 ? 'it' : 'they'} named a figure the papers do not hold or cited no report.` : '';
+    ? `, and ${plural(d.points_dropped, 'point that did', 'points that did')} not match ${num(d.points_dropped) === 1 ? 'was' : 'were'} left out` : '';
+  // The death line is the function's fixed sentence from the record, never the model's.
+  const notice = d.notice ? `<p class="pc-ai-notice" role="note">${esc(d.notice)} This line comes from the record, not from the AI.</p>` : '';
+  const recent = d.recent ? '<p class="pc-note">A summary was written for this family in the last ten minutes, so that one is shown again rather than rewritten.</p>' : '';
   return aiShell(`
+    ${notice}
     ${s.headline ? `<p class="pc-ai-head">${esc(s.headline)}</p>` : ''}
     ${points ? `<ul class="pc-ai-points">${points}</ul>` : '<p class="pc-note">Nothing in the summary survived the check against the papers. "What changed" below still holds.</p>'}
     ${gaps ? `<div class="pc-ai-gaps"><strong>Not on the papers</strong><ul>${gaps}</ul></div>` : ''}
+    ${recent}
     <div class="pc-ai-foot">
-      <p class="pc-note">Written by AI (${esc(d.model || 'model')})${when ? ` on ${esc(when)}` : ''} from ${plural(d.reports, 'report')} on file. Each point names the reports it rests on, and every figure in it was checked against them.${left} Check anything important against the report itself.</p>
+      <p class="pc-note">Written by AI (${esc(d.model || 'model')})${when ? ` on ${esc(when)}` : ''} from ${plural(d.reports, 'report')} on file, and not reviewed by a person. The dates, figures, stage and low or high flags in each point were matched to the reports it cites${left}. Open the report before relying on a sentence.</p>
       <button type="button" class="btn btn-ghost btn-sm" id="pc-ai-again" title="Ask for a fresh summary">Write it again</button>
     </div>`);
 }

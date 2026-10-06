@@ -59,6 +59,7 @@ const CSS = `
 .pc-empty{padding:16px}
 .pc-ai{display:grid;gap:10px;border-left:4px solid var(--info)}
 .pc-ai-head{margin:0;font:var(--t-body-strong);color:var(--ink)}
+.pc-ai-notice{margin:0;padding:8px 12px;border-radius:8px;border-left:4px solid var(--ink);background:var(--surface-2);font:var(--t-body-strong);color:var(--ink)}
 .pc-ai-points{list-style:none;margin:0;padding:0;display:grid;gap:8px}
 .pc-ai-points li{display:grid;grid-template-columns:96px minmax(0,1fr);gap:2px 12px;font:var(--t-sm);color:var(--ink-2)}
 .pc-ai-kind{font:700 11px/1.7 var(--font-ui);letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
