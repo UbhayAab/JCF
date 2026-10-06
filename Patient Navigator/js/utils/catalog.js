@@ -410,7 +410,10 @@ export const INSTRUMENTS = {
         options: [['Over 20 (healthy)', 0], ['18.5-20 (low)', 1], ['Under 18.5 (very low)', 2]] },
       { q: 'Unplanned weight loss over the last 3-6 months',
         hindi: 'Pichle kuch mahino mein wazan kam hua hai?',
-        options: [['Under 5%', 0], ['5-10%', 1], ['Over 10%', 2]] },
+        // Fixboard #6: "Under 5%" read as "lost about 5%", so a patient who lost
+        // nothing (or gained) had no honest answer. MUST scores both 0; answers
+        // are saved as points, so earlier scores mean exactly what they did.
+        options: [['No loss, or gained', 0], ['Lost under 5%', 0], ['Lost 5-10%', 1], ['Lost over 10%', 2]] },
       { q: 'Is the patient acutely unwell AND has had little or no food for more than 5 days?',
         hindi: 'Khana khane mein dikkat hoti hai (kam khaana, nigalne mein problem)? 5 din se zyada se kam khaaya?',
         options: [['No', 0], ['Yes', 2]] },

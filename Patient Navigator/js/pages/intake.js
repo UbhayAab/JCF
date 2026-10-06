@@ -52,12 +52,18 @@ export async function renderIntake(container) {
   const sb = getSupabase();
   const $ = (s) => container.querySelector(s);
 
+  // A report that arrives after a newer choice is dropped: picking another
+  // uploader while the default one is still loading used to show the first
+  // report under the second name (found 2026-10-06 checking Fixboard #11).
+  let loadSeq = 0;
   async function loadReport(uploaderId, name) {
+    const mine = ++loadSeq;
     uploaderName = name || me?.full_name || 'uploader';
     const tableEl = $('#ir-table');
     tableEl.innerHTML = Array(5).fill('<div class="skeleton skeleton-row" style="height:48px;margin-bottom:8px"></div>').join('');
     try {
       const { data, error } = await sb.rpc('get_intake_report', uploaderId ? { p_uploader: uploaderId } : {});
+      if (mine !== loadSeq) return;
       if (error) throw error;
       rows = data || [];
       renderTiles(container);
@@ -65,6 +71,7 @@ export async function renderIntake(container) {
       renderTable(container);
       $('#ir-download').disabled = rows.length === 0;
     } catch (e) {
+      if (mine !== loadSeq) return;
       tableEl.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Couldn't load the report</h4><p>${e.message}</p></div>`;
     }
   }
@@ -102,7 +109,13 @@ function renderTiles(container) {
   rows.forEach(r => { const h = normHospital(r.treating_hospital); if (h) byHospital[h] = (byHospital[h] || 0) + 1; });
   const top = Object.entries(byHospital).sort((a, b) => b[1] - a[1])[0];
   const reached = rows.filter(r => Number(r.connected_calls) > 0).length;
-  const waiting = rows.filter(r => r.patient_status === 'new_lead').length;
+  // Fixboard #11: "Waiting, new leads not yet called" counted every family not
+  // reached yet, so families who had been called but had not answered looked
+  // untouched (13 of 49 for the reporter). Three exact numbers that add up to
+  // the total instead: reached, called but not reached yet, not called at all.
+  const tried = rows.filter(r => Number(r.total_calls) > 0 && !(Number(r.connected_calls) > 0)).length;
+  const untouched = rows.filter(r => !(Number(r.total_calls) > 0));
+  const fresh = untouched.filter(r => r.uploaded_at && Date.now() - new Date(r.uploaded_at).getTime() < 2 * 864e5).length;
   const el = container.querySelector('#ir-tiles');
   if (!el) return;
   const tile = (big, label, sub, ico, cls = '') => `
@@ -114,7 +127,8 @@ function renderTiles(container) {
     tile(total, `Onboarded by ${sanitize(uploaderName)}`, 'since they joined', 'users') +
     tile(top ? top[1] : 0, top ? `From ${sanitize(top[0])}` : 'From hospitals', top ? 'the number for the doctors' : '', 'mapPin') +
     tile(reached, 'Reached', 'at least one connected call', 'phoneCall') +
-    tile(waiting, 'Waiting', 'new leads not yet called', 'inbox');
+    tile(tried, 'Called, not reached yet', 'calls made, nobody has answered yet', 'phoneOff') +
+    tile(untouched.length, 'Not called yet', fresh ? `${fresh} of them added in the last 2 days` : 'no call made so far', 'inbox');
 }
 
 // Hospital names arrive in many spellings. Group them loosely for the
