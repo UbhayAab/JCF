@@ -57,6 +57,19 @@ const CSS = `
 .pc-tl-labels[hidden]{display:none}
 .pc-scroll{flex:1 1 auto;min-width:0;overflow-x:auto}
 .pc-empty{padding:16px}
+.pc-ai{display:grid;gap:10px;border-left:4px solid var(--info)}
+.pc-ai-head{margin:0;font:var(--t-body-strong);color:var(--ink)}
+.pc-ai-points{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.pc-ai-points li{display:grid;grid-template-columns:96px minmax(0,1fr);gap:2px 12px;font:var(--t-sm);color:var(--ink-2)}
+.pc-ai-kind{font:700 11px/1.7 var(--font-ui);letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
+.pc-ref{display:inline-flex;align-items:center;min-height:24px;min-width:24px;padding:0 8px;margin-left:6px;border-radius:999px;border:1px solid var(--line-2);background:var(--surface-2);color:var(--ink-2);font:700 11px/1 var(--font-ui);cursor:pointer;vertical-align:baseline}
+.pc-ref.is-record{cursor:help;font-weight:600}
+.pc-ref:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.pc-ai-gaps{font:var(--t-sm);color:var(--ink-2)}
+.pc-ai-gaps ul{margin:4px 0 0;padding-left:18px}
+.pc-ai-foot{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px 12px;border-top:1px solid var(--line);padding-top:10px}
+.pc-ai-foot .pc-note{flex:1 1 320px}
+@media (max-width:600px){.pc-ai-points li{grid-template-columns:minmax(0,1fr)}}
 .pc-loading{display:flex;align-items:center;gap:12px}
 .pc-loading .spinner{margin:0;flex:none}
 .pc-track{position:relative}

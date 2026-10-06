@@ -251,6 +251,13 @@ export function summaryPairs(fam) {
     ['Support delivered', countEvents(fam, 'support_delivered')],
     ['Concerns escalated', countEvents(fam, 'concern_raised')],
   ];
+  // The AI summary, when the canvas loaded one: clearly marked, with its refs.
+  const ai = fam.ai?.summary;
+  if (ai) {
+    const lines = [ai.headline, ...(ai.points || []).map((p) => `${p.text} [${(p.refs || []).join(', ')}]`)].filter(Boolean);
+    lines.forEach((t, i) => pairs.push([i === 0 ? `Summary written by AI (${fam.ai.model}); check against the reports` : '', t]));
+    (ai.not_on_file || []).forEach((g, i) => pairs.push([i === 0 ? 'Not on the papers (AI)' : '', g]));
+  }
   whatChanged(fam).forEach((w, i) => pairs.push([i === 0 ? 'What changed' : '', w.text]));
   pairs.push(['Note', 'De-identified: patient code only. Read off the papers the family shared with JCF and reviewed by a mentor. Phases of care are as the papers on file show them, not a clinical judgement.']);
   return pairs.filter(([, v]) => v !== '' && v !== null && v !== undefined).map(([k, v]) => ({ k, v }));
@@ -324,6 +331,10 @@ function printHtml(fam) {
 <button type="button" onclick="window.print()">Print or save as PDF</button></div>
 <h1>${esc(fam.code)}</h1>
 <p class="sub">${sub.map(esc).join(' · ')}</p>
+${fam.ai?.summary ? `<h2>Summary (written by AI; check against the reports)</h2>
+${fam.ai.summary.headline ? `<p><strong>${esc(fam.ai.summary.headline)}</strong></p>` : ''}
+<ul>${(fam.ai.summary.points || []).map((p) => `<li>${esc(p.text)} <span class="note">[${esc((p.refs || []).join(', '))}]</span></li>`).join('')}</ul>
+${(fam.ai.summary.not_on_file || []).length ? `<p class="note">Not on the papers: ${esc(fam.ai.summary.not_on_file.join('; '))}</p>` : ''}` : ''}
 <h2>What changed</h2>
 ${changed.length ? `<ul>${changed.map((w) => `<li class="${w.tone === 'plain' ? '' : esc(w.tone)}">${esc(w.text)}</li>`).join('')}</ul>` : '<p class="note">Nothing on the papers says anything changed.</p>'}
 <h2>The record in short</h2>

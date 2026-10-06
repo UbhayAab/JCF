@@ -221,6 +221,7 @@ async function openFamily(host, code) {
     drawCanvas(host, fam);
     drawTrends(host, fam);
     drawReports(host, fam, '');
+    if (num(fam.summary?.reports) > 0) loadAiSummary(host, fam);
     window.scrollTo?.({ top: Math.max(0, famEl.getBoundingClientRect().top + window.scrollY - 90), behavior: 'smooth' });
   } catch (e) {
     if (req !== S.req || !host.isConnected) return;
@@ -260,6 +261,7 @@ function familyHtml(fam) {
         ${isManagerOrAdmin() ? `<button class="btn btn-ghost btn-sm" id="pc-record" type="button" title="The family's record, with names and the original papers">${icon('fileText')}Open the record</button>` : ''}
       </div>
     </div>
+    <section class="card pc-ai" id="pc-ai" aria-labelledby="pc-ai-h" aria-live="polite" hidden></section>
     <div class="pc-cols">
       <section class="card" aria-labelledby="pc-changed-h"><h3 class="pc-h" id="pc-changed-h">What changed</h3>${changedHtml(fam)}</section>
       <section class="card" aria-labelledby="pc-facts-h"><h3 class="pc-h" id="pc-facts-h">The record in short</h3>${factsHtml(fam)}</section>
@@ -357,10 +359,76 @@ function bindFamily(host, fam) {
   };
   host.querySelector('#pc-undated').addEventListener('click', openReport);
   host.querySelector('#pc-reports').addEventListener('click', openReport);
+  host.querySelector('#pc-ai').addEventListener('click', (e) => {
+    if (e.target.closest('#pc-ai-again')) { loadAiSummary(host, fam, true); return; }
+    openReport(e);
+  });
   host.querySelector('#pc-groups').addEventListener('click', (e) => {
     const chip = e.target.closest('[data-group]');
     if (chip) drawReports(host, fam, chip.dataset.group);
   });
+}
+
+// ============================================================
+// The AI summary (supabase/functions/canvas-summary). Written from the same
+// de-identified record, every point checked against it by the function's
+// guard, kept until the record changes. "What changed" below stays the
+// deterministic reading of the same papers.
+// ============================================================
+const AI_KIND = { diagnosis: 'Diagnosis', treatment: 'Treatment', scans: 'Scans', blood_tests: 'Blood tests', jcf: 'With JCF', other: 'Also' };
+const aiShell = (inner) => `<h3 class="pc-h" id="pc-ai-h">Summary <span class="badge badge-info">AI</span></h3>${inner}`;
+
+async function callSummary(code, force) {
+  const { data, error } = await getSupabase().functions.invoke('canvas-summary', { body: { code, force } });
+  if (!error) return data;
+  let body = null;
+  try { body = await error.context?.json?.(); } catch { /* not json */ }
+  if (body) return body;
+  throw new Error(error.message || 'The summary service could not be reached.');
+}
+
+async function loadAiSummary(host, fam, force = false) {
+  const card = host.querySelector('#pc-ai');
+  if (!card) return;
+  const req = S.req;
+  card.hidden = false;
+  card.innerHTML = aiShell(`<div class="pc-loading"><div class="spinner" aria-hidden="true"></div>
+    <p class="pc-note" role="status">${force ? 'Writing it again' : 'Writing a summary'} from the papers on file. This takes about ten seconds the first time.</p></div>`);
+  try {
+    const d = await callSummary(fam.code, force);
+    if (req !== S.req || !host.isConnected) return;
+    if (!d?.ok) throw new Error(d?.reason || 'The summary could not be written.');
+    if (d.skipped) { card.hidden = true; return; }
+    fam.ai = d;   // the workbook and the printed page carry it
+    card.innerHTML = aiHtml(fam, d);
+  } catch (e) {
+    if (req !== S.req || !host.isConnected) return;
+    card.innerHTML = aiShell(`<p class="pc-note">The summary could not be written: ${esc(e.message)}</p>
+      <div><button type="button" class="btn btn-ghost btn-sm" id="pc-ai-again">Try again</button></div>`);
+  }
+}
+
+function aiHtml(fam, d) {
+  const s = d.summary || {};
+  const known = new Set(fam.reports.map((r) => r.report_ref));
+  const ref = (r) => (r === 'record'
+    ? '<span class="pc-ref is-record" title="From the patient\'s profile or the JCF record of calls and care, not from a report">record</span>'
+    : known.has(r) ? `<button type="button" class="pc-ref" data-report="${esc(r)}" title="Open ${esc(r)}">${esc(r.replace(/^.*-(R\d+)$/, '$1'))}</button>` : '');
+  const points = (s.points || []).map((p) => `<li><span class="pc-ai-kind">${esc(AI_KIND[p.kind] || 'Also')}</span>
+    <span>${esc(p.text)}${(p.refs || []).map(ref).join('')}</span></li>`).join('');
+  const gaps = (s.not_on_file || []).map((g) => `<li>${esc(g)}</li>`).join('');
+  const when = d.created_at ? new Date(d.created_at).toLocaleString('en-IN',
+    { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '';
+  const left = num(d.points_dropped)
+    ? ` ${plural(d.points_dropped, 'point was', 'points were')} left out because ${num(d.points_dropped) === 1 ? 'it' : 'they'} named a figure the papers do not hold or cited no report.` : '';
+  return aiShell(`
+    ${s.headline ? `<p class="pc-ai-head">${esc(s.headline)}</p>` : ''}
+    ${points ? `<ul class="pc-ai-points">${points}</ul>` : '<p class="pc-note">Nothing in the summary survived the check against the papers. "What changed" below still holds.</p>'}
+    ${gaps ? `<div class="pc-ai-gaps"><strong>Not on the papers</strong><ul>${gaps}</ul></div>` : ''}
+    <div class="pc-ai-foot">
+      <p class="pc-note">Written by AI (${esc(d.model || 'model')})${when ? ` on ${esc(when)}` : ''} from ${plural(d.reports, 'report')} on file. Each point names the reports it rests on, and every figure in it was checked against them.${left} Check anything important against the report itself.</p>
+      <button type="button" class="btn btn-ghost btn-sm" id="pc-ai-again" title="Ask for a fresh summary">Write it again</button>
+    </div>`);
 }
 
 // ============================================================
