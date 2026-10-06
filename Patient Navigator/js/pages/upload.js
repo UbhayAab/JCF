@@ -255,7 +255,7 @@ export async function renderUpload(container) {
     <div class="page-header">
       <div>
         <h1>Upload leads &amp; documents</h1>
-        <p class="header-subtitle" style="margin:0">Add the numbers you've gathered. A hospital + phone is enough; include more columns if you have them. The manager allots them to caregiver mentors from the auto-distribute. Photograph the family's hospital papers while they are with you: <strong>Add one</strong> takes them with the patient, and <strong>Upload documents</strong> adds them to anyone you added before.</p>
+        <p class="header-subtitle" style="margin:0">Add the numbers you've gathered. A hospital + phone is enough; include more columns if you have them. The manager allots them to caregiver mentors from the auto-distribute. Photograph the family's hospital papers while they are with you: <strong>Camera</strong> takes one family after another, page after page, <strong>Add one</strong> takes them with a detailed form, and <strong>Upload documents</strong> adds them to anyone you added before.</p>
       </div>
     </div>
 
@@ -285,10 +285,13 @@ export async function renderUpload(container) {
     </div>
 
     <div class="login-tabs" id="upload-tabs" style="max-width:760px;margin-bottom:var(--s4)">
+      <button class="tab" data-mode="camera">${icon('camera')}Camera</button>
       <button class="tab active" data-mode="paste">Paste a list</button>
       <button class="tab" data-mode="single">Add one (detailed)</button>
       <button class="tab" data-mode="docs">${icon('fileText')}Upload documents</button>
     </div>
+
+    <div id="mode-camera" style="display:none"></div>
 
     <div class="card" id="mode-paste" style="max-width:760px">
       <div class="field" style="margin-bottom:var(--s3)">
@@ -518,9 +521,31 @@ export async function renderUpload(container) {
     $('#mode-single').style.display = mode === 'single' ? '' : 'none';
     $('#mode-paste').style.display = mode === 'paste' ? '' : 'none';
     $('#mode-docs').style.display = mode === 'docs' ? '' : 'none';
+    $('#mode-camera').style.display = mode === 'camera' ? '' : 'none';
     if (mode === 'docs') loadDocsTab();
+    if (mode === 'camera') mountCamera();
   };
   container.querySelectorAll('#upload-tabs .tab').forEach(t => t.addEventListener('click', () => showMode(t.dataset.mode)));
+
+  // ---- Camera: Add patient, photograph every page, Close file (Fixboard #8) ----
+  // Loaded the first time the tab opens; the files of this visit and their
+  // uploads live in the module, so they carry on when this page is redrawn.
+  let cameraMounted = false;
+  async function mountCamera() {
+    if (cameraMounted) return;
+    cameraMounted = true;
+    const host = $('#mode-camera');
+    host.innerHTML = '<div class="sk skeleton-row"></div>';
+    try {
+      const { mountCameraIntake } = await import('../components/cameraIntake.js');
+      mountCameraIntake(host, { hospital: selectedHospital });
+    } catch (e) {
+      cameraMounted = false;
+      host.innerHTML = `<div class="card due-meta" style="max-width:760px;color:var(--danger)">The camera could not load: ${sanitize(e.message)}. Refresh the app, or use Add one.</div>`;
+    }
+  }
+  // The Ground POC's job at the hospital is the camera loop, so the page opens on it.
+  if (['ground_poc', 'uploader'].includes(role)) showMode('camera');
 
   // ---- Documents, for patients this person added -------------------------
   // The ground team meets the family at the hospital, papers in hand. Until

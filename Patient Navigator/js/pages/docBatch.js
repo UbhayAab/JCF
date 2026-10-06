@@ -889,6 +889,23 @@ async function readBatch(sb, batchId, stage, { resume = false } = {}) {
   return { batchId, docs, merged, audits, failures };
 }
 
+/**
+ * Reads a batch whose pages are already stored, with nobody watching it: the
+ * camera intake (js/components/cameraIntake.js, Fixboard #8) files one family
+ * and moves straight on to the next. It ends where any upload ends, ready for
+ * a mentor to check, or stays resumable at the step it reached, exactly like a
+ * tab closed mid-read. Never throws; answers whether the read finished.
+ */
+export async function readStoredBatch(batchId) {
+  try {
+    await readBatch(getSupabase(), batchId, () => {});
+    return true;
+  } catch (e) {
+    console.warn('[docBatch] background read stopped, resumable:', e.message);
+    return false;
+  }
+}
+
 // ============================================================
 // What an earlier run already left in the database
 // ============================================================

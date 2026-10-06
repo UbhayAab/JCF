@@ -1368,3 +1368,47 @@ button { -webkit-tap-highlight-color: transparent; }
                  text-transform: uppercase; letter-spacing: .06em; color: var(--gold-deep); }
 .ph-main-badge svg { width: 13px; height: 13px; fill: currentColor; }
 .ph-make { flex: none; }
+
+/* ---- Camera intake (Fixboard #8, js/components/cameraIntake.js) ----
+   A camera is black whatever the theme: the page under it is the light, not the room. */
+.ci-camera { position: fixed; inset: 0; z-index: 10000; background: #000; color: #fff; overflow: hidden;
+             display: flex; flex-direction: column; touch-action: manipulation; }
+.ci-camera .ci-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+.ci-flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .18s ease-out; }
+.ci-flash.on { opacity: .7; transition: none; }
+.ci-top { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between;
+          gap: 12px; padding: max(12px, env(safe-area-inset-top)) 14px 22px;
+          background: linear-gradient(rgba(0,0,0,.72), rgba(0,0,0,0)); }
+.ci-who { min-width: 0; font-weight: 700; font-size: 15px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis;
+          white-space: nowrap; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+.ci-who span { font-weight: 500; opacity: .85; margin-left: 4px; }
+.ci-done { flex: none; min-height: 44px; padding: 0 18px; border-radius: 999px; border: 0; background: #fff; color: #111;
+           font-weight: 700; font-size: 15px; cursor: pointer; }
+.ci-bottom { position: absolute; left: 0; right: 0; bottom: 0; padding: 26px 14px max(18px, env(safe-area-inset-bottom));
+             background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.78)); }
+.ci-strip { display: flex; gap: 10px; overflow-x: auto; padding: 4px 2px 12px; min-height: 76px; scrollbar-width: none; }
+.ci-strip::-webkit-scrollbar { display: none; }
+.ci-thumb { position: relative; flex: 0 0 auto; width: 50px; height: 66px; border-radius: 8px; overflow: visible;
+            border: 2px solid rgba(255,255,255,.9); background: #222; }
+.ci-thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: 6px; display: block; }
+.ci-thumb[data-state="rendering"], .ci-thumb[data-state="uploading"] { border-color: rgba(255,255,255,.55); }
+.ci-thumb[data-state="done"]::after { content: ''; position: absolute; left: 5px; bottom: 5px; width: 9px; height: 9px;
+            border-radius: 50%; background: #3fbf7f; box-shadow: 0 0 0 2px rgba(0,0,0,.55); }
+.ci-thumb[data-state="failed"] { border-color: #ff8a7a; }
+.ci-rm { position: absolute; top: -10px; right: -10px; width: 30px; height: 30px; border-radius: 50%; border: 2px solid #fff;
+         background: rgba(0,0,0,.82); color: #fff; font-size: 18px; line-height: 1; padding: 0; cursor: pointer; }
+.ci-controls { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; }
+.ci-side { justify-self: start; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 6px;
+           font-weight: 600; font-size: 14px; cursor: pointer; }
+.ci-side svg { width: 20px; height: 20px; }
+.ci-shutter { width: 76px; height: 76px; border-radius: 50%; border: 5px solid #fff; background: rgba(255,255,255,.22);
+              box-shadow: 0 0 0 2px rgba(0,0,0,.35); cursor: pointer; }
+.ci-shutter:active { transform: scale(.93); background: rgba(255,255,255,.55); }
+.ci-count { justify-self: end; font-weight: 700; font-size: 15px; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+.ci-fallback { position: absolute; left: 0; right: 0; top: 84px; bottom: 190px; display: flex; flex-direction: column;
+               align-items: center; justify-content: center; gap: 18px; padding: 0 28px; text-align: center; }
+.ci-fallback p { margin: 0; font-size: 15px; line-height: 1.55; color: #eee; max-width: 420px; }
+.ci-fallback[hidden] { display: none; }
+.ci-camera.ci-nolive { background: #151515; }
+.ci-agree { display: flex; align-items: center; gap: 10px; min-height: 44px; font-weight: 600; cursor: pointer; }
+.ci-agree input { width: 22px; height: 22px; accent-color: var(--primary); }
