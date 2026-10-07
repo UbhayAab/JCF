@@ -126,7 +126,7 @@ export async function openAssessmentFlow({ patient, role = null, onSaved = null 
       }).join('');
       return `
         <div style="margin-bottom:18px">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;color:var(--primary)">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;color:var(--primary-ink)">
             ${icon(g.icon)}<span style="font:var(--t-sm);font-weight:700;color:var(--ink)">${g.label}</span>
           </div>
           ${rows}

@@ -186,7 +186,7 @@ function phoneStatusHTML(st) {
   return `<div class="card" style="background:rgba(199,134,47,.08);border-color:rgba(199,134,47,.3);margin-top:8px;padding:10px 12px">
     <div style="font-weight:700">Already registered: ${sanitize(st.full_name || '')} · ${sanitize(st.patient_code || '')}</div>
     <div style="font-size:13px;color:var(--color-text-muted)">${st.total_calls || 0} calls (${st.connected_calls || 0} connected) · last call: ${last} · ${st.messages_sent || 0} WhatsApp messages sent${lastMsg ? ' · last: ' + lastMsg : ''}${st.assigned_mentor ? ' · with ' + sanitize(st.assigned_mentor) : ''}${st.is_blacklisted ? ' · BLOCKED' : ''}</div>
-    ${st.patient_id ? `<a href="#patients/${st.patient_id}" style="font-size:13px;color:var(--primary);font-weight:600">Open their record →</a>` : ''}
+    ${st.patient_id ? `<a href="#patients/${st.patient_id}" style="font-size:13px;color:var(--primary-ink);font-weight:600">Open their record →</a>` : ''}
   </div>`;
 }
 
@@ -214,13 +214,13 @@ async function submitRows(sb, rows, resultEl, after) {
     const dupeRows = rows.map((row, i) => ({ row, st: pre[i] })).filter(x => x.st && x.st.found);
     resultEl.innerHTML = `
       <div class="card" style="background:rgba(12,110,116,.06);border-color:rgba(12,110,116,.2)">
-        <div style="font-weight:700;color:var(--primary);margin-bottom:4px">${icon('checkCircle')} ${head}</div>
+        <div style="font-weight:700;color:var(--primary-ink);margin-bottom:4px">${icon('checkCircle')} ${head}</div>
         <div style="font-size:13px;color:var(--color-text-muted)">
           ${linked ? `${linked} row${linked === 1 ? ' was' : 's were'} the same family. Their extra numbers are now linked to the existing patient. ` : ''}
           ${enriched ? `${enriched} ${enriched === 1 ? 'number was' : 'numbers were'} already on the list, and the new details you added (name, hospital, city) have been filled in. ` : ''}
           ${r.duplicates ? `${r.duplicates} already had everything you entered, so nothing changed for ${r.duplicates === 1 ? 'it' : 'them'}. Open the record below to see the calls and messages already on file. ` : ''}${r.invalid ? `${r.invalid} invalid number${r.invalid === 1 ? '' : 's'} skipped (not 10 digits). ` : ''}
           ${!done && !r.duplicates && !r.invalid ? 'The server reported no change. If you just saw an error before this, that first attempt already saved it: check the record below rather than uploading again. ' : ''}
-          New leads wait for the manager's auto-distribute. <a href="#intake" style="color:var(--primary);font-weight:600">See everything you've uploaded →</a>
+          New leads wait for the manager's auto-distribute. <a href="#intake" style="color:var(--primary-ink);font-weight:600">See everything you've uploaded →</a>
         </div>
         ${dupeRows.length ? `<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
           ${dupeRows.slice(0, 10).map(x => phoneStatusHTML(x.st)).join('')}
@@ -265,7 +265,7 @@ export async function renderUpload(container) {
         <div class="stat-icon">${icon('inbox')}</div></div></div>
       <div class="card stat-card"><div class="flex justify-between items-center">
         <div><div class="stat-value" id="lead-ready">0</div><div class="stat-label">Ready in this paste</div></div>
-        <div class="stat-icon" style="background:rgba(12,110,116,.08);color:var(--primary)">${icon('check')}</div></div></div>
+        <div class="stat-icon" style="background:rgba(12,110,116,.08);color:var(--primary-ink)">${icon('check')}</div></div></div>
       <a class="card stat-card" href="#intake" style="text-decoration:none"><div class="flex justify-between items-center">
         <div><div class="stat-value" id="lead-mine">…</div><div class="stat-label">Uploaded by you: view &amp; download</div></div>
         <div class="stat-icon" style="background:rgba(46,125,85,.1);color:#2E7D55">${icon('fileText')}</div></div></a>

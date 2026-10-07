@@ -1343,7 +1343,7 @@ function renderStageGuide(p) {
       </div>
       <p style="font:var(--t-sm);color:var(--ink-2);margin:7px 0 0">${g.what}</p>
       <details style="margin-top:7px">
-        <summary style="font:var(--t-xs);font-weight:700;color:var(--primary);cursor:pointer">Things you can say</summary>
+        <summary style="font:var(--t-xs);font-weight:700;color:var(--primary-ink);cursor:pointer">Things you can say</summary>
         ${g.openers.map(o => `<p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 0;padding-left:10px;border-left:2px solid var(--line-2);font-style:italic">${o}</p>`).join('')}
       </details>
     </div>`;

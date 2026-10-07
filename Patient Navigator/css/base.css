@@ -32,24 +32,14 @@ body {
   text-rendering: optimizeLegibility;
   transition: background-color var(--base) var(--ease), color var(--base) var(--ease);
 }
-/* desktop only: a whisper of tactile grain behind content (light modes only:
-   it would muddy the true-dark ground) */
-@media (pointer: fine) and (min-width: 941px) {
-  body::before {
-    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 1;
-    background-image: var(--grain); background-size: 160px; opacity: 0.02; mix-blend-mode: multiply;
-  }
-  :root[data-theme="dark"] body::before { opacity: 0.03; mix-blend-mode: overlay; }
-}
-/* touch devices: a fixed multi-radial ground repaints every scroll frame on
-   mobile GPUs, pin it to scroll instead (the wash is static, so it's fine). */
+/* No grain behind content any more: the shared themes are flat in every
+   product, and texture would muddy High contrast. */
+/* touch devices: a fixed ground repaints every scroll frame on mobile GPUs,
+   pin it to scroll instead. */
 @media (pointer: coarse) { body { background-attachment: scroll; } }
 
-/* The v11 ground: the mockups' peach-to-blush wash, on its own fixed layer.
-   A pseudo-element is composited once and the page scrolls over it, which is
-   what the background-attachment:fixed above could not do cheaply on a phone,
-   and it keeps the gradient the same at any scroll depth instead of stretching
-   it across a 30,000px resources page. */
+/* The ground: the theme's canvas, on its own fixed layer. A pseudo-element is
+   composited once and the page scrolls over it. */
 body::after {
   /* z-index -1, not 0: a positioned layer at 0 paints OVER any in-flow screen
      that is not itself positioned (the set-password and account-problem
@@ -87,7 +77,7 @@ h6 { font-size: var(--font-base); font-weight: 600; }
 
 p { margin-bottom: var(--s4); color: var(--ink-2); }
 
-a { color: var(--primary); text-decoration: none; transition: color var(--fast) var(--ease); }
+a { color: var(--primary-ink); text-decoration: none; transition: color var(--fast) var(--ease); }
 a:hover { color: var(--primary-hover); }
 /* drawn underline for inline text links */
 p a, td a, .link-draw {

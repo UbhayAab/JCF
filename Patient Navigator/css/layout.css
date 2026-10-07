@@ -1,7 +1,8 @@
 /* ============================================================
-   Patient Navigator: Layout Styles v11 "Cocoa & Blush"
-   Cocoa sidebar, blush ground, the action-first dashboard,
-   calling portal, floating cocoa dock.
+   Patient Navigator: Layout Styles v12
+   The shared JCF themes (css/themes.css): surface sidebar, the
+   theme's canvas, the action-first dashboard, calling portal,
+   floating surface dock.
    ============================================================ */
 
 [data-ic] svg, .ico svg { width: 100%; height: 100%; display: block; }
@@ -30,35 +31,37 @@
   gap: var(--s7); align-items: stretch;
   animation: springUp var(--slower) var(--ease-out) both;
 }
+/* The statement panel: the accent's tint on the surface, so it is light in Light,
+   dark in Dark and plain in High contrast (an inverse panel turned into a bright
+   slab on a dark page). */
 .login-hero {
   position: relative; overflow: hidden; border-radius: var(--r-2xl);
-  background: var(--grad-ink-aurora);
-  border: 1px solid var(--panel-line);
-  box-shadow: var(--hi-dark), var(--sh-panel);
-  color: var(--panel-text);
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+  border: 1px solid var(--line);
+  box-shadow: var(--sh-3);
+  color: var(--ink);
   padding: clamp(28px, 4vw, 56px);
   display: flex; flex-direction: column; justify-content: space-between; gap: var(--s8);
   min-height: 620px;
 }
-.login-hero::after { content: ""; position: absolute; inset: 0; pointer-events: none; background-image: var(--grain); background-size: 160px; opacity: 0.06; mix-blend-mode: overlay; }
 .login-hero > * { position: relative; z-index: 1; }
 .lh-brand { display: flex; align-items: center; gap: 14px; }
 .lh-brand .logo-icon { width: 46px; height: 46px; border-radius: 13px; background: var(--grad-primary); color: var(--on-primary); display: grid; place-items: center; box-shadow: var(--hi-dark), var(--sh-primary-lg); flex: none; }
 .lh-brand .logo-icon svg { width: 24px; height: 24px; }
-.lh-word { font: 800 17px/1.1 var(--font-display); font-stretch: 108%; letter-spacing: 0.02em; text-transform: uppercase; color: var(--panel-text); }
-.lh-tag { font: 600 9.5px var(--font-mono); letter-spacing: 0.34em; text-transform: uppercase; color: var(--panel-text-3); margin-top: 4px; }
-.lh-eyebrow { font: 600 11px var(--font-mono); letter-spacing: 0.3em; text-transform: uppercase; color: var(--primary-glow); margin-bottom: 18px; }
+.lh-word { font: 800 17px/1.1 var(--font-display); font-stretch: 108%; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink); }
+.lh-tag { font: 600 9.5px var(--font-mono); letter-spacing: 0.34em; text-transform: uppercase; color: var(--ink-3); margin-top: 4px; }
+.lh-eyebrow { font: 600 11px var(--font-mono); letter-spacing: 0.3em; text-transform: uppercase; color: var(--primary-ink); margin-bottom: 18px; }
 .lh-statement h1 {
   font: 680 clamp(38px, 4.8vw, 64px)/1.02 var(--font-display);
   font-stretch: var(--stretch-wide); letter-spacing: -0.02em;
-  color: var(--panel-text); text-wrap: balance; margin: 0;
+  color: var(--ink); text-wrap: balance; margin: 0;
 }
-.lh-statement h1 em { font-style: italic; font-stretch: 94%; font-weight: 640; color: var(--primary-glow); }
-.lh-sub { font: 400 16.5px/1.6 var(--font-ui); color: var(--panel-text-2); max-width: 44ch; margin: 20px 0 0; }
+.lh-statement h1 em { font-style: italic; font-stretch: 94%; font-weight: 640; color: var(--primary-ink); }
+.lh-sub { font: 400 16.5px/1.6 var(--font-ui); color: var(--ink-2); max-width: 44ch; margin: 20px 0 0; }
 .lh-foot { display: flex; flex-direction: column; gap: 16px; }
-.lh-ecg { width: min(300px, 60%); height: 40px; color: var(--primary-glow); }
-.lh-ecg path { stroke-dasharray: 420; stroke-dashoffset: 420; animation: ecgDraw 3.2s var(--ease) infinite; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--primary-glow) 55%, transparent)); }
-.lh-mono { font: 500 10px var(--font-mono); letter-spacing: 0.26em; text-transform: uppercase; color: var(--panel-text-3); }
+.lh-ecg { width: min(300px, 60%); height: 40px; color: var(--primary); }
+.lh-ecg path { stroke-dasharray: 420; stroke-dashoffset: 420; animation: ecgDraw 3.2s var(--ease) infinite; }
+.lh-mono { font: 500 10px var(--font-mono); letter-spacing: 0.26em; text-transform: uppercase; color: var(--ink-3); }
 @keyframes ecgDraw { 0% { stroke-dashoffset: 420; opacity: 0; } 12% { opacity: 1; } 62% { stroke-dashoffset: 0; opacity: 1; } 82% { opacity: 0; } 100% { stroke-dashoffset: 0; opacity: 0; } }
 
 .login-card { width: 100%; max-width: 460px; position: relative; z-index: 1; display: flex; flex-direction: column; justify-content: center; }
@@ -92,19 +95,15 @@
 }
 .login-tabs { display: flex; margin-bottom: var(--s6); background: var(--bg-sunken); border-radius: var(--r-pill); padding: 3px; gap: 2px; box-shadow: inset 0 1px 3px rgba(20,45,42,0.08); }
 .login-tabs .tab { flex: 1; text-align: center; border: none; border-radius: var(--r-pill); margin-bottom: 0; padding: 10px var(--s4); font: var(--t-xs); font-weight: 600; color: var(--ink-2); transition: all var(--base) var(--spring); }
-.login-tabs .tab.active { background: var(--surface); color: var(--primary); box-shadow: var(--hi), var(--sh-1); }
+.login-tabs .tab.active { background: var(--surface); color: var(--primary-ink); box-shadow: var(--hi), var(--sh-1); }
 
-/* ============================================================ SIDEBAR: the night panel */
+/* ============================================================ SIDEBAR
+   A surface with a line, as in Arc and the other JCF tools (the shared
+   themes, Fixboard #17); the current page is the accent's soft wash. */
 .sidebar {
   width: var(--sidebar-w); height: 100vh; position: fixed; left: 0; top: 0;
-  /* the aurora is IN the token now (--grad-ink-aurora), with its wash alphas
-     solved against --panel-text-3 rather than eyeballed on top of the panel;
-     the edge is --panel-line-2, which is the only panel border that clears
-     3:1 against the page ground as well as against the panel. */
-  /* v11: the mockups' flat cocoa. No edge line: cocoa against blush is
-     already 9:1, a border there only adds a seam. */
   background: var(--side-bg);
-  border-right: none;
+  border-right: 1px solid var(--line);
   display: flex; flex-direction: column; z-index: var(--z-sidebar);
   transition: transform var(--slow) var(--ease-out);
 }
@@ -112,40 +111,39 @@
 .sidebar-header { padding: var(--s5) var(--s5) var(--s4); display: flex; align-items: center; gap: 12px; }
 .sidebar-logo {
   width: 40px; height: 40px; border-radius: 12px;
-  background: transparent; color: var(--panel-text); display: grid; place-items: center; flex: none;
+  background: transparent; color: var(--primary-ink); display: grid; place-items: center; flex: none;
 }
-.sidebar-logo svg { width: 28px; height: 28px; color: var(--panel-text); stroke-width: 1.9; }
+.sidebar-logo svg { width: 28px; height: 28px; color: var(--primary-ink); stroke-width: 1.9; }
 .sidebar-brand { display: flex; flex-direction: column; }
-.sidebar-brand-name { font: 800 16px/1.15 var(--font-display); text-transform: uppercase; color: var(--panel-text); letter-spacing: 0.035em; }
-.sidebar-brand-sub { font: 700 10px var(--font-ui); text-transform: uppercase; letter-spacing: 0.16em; color: var(--panel-text-3); margin-top: 3px; }
+.sidebar-brand-name { font: 800 16px/1.15 var(--font-display); text-transform: uppercase; color: var(--ink); letter-spacing: 0.035em; }
+.sidebar-brand-sub { font: 700 10px var(--font-ui); text-transform: uppercase; letter-spacing: 0.16em; color: var(--ink-3); margin-top: 3px; }
 
 .sidebar-nav { flex: 1; padding: var(--s4) var(--s4); overflow-y: auto; }
-.sidebar-nav::-webkit-scrollbar-thumb { background: var(--panel-3); border-color: transparent; }
+.sidebar-nav::-webkit-scrollbar-thumb { background: var(--line-2); border-color: transparent; }
 .nav-section { margin-bottom: var(--s5); }
-.nav-section-title { font: 600 11.5px/1.2 var(--font-ui); text-transform: uppercase; letter-spacing: 0.1em; color: var(--panel-text-3); padding: 6px 10px; margin-bottom: 2px; }
+.nav-section-title { font: 600 11.5px/1.2 var(--font-ui); text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-3); padding: 6px 10px; margin-bottom: 2px; }
 .nav-item {
   position: relative; display: flex; align-items: center; gap: 12px;
-  padding: 10px 12px; border-radius: var(--r-sm); color: var(--panel-text-2); font: var(--t-body-strong); font-size: 14.5px; font-weight: 600; cursor: pointer;
+  padding: 10px 12px; border-radius: var(--r-sm); color: var(--ink-2); font: var(--t-body-strong); font-size: 14.5px; font-weight: 600; cursor: pointer;
   transition: background var(--fast) var(--ease), color var(--fast) var(--ease), transform 180ms var(--spring);
   margin-bottom: 2px; border: none; background: none; width: 100%; text-align: left; text-decoration: none;
   overflow: hidden;
 }
-.nav-item:hover { background: var(--side-hover); color: var(--panel-text); }
+.nav-item:hover { background: var(--side-hover); color: var(--ink); }
 .nav-item:active { transform: scale(0.98); }
 .nav-item.active {
   background: var(--side-active);
-  color: var(--panel-text);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+  color: var(--primary-ink);
 }
-.nav-item.active::before { content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 3px; height: 20px; border-radius: 0 3px 3px 0; background: var(--primary-glow); }
+.nav-item.active::before { content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 3px; height: 20px; border-radius: 0 3px 3px 0; background: var(--primary); }
 .nav-item svg { width: 19px; height: 19px; flex: none; transition: transform var(--base) var(--spring); }
 .nav-item:hover svg { transform: translateX(1px) scale(1.06); }
 .nav-item .nav-badge { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; display: grid; place-items: center; font: 700 10.5px var(--font-ui); background: var(--gold-soft); color: var(--gold-deep); border-radius: var(--r-pill); }
 
-.sidebar-footer { padding: var(--s4); border-top: 1px solid var(--panel-line); }
+.sidebar-footer { padding: var(--s4); border-top: 1px solid var(--line); }
 .sidebar-user-info { flex: 1; min-width: 0; }
-.sidebar-user-name { font: var(--t-body-strong); font-size: 14px; color: var(--panel-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sidebar-user-role { font: 700 11px/1.2 var(--font-ui); text-transform: uppercase; letter-spacing: 0.08em; color: var(--panel-text-3); margin-top: 2px; }
+.sidebar-user-name { font: var(--t-body-strong); font-size: 14px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-user-role { font: 700 11px/1.2 var(--font-ui); text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-3); margin-top: 2px; }
 
 /* ============================================================ MAIN + HEADER */
 .main-content { flex: 1; margin-left: var(--sidebar-w); display: flex; flex-direction: column; min-height: 100vh; background: transparent; min-width: 0; }
@@ -188,7 +186,7 @@
 .header-title { font: var(--t-h2); font-family: var(--font-serif); font-weight: 540; }
 .header-subtitle { font: var(--t-xs); color: var(--ink-3); }
 .header-right { display: flex; align-items: center; gap: var(--s3); }
-.mobile-menu-btn { display: none; background: none; border: none; color: var(--ink-2); cursor: pointer; padding: var(--s2); border-radius: var(--r-sm); }
+.mobile-menu-btn { display: none; flex: none; background: none; border: none; color: var(--ink-2); cursor: pointer; padding: var(--s2); border-radius: var(--r-sm); }
 .mobile-menu-btn:hover { background: var(--surface-3); }
 .mobile-menu-btn svg { width: 24px; height: 24px; }
 
@@ -223,43 +221,34 @@
 .chart-full-width { grid-column: span 2; }
 .chart-full-width .chart-canvas-wrap { height: 330px; }
 
-/* ============================================================ BOTTOM NAV: floating night dock */
+/* ============================================================ BOTTOM NAV: a floating surface dock
+   The same surface, line and accent wash as the sidebar (the shared themes). */
 .bottom-nav {
   display: none; position: fixed;
   left: 14px; right: 14px; bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   height: 64px;
-  /* was a hardcoded teal-black dock that ignored the theme entirely */
-  background: linear-gradient(160deg, var(--panel-2), var(--panel));
-  backdrop-filter: saturate(1.4) blur(18px); -webkit-backdrop-filter: saturate(1.4) blur(18px);
-  border: 1px solid var(--panel-line-2); border-radius: 22px;
+  background: var(--side-bg);
+  border: 1px solid var(--line-2); border-radius: 22px;
   z-index: var(--z-bottom-nav);
-  box-shadow: var(--hi-dark), var(--sh-float);
-}
-/* touch devices: the dock is always on screen. Permanent blur is the single
-   costliest layer on Android WebView. Near-opaque night glass instead. */
-@media (pointer: coarse) {
-  .bottom-nav {
-    background: linear-gradient(160deg, var(--panel-2), var(--panel));
-    backdrop-filter: none; -webkit-backdrop-filter: none;
-  }
+  box-shadow: var(--sh-float);
 }
 .bottom-nav-list { display: flex; justify-content: space-around; align-items: stretch; height: 100%; padding: 6px; gap: 4px; }
 .bottom-nav-item {
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
   background: none; border: none; border-radius: 16px;
-  font: 600 10.5px var(--font-ui); color: var(--panel-text-3); cursor: pointer; padding: 6px 4px;
+  font: 600 10.5px var(--font-ui); color: var(--ink-3); cursor: pointer; padding: 6px 4px;
   transition: color var(--base) var(--ease), background var(--base) var(--ease), transform 180ms var(--spring);
   min-width: 44px; position: relative; overflow: hidden;
 }
 .bottom-nav-item svg { width: 22px; height: 22px; transition: transform var(--base) var(--spring); }
 .bottom-nav-item:active { transform: scale(0.92); }
 .bottom-nav-item.active {
-  color: var(--panel-text);
+  color: var(--primary-ink);
   background: var(--side-active);
   box-shadow: none;
 }
 .bottom-nav-item.active svg { transform: translateY(-1px) scale(1.1); }
-.bottom-nav-item:hover { color: var(--panel-text); }
+.bottom-nav-item:hover { color: var(--ink); }
 
 /* ============================================================ MOBILE OVERLAY */
 .sidebar-overlay { position: fixed; inset: 0; background: var(--overlay); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); z-index: calc(var(--z-sidebar) - 1); opacity: 0; pointer-events: none; transition: opacity var(--base) var(--ease); }
@@ -413,7 +402,7 @@
 
 .caregiver { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md); }
 .cg-ico { width: 30px; height: 30px; border-radius: 8px; background: var(--bg-sunken); color: var(--ink-2); display: grid; place-items: center; flex: none; }
-.cg-call { display: inline-flex; align-items: center; gap: 7px; text-decoration: none; color: var(--primary); font: var(--t-body-strong); font-size: 14px; padding: 7px 12px; border-radius: var(--r-sm); background: var(--primary-soft); transition: background var(--fast) var(--ease), transform var(--fast) var(--spring); }
+.cg-call { display: inline-flex; align-items: center; gap: 7px; text-decoration: none; color: var(--primary-ink); font: var(--t-body-strong); font-size: 14px; padding: 7px 12px; border-radius: var(--r-sm); background: var(--primary-soft); transition: background var(--fast) var(--ease), transform var(--fast) var(--spring); }
 /* --primary-soft-2 is a heavy chip: it carries --ink, never an accent ink */
 .cg-call:hover { background: var(--primary-soft-2); color: var(--ink); }
 .cg-call:active { transform: scale(0.96); }
@@ -465,7 +454,7 @@
 .recep-btn.on { border-color: var(--primary); background: var(--primary-soft); box-shadow: var(--ring), var(--sh-1); transform: translateY(-1px); }
 .recep-label { font: var(--t-body-strong); font-size: 14px; color: var(--ink); }
 .recep-hint { font: 12px var(--font-ui); color: var(--ink-3); margin-top: 1px; }
-.recep-btn.on .recep-hint { color: var(--primary); }
+.recep-btn.on .recep-hint { color: var(--primary-ink); }
 
 .services { display: flex; flex-direction: column; gap: 8px; }
 .svc { display: flex; align-items: center; gap: 11px; padding: 11px 13px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); cursor: pointer; color: var(--ink); transition: all var(--base) var(--ease); }
@@ -487,13 +476,13 @@
 .yn.no { background: var(--bg-sunken); border-color: var(--line-strong); color: var(--ink-2); }
 
 .followup { border: 1px solid var(--primary-soft-2); background: linear-gradient(180deg, var(--surface), var(--primary-soft)); border-radius: var(--r-md); padding: 16px; box-shadow: var(--hi); }
-.fu-head { display: flex; align-items: center; gap: 9px; color: var(--primary); font: var(--t-body-strong); margin-bottom: 12px; white-space: nowrap; }
+.fu-head { display: flex; align-items: center; gap: 9px; color: var(--primary-ink); font: var(--t-body-strong); margin-bottom: 12px; white-space: nowrap; }
 .fu-head svg { width: 17px; height: 17px; }
-.fu-auto { margin-left: auto; font: 600 10px var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; background: var(--surface); color: var(--primary); padding: 4px 9px; border-radius: var(--r-pill); box-shadow: var(--sh-1); }
+.fu-auto { margin-left: auto; font: 600 10px var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; background: var(--surface); color: var(--primary-ink); padding: 4px 9px; border-radius: var(--r-pill); box-shadow: var(--sh-1); }
 .followup .input, .followup .textarea { background: var(--surface); }
 
 .upload { display: flex; align-items: center; gap: 13px; padding: 13px 15px; border: 1.5px dashed var(--line-strong); border-radius: var(--r-md); cursor: pointer; color: var(--ink-2); transition: all var(--base) var(--ease); }
-.upload:hover { border-color: var(--primary); color: var(--primary); background: var(--surface-2); }
+.upload:hover { border-color: var(--primary); color: var(--primary-ink); background: var(--surface-2); }
 .upload svg { width: 18px; height: 18px; flex: none; }
 .up-title { font: var(--t-body-strong); font-size: 14px; color: var(--ink); }
 .up-sub { font: var(--t-xs); color: var(--ink-3); }
@@ -532,7 +521,7 @@
 .tc-stat:hover { background: var(--surface-3); }
 .tc-num { font: 600 30px/1 var(--font-serif); letter-spacing: -0.01em; color: var(--ink); }
 .tc-num.muted { color: var(--ink-3); }
-.tc-num.accent { color: var(--primary); }
+.tc-num.accent { color: var(--primary-ink); }
 .tc-num.over { color: var(--clay); }
 .tc-lbl { font-size: 12px; color: var(--ink-3); margin-top: 6px; }
 .team-stats { display: flex; gap: var(--s6); margin-top: var(--s4); padding-top: var(--s3); border-top: 1px solid var(--line); }

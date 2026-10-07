@@ -296,7 +296,7 @@ async function loadPatients() {
         <tbody>
           ${data.map(p => `
             <tr class="row-link" data-patient-id="${p.id}" tabindex="0">
-              <td><strong class="text-primary" style="color:var(--primary)">${sanitize(p.patient_code)}</strong><br><span style="font-weight:600">${sanitize(p.full_name)}</span></td>
+              <td><strong class="text-primary" style="color:var(--primary-ink)">${sanitize(p.patient_code)}</strong><br><span style="font-weight:600">${sanitize(p.full_name)}</span></td>
               ${sortMode === 'priority' ? `<td>${priorityCell(p)}</td>` : ''}
               <td>${p.age || 'N/A'} · ${p.gender === 'prefer_not_to_say' ? 'N/A' : capitalize(p.gender)}</td>
               <td>${giLabel(p.gi_subtype) ? `<span class="badge badge-primary">${giLabel(p.gi_subtype)}</span>` : `<span style="color:var(--ink-4)">${sanitize(p.cancer_type || '') || 'N/A'}</span>`}</td>
@@ -759,7 +759,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       </div>
 
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--ink-3);margin:6px 0 10px;letter-spacing:.22em;text-transform:uppercase">
-        <b style="color:var(--gold);font-weight:600">Reach</b> · <b style="color:var(--primary);font-weight:600">Action</b> · <b style="color:var(--clay);font-weight:600">Impact</b>: one person, three lenses
+        <b style="color:var(--gold);font-weight:600">Reach</b> · <b style="color:var(--primary-ink);font-weight:600">Action</b> · <b style="color:var(--clay);font-weight:600">Impact</b>: one person, three lenses
       </div>
       <div class="detail-tabs" role="tablist">
         <button class="dtab ${activeTab === 'overview' ? 'active' : ''}" data-tab="overview">${icon('user')}Overview</button>

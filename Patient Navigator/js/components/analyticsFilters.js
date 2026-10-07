@@ -26,11 +26,11 @@ export const FILTER_GROUPS = [
     facets: ['age_band', 'gender', 'lang', 'literacy'] },
   { id: 'household', label: 'The household', color: '#6E52BE',
     facets: ['vuln', 'economic', 'insurance', 'cg_rel', 'cg_gender'] },
-  { id: 'place', label: 'Place and care', color: '#1A43A8',
+  { id: 'place', label: 'Place and care', color: 'var(--info)',
     facets: ['state', 'city', 'hospital'] },
-  { id: 'ourwork', label: 'Our work with them', color: '#1E6A4F',
+  { id: 'ourwork', label: 'Our work with them', color: 'var(--ok)',
     facets: ['mentor', 'contact', 'support', 'concern', 'assessed', 'nutrition', 'consent', 'status', 'on_file'] },
-  { id: 'time', label: 'When they joined', color: '#BA1A1A',
+  { id: 'time', label: 'When they joined', color: 'var(--danger)',
     facets: ['joined_month'] },
 ];
 
@@ -389,7 +389,7 @@ function renderPanel() {
       <div class="af-grid">${g.facets.map(f => facetHTML(f, g.color)).join('')}</div>
     </section>`).join('') + `
     <section class="af-group">
-      <div class="af-group-h"><span class="af-group-dot" style="background:#6E625F"></span>Exact ranges</div>
+      <div class="af-group-h"><span class="af-group-dot" style="background:var(--ink-4)"></span>Exact ranges</div>
       <div class="af-grid">
         <div class="af-facet">
           <div class="af-facet-h"><span class="af-facet-t">Age between</span></div>

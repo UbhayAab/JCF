@@ -287,7 +287,7 @@ async function loadCalls() {
             return `
             <tr class="row-link" data-call='${c.id}' data-patient="${c.patients?.id || ''}" tabindex="0">
               <td>${formatDate(c.call_date)}</td>
-              <td><strong style="color:var(--primary)">${c.patients?.patient_code || 'N/A'}</strong><br><span style="font-weight:600">${sanitize(c.patients?.full_name || '')}</span></td>
+              <td><strong style="color:var(--primary-ink)">${c.patients?.patient_code || 'N/A'}</strong><br><span style="font-weight:600">${sanitize(c.patients?.full_name || '')}</span></td>
               <td>${sanitize(caller)}${spoke ? `<br><span style="font-size:12px;color:var(--ink-3)">spoke: ${sanitize(spoke)}</span>` : ''}</td>
               <td>${getDialStatusBadge(c.dial_status)}</td>
               <td>${cond ? `<span class="badge badge-${cond.tone === 'ok' ? 'ok' : cond.tone === 'danger' ? 'danger' : cond.tone === 'warn' ? 'warn' : 'neutral'}">${cond.label}</span>` : '<span style="color:var(--ink-4)">N/A</span>'}</td>

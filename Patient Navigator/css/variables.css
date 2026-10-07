@@ -1,207 +1,171 @@
 /* ============================================================
-   JARURAT CARE · Patient Navigator: Design Tokens v11
-   "COCOA & BLUSH": the Figma redesign (Admin Dashboard frames,
-   Oct 2026), turned into tokens for all three themes.
+   JARURAT CARE · Patient Navigator: Design Tokens v12
+   The shared JCF themes (Fixboard #17; Ubhay, 7 Oct: "all platforms
+   all 5 themes").
 
-   Type   : Manrope, one family for every voice. The mockups have no
-            monospace and no serif, so --font-mono and --font-serif now
-            resolve to Manrope too; only <code> keeps a system monospace
-            (--font-code). Numbers are tabular app-wide (base.css).
-   Colour : cocoa ink and cocoa actions (#27130A), a cocoa sidebar
-            (#3C251A), white cards on the shared neutral light canvas
-            (#F5F6F8; until Fixboard #17 a peach-to-blush gradient),
-            Material-style tonal neutrals from a brown seed and ten
-            pastel tiles.
-            Sampled from the mockups, not guessed: see the diff view in
-            docs/redesign/ for the sampling and the side-by-sides.
+   Colour : every colour token below maps onto a role of the shared set
+            in css/themes.css (E:/claude/jcf-themes, copied unchanged,
+            version in its header): Auto, Light, Dark, Classic, High
+            contrast, the same five as Arc, Dek, Jarurat Mail and
+            Fixboard. A colour changes only in that set's palette.mjs;
+            this file never carries a per-theme value again.
+   Type   : Manrope, one family for every voice (unchanged).
 
-   Where the mockup and the contrast floor disagreed, the floor won and
-   the mockup's HUE was kept: its amber "Pending" chip was #CC8001 on
-   #FFE6BD (2.60:1), its beige "Follow-up" chip 4.10:1, its mint ink
-   3.99:1. Each ink below was darkened along its own hue until it
-   carried 4.5:1 on the ground it actually lands on.
+   How the old roles map:
+     · grounds, ink and lines   -> canvas, surface*, text*, line*
+     · actions (was cocoa)      -> accent; accent-coloured TEXT is
+                                   --primary-ink (the set checks the
+                                   accent fill, not accent text)
+     · the panel family (toasts, popovers, the login panel)
+                                -> an inverse pair, text on surface
+                                   colours, as Arc's toasts do; it stays
+                                   readable in every theme
+     · the sidebar and phone dock -> a surface with a line, as in Arc
+     · tiles, avatars, chips    -> the status roles and their -soft
+   Shadows stay PN's shapes in a neutral tint; none of them is "none",
+   because several rules read box-shadow: var(--hi), var(--sh-1) and a
+   "none" inside a shadow list drops the whole declaration.
 
-   THREE MODES, all token-driven so every view re-skins for free:
-     :root                        -> LIGHT    (neutral ground, cocoa panel)
-     :root[data-theme="dark"]     -> DARK     (cocoa night: light rises,
-                                               every plane above --bg is
-                                               lighter, the panel most of all)
-     :root[data-theme="colorful"] -> COLORFUL (the bad-light theme: blush
-                                               grounds, no neutral surface,
-                                               chips at roughly 2x the chroma)
-
-   Rules the values obey, so a later edit does not quietly undo them:
-     · --ink-4 is still a TEXT token. It is solved on --surface-3, the
-       worst ground it actually lands on, not on --surface.
-     · --line-strong is a control boundary and clears 3:1 on --surface.
-       --line stays a soft divider. They are not interchangeable.
-     · --panel-line-2 clears 3:1 against BOTH the panel and --bg, so the
-       sidebar edge is legal from either side (WCAG 1.4.11).
-     · In dark, resting shadows are a 1px lit ring, never "none": several
-       rules read box-shadow: var(--hi), var(--sh-1), and "none" inside a
-       shadow list drops the whole declaration.
-     · --primary-soft-2 is a heavy chip and a border tone. It carries
-       --ink only, never an accent ink.
-     · Text placed straight on the ground (page titles, subtitles) uses
-       --ink or --ink-2: --ink-3 drops to 4.35:1 on the pink end.
-
-   Only colour / gradient / shadow tokens change per theme; every
-   structural token (space, radius, type, motion, layout) and every
-   legacy alias lives once in :root and follows the theme via var().
+   Structural tokens (space, radius, type, motion, layout) and every
+   legacy alias live once in :root and follow the theme via var().
    ============================================================ */
 
 @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400..800&display=swap');
 
-/* ============================================================
-   LIGHT (default): neutral ground, white cards, a cocoa panel.
-   ============================================================ */
 :root {
-  color-scheme: light;
-
-  /* ---- Grounds. Fixboard #17 (Ubhay, 6 Oct): "mature colors, no need to
-     have so much pink". The peach-to-blush ground (#FFDFCA -> #FEB9D4) is
-     now the shared light canvas every JCF product uses (#F5F6F8, the arc
-     lane's themes.css), and the pink washes are warm neutrals. The pink
-     look lives on as the Colorful theme. ---- */
-  --bg: #F5F6F8;
-  --bg-2: #F0F2F5;
-  --bg-sunken: #E5E8EE;
-  --surface: #FFFFFF;
-  --surface-2: #FFF8F6;
-  --surface-3: #EEF0F3;          /* not the set's #E5E8EE: --ink-4 would fall to 4.8:1 */
-  --overlay: rgba(39,19,10,.50);
-  /* The ground is a fixed layer (base.css body::after), so it is the same at
-     any scroll depth instead of stretching over a 30,000px page. */
-  --app-ground: #F5F6F8;
+  /* ---- Grounds ---- */
+  --bg: var(--theme-canvas);
+  --bg-2: var(--theme-surface-2);
+  --bg-sunken: var(--theme-surface-3);
+  --surface: var(--theme-surface);
+  --surface-2: var(--theme-surface-2);
+  --surface-3: var(--theme-surface-3);
+  --overlay: var(--theme-overlay);
+  /* The ground is a fixed layer (base.css body::after). */
+  --app-ground: var(--theme-canvas);
   --app-bg-image: none;
 
-  /* ---- Ink ladder: 17.7 / 9.4 / 7.4 / 5.0 on --surface, --ink-4 5.15 on --surface-3.
-     --ink-3 is also the ink of 53 page subtitles, counts and tabs that sit
-     straight on the ground: 6.9:1 on #F5F6F8 (it was solved at 4.63:1 on the
-     old ground's blush end). ---- */
-  --ink: #27130A;
-  --ink-2: #504440;
-  --ink-3: #5E5350;
-  --ink-4: #6E625F;
-  --ink-inv: #FFF8F6;
-  /* --paper: the companion of --ink-inv. css/components.css and six
-     inline styles in js/pages/analytics.js paint it on background:var(--ink). */
-  --paper: #FFF8F6;
+  /* ---- Ink ---- */
+  --ink: var(--theme-text);
+  --ink-2: var(--theme-text-2);
+  --ink-3: var(--theme-text-3);
+  --ink-4: var(--theme-text-3);
+  /* --ink-inv and --paper are text painted on background: var(--ink). */
+  --ink-inv: var(--theme-surface);
+  --paper: var(--theme-surface);
 
-  /* ---- Lines: --line divides, --line-strong bounds a control at 4.0:1 ---- */
-  --line: #E2E5EA;
-  --line-2: #D5DAE1;
-  --line-strong: #8D7B75;
-  --hairline: rgba(39,19,10,.07);
-  --card-line: rgba(39,19,10,.06);
+  /* ---- Lines: --line divides, --line-2 is the stronger divider,
+     --line-strong bounds a control (the set's field line, 3:1) ---- */
+  --line: var(--theme-line);
+  --line-2: var(--theme-line-strong);
+  --line-strong: var(--theme-field-line);
+  --hairline: color-mix(in srgb, var(--theme-text) 7%, transparent);
+  --card-line: color-mix(in srgb, var(--theme-text) 6%, transparent);
 
-  /* ---- Panel (sidebar, primary buttons, dock, toasts): cocoa ---- */
-  --panel-deep: #1C0D06;
-  --panel: #27130A;
-  --panel-2: #27130A;
-  --panel-3: #3C251A;
-  --panel-line: #523729;
-  --panel-line-2: #A08575;
-  --panel-text: #FFF3ED;
-  --panel-text-2: #E5D0C6;
-  --panel-text-3: #C7AEA2;
-  --side-bg: #3C251A;
-  --side-hover: rgba(255,243,237,.08);
-  --side-active: #5A3A2B;
+  /* ---- The inverse panel: toasts, popovers, the login panel ---- */
+  --panel-deep: var(--theme-text);
+  --panel: var(--theme-text);
+  --panel-2: var(--theme-text);
+  --panel-3: color-mix(in srgb, var(--theme-text) 86%, var(--theme-surface));
+  --panel-line: color-mix(in srgb, var(--theme-text) 78%, var(--theme-surface));
+  --panel-line-2: color-mix(in srgb, var(--theme-text) 55%, var(--theme-surface));
+  --panel-text: var(--theme-surface);
+  --panel-text-2: color-mix(in srgb, var(--theme-surface) 86%, var(--theme-text));
+  --panel-text-3: color-mix(in srgb, var(--theme-surface) 72%, var(--theme-text));
 
-  /* ---- Primary: cocoa. Links are cocoa and underlined (the mockups'
-     "Open Concerns", "View all"); selection washes are peach. ---- */
-  --primary: #27130A;
-  --primary-2: #3C251A;
-  --primary-hover: #3C251A;
-  --primary-press: #1C0D06;
-  --primary-bright: #9A6B55;
-  --primary-glow: #FFB59A;
-  --primary-soft: #EFEAE7;
-  --primary-soft-2: #E0D6D0;
-  --primary-tint: rgba(39,19,10,.05);
-  --on-primary: #FFFFFF;
+  /* ---- The sidebar and the phone dock: a surface with a line ---- */
+  --side-bg: var(--theme-surface);
+  --side-hover: var(--theme-surface-2);
+  --side-active: var(--theme-accent-soft);
 
-  /* ---- Accent: amber (legacy name "gold") for "New", chips, warmth ---- */
-  --gold: #7A4A00;
-  --gold-deep: #6A3F00;
-  --gold-bright: #E09A2B;
-  --gold-soft: #FFE6BD;
-  --gold-tint: rgba(122,74,0,.10);
+  /* ---- Actions: the accent ---- */
+  --primary: var(--theme-accent);
+  --primary-2: var(--theme-accent-hover);
+  --primary-hover: var(--theme-accent-hover);
+  --primary-press: var(--theme-accent-hover);
+  --primary-ink: var(--theme-accent-ink);
+  --primary-bright: var(--theme-accent-ink);
+  --primary-glow: color-mix(in srgb, var(--theme-accent) 40%, var(--theme-surface));
+  --primary-soft: var(--theme-accent-soft);
+  --primary-soft-2: color-mix(in srgb, var(--theme-accent) 18%, var(--theme-surface));
+  --primary-tint: color-mix(in srgb, var(--theme-accent) 6%, transparent);
+  --on-primary: var(--theme-on-accent);
+  --focus: var(--theme-focus);
 
-  /* ---- Secondary: lavender (legacy "clay") ---- */
-  --clay: #5B3FA0;
-  --clay-soft: #E5DBFF;
+  /* ---- Warmth and categories ---- */
+  --gold: var(--theme-warning);
+  --gold-deep: var(--theme-warning);
+  --gold-bright: color-mix(in srgb, var(--theme-warning) 60%, var(--theme-surface));
+  --gold-soft: var(--theme-warning-soft);
+  --gold-tint: color-mix(in srgb, var(--theme-warning) 10%, transparent);
+  --clay: var(--theme-pending);
+  --clay-soft: var(--theme-pending-soft);
+  --warmth: var(--theme-warning);
+  --warmth-deep: var(--theme-warning);
+  --warmth-bright: color-mix(in srgb, var(--theme-warning) 60%, var(--theme-surface));
+  --warmth-soft: var(--theme-warning-soft);
 
-  /* ---- Warmth: the same amber ink (awards, heart moments) ---- */
-  --warmth: #7A4A00;
-  --warmth-deep: #6A3F00;
-  --warmth-bright: #E09A2B;
-  --warmth-soft: #FFE6BD;
-
-  /* ---- Semantic: each ink carries 4.5:1 on its own chip ---- */
-  --ok: #1E6A4F;             --ok-soft: #CCEEE1;
-  --warn: #7A4A00;           --warn-soft: #FFE6BD;
-  --danger: #BA1A1A;         --danger-soft: #FFDAD6;
-  --info: #1A43A8;           --info-soft: #DCE6FF;
-  --violet: #5B3FA0;         --violet-soft: #E5DBFF;
-  /* the mockup's container pair for categories ("Follow-up", "Medium") */
-  --beige: #5E4A2C;          --beige-soft: #F2E0C8;
-  --blush: #8C0F40;          --blush-soft: #FFD8E8;
+  /* ---- Status: each ink on its own -soft, and --on-status on a fill ---- */
+  --ok: var(--theme-success);        --ok-soft: var(--theme-success-soft);
+  --warn: var(--theme-warning);      --warn-soft: var(--theme-warning-soft);
+  --danger: var(--theme-danger);     --danger-soft: var(--theme-danger-soft);
+  --info: var(--theme-info);         --info-soft: var(--theme-info-soft);
+  --violet: var(--theme-pending);    --violet-soft: var(--theme-pending-soft);
+  --beige: var(--theme-neutral);     --beige-soft: var(--theme-neutral-soft);
+  --blush: var(--theme-pending);     --blush-soft: var(--theme-pending-soft);
+  --on-status: var(--theme-on-status);
 
   /* ---- Priority ---- */
-  --pri-high: #BA1A1A;       --pri-high-soft: #FFDAD6;
-  --pri-med: #5E4A2C;        --pri-med-soft: #F2E0C8;
-  --pri-low: #514541;        --pri-low-soft: #E9E1DF;
+  --pri-high: var(--theme-danger);   --pri-high-soft: var(--theme-danger-soft);
+  --pri-med: var(--theme-warning);   --pri-med-soft: var(--theme-warning-soft);
+  --pri-low: var(--theme-neutral);   --pri-low-soft: var(--theme-neutral-soft);
 
-  /* ---- Tiles: the mockup's pastel KPI wall. bg / ink pairs, 6.3 to 8.2:1 ---- */
-  --tile-blue: #BED2FF;      --tile-blue-ink: #1F3F8F;
-  --tile-lime: #E9FFCA;      --tile-lime-ink: #3B5A12;
-  --tile-pink: #FFD8E8;      --tile-pink-ink: #8C0F40;
-  --tile-amber: #FFE6BD;     --tile-amber-ink: #6E4300;
-  --tile-cyan: #C9EEFF;      --tile-cyan-ink: #0F5170;
-  --tile-rose: #FFD2D3;      --tile-rose-ink: #8F1D24;
-  --tile-peach: #FFE6DB;     --tile-peach-ink: #7A3B1E;
-  --tile-mint: #CCEEE1;      --tile-mint-ink: #1D5C45;
-  --tile-lav: #E5DBFF;       --tile-lav-ink: #4A3590;
-  --tile-cream: #FFF2E1;     --tile-cream-ink: #5C4520;
+  /* ---- KPI tiles: status pairs (bg / ink) ---- */
+  --tile-blue: var(--theme-info-soft);        --tile-blue-ink: var(--theme-info);
+  --tile-lime: var(--theme-success-soft);     --tile-lime-ink: var(--theme-success);
+  --tile-pink: var(--theme-danger-soft);      --tile-pink-ink: var(--theme-danger);
+  --tile-amber: var(--theme-warning-soft);    --tile-amber-ink: var(--theme-warning);
+  --tile-cyan: var(--theme-info-soft);        --tile-cyan-ink: var(--theme-info);
+  --tile-rose: var(--theme-danger-soft);      --tile-rose-ink: var(--theme-danger);
+  --tile-peach: var(--theme-warning-soft);    --tile-peach-ink: var(--theme-warning);
+  --tile-mint: var(--theme-success-soft);     --tile-mint-ink: var(--theme-success);
+  --tile-lav: var(--theme-pending-soft);      --tile-lav-ink: var(--theme-pending);
+  --tile-cream: var(--theme-neutral-soft);    --tile-cream-ink: var(--theme-neutral);
 
-  /* ---- Avatars: pastel discs with cocoa initials (js/utils/avatar.js) ---- */
-  --av-1: #FFDAD6; --av-2: #F2E0C8; --av-3: #F1DDE9;
-  --av-4: #DCE6FF; --av-5: #CCEEE1; --av-6: #FFE6BD;
-  --av-ink: #27130A;
+  /* ---- Avatars: soft discs with text initials (js/utils/avatar.js) ---- */
+  --av-1: var(--theme-danger-soft);  --av-2: var(--theme-warning-soft); --av-3: var(--theme-pending-soft);
+  --av-4: var(--theme-info-soft);    --av-5: var(--theme-success-soft); --av-6: var(--theme-neutral-soft);
+  --av-ink: var(--theme-text);
 
-  /* ---- Table header band (the mockup's "Due Today" table) ---- */
-  --th-bg: #FFF2E1;
+  /* ---- Table header band ---- */
+  --th-bg: var(--theme-surface-2);
 
-  /* ---- Gradients: material & atmosphere ---- */
-  --grad-primary: linear-gradient(180deg, #3C251A, #27130A);
-  --grad-primary-hover: linear-gradient(180deg, #4A3022, #3C251A);
-  --grad-sky: linear-gradient(180deg, #4A3022, #27130A);
-  --grad-clay: linear-gradient(180deg, #6A4DB0, #5B3FA0);
-  --grad-ok: linear-gradient(180deg, #23785A, #1E6A4F);
-  --grad-ink: linear-gradient(160deg, #3C251A, #3C251A);
-  --grad-ink-aurora:
-    radial-gradient(760px 420px at 18% -6%, rgba(255,181,154,0.10), transparent 62%),
-    linear-gradient(160deg, #3C251A, #3C251A);
-  --grad-text: linear-gradient(92deg, #27130A, #5A3A2B 60%, #27130A);
-  --grad-hairline: linear-gradient(90deg, transparent, #D9D3CF 22%, #CEC6C1 55%, #D9D3CF 88%, transparent);
-  --grad-sheen: linear-gradient(180deg, rgba(255,255,255,.22), rgba(255,255,255,.04));
+  /* ---- Gradients: flat fills now, kept as gradients so callers still work ---- */
+  --grad-primary: linear-gradient(180deg, var(--theme-accent), var(--theme-accent));
+  --grad-primary-hover: linear-gradient(180deg, var(--theme-accent-hover), var(--theme-accent-hover));
+  --grad-sky: linear-gradient(180deg, var(--theme-accent), var(--theme-accent));
+  --grad-clay: linear-gradient(180deg, var(--theme-pending), var(--theme-pending));
+  --grad-ok: linear-gradient(180deg, var(--theme-success), var(--theme-success));
+  --grad-ink: linear-gradient(160deg, var(--theme-text), var(--theme-text));
+  --grad-ink-aurora: linear-gradient(160deg, var(--theme-text), var(--theme-text));
+  --grad-text: linear-gradient(92deg, var(--theme-text), var(--theme-text-2) 60%, var(--theme-text));
+  --grad-hairline: linear-gradient(90deg, transparent, var(--theme-line-strong) 50%, transparent);
+  --grad-sheen: linear-gradient(180deg, color-mix(in srgb, var(--theme-surface) 22%, transparent), transparent);
 
-  /* ---- Elevation: soft and warm; the mockup's cards barely lift ---- */
-  --hi: inset 0 1px 0 rgba(255,255,255,0.6);
-  --hi-dark: inset 0 1px 0 rgba(255,255,255,0.08);
-  --sh-1: 0 1px 2px rgba(39,19,10,.05);
-  --sh-2: 0 2px 8px -2px rgba(39,19,10,.10), 0 1px 2px rgba(39,19,10,.05);
-  --sh-3: 0 10px 24px -8px rgba(39,19,10,.16), 0 2px 6px -2px rgba(39,19,10,.08);
-  --sh-4: 0 20px 44px -14px rgba(39,19,10,.24), 0 4px 10px -4px rgba(39,19,10,.10);
-  --sh-float: 0 28px 60px -18px rgba(39,19,10,.30), 0 8px 18px -8px rgba(39,19,10,.14);
-  --sh-primary: 0 4px 14px -4px rgba(39,19,10,.32);
-  --sh-primary-lg: 0 12px 30px -8px rgba(39,19,10,.38);
-  --sh-panel: 0 12px 34px -6px rgba(39,19,10,.40);
-  --sh-gold: 0 8px 22px -8px rgba(122,74,0,.30);
-  --ring: 0 0 0 3px rgba(39,19,10,.24);
-  --ring-danger: 0 0 0 3px rgba(186,26,26,.26);
+  /* ---- Elevation: PN's shapes in a neutral tint ---- */
+  --hi: inset 0 1px 0 color-mix(in srgb, var(--theme-surface) 55%, transparent);
+  --hi-dark: inset 0 1px 0 color-mix(in srgb, var(--theme-surface) 8%, transparent);
+  --sh-1: 0 1px 2px rgba(16,24,40,.06);
+  --sh-2: 0 2px 8px -2px rgba(16,24,40,.10), 0 1px 2px rgba(16,24,40,.05);
+  --sh-3: 0 10px 24px -8px rgba(16,24,40,.16), 0 2px 6px -2px rgba(16,24,40,.08);
+  --sh-4: 0 20px 44px -14px rgba(16,24,40,.24), 0 4px 10px -4px rgba(16,24,40,.10);
+  --sh-float: 0 28px 60px -18px rgba(16,24,40,.30), 0 8px 18px -8px rgba(16,24,40,.14);
+  --sh-primary: 0 4px 14px -4px color-mix(in srgb, var(--theme-accent) 35%, transparent);
+  --sh-primary-lg: 0 12px 30px -8px color-mix(in srgb, var(--theme-accent) 40%, transparent);
+  --sh-panel: var(--theme-shadow-2);
+  --sh-gold: 0 8px 22px -8px color-mix(in srgb, var(--theme-warning) 30%, transparent);
+  --ring: 0 0 0 2px var(--theme-surface), 0 0 0 4px var(--theme-focus);
+  --ring-danger: 0 0 0 3px color-mix(in srgb, var(--theme-danger) 30%, transparent);
 
   /* ============================================================
      STRUCTURE (theme-invariant)
@@ -372,448 +336,6 @@
   --bottom-nav-height: var(--bottomnav-h);
   --content-max-width: 1400px;
 }
-
-/* ============================================================
-   DARK: cocoa night. Light rises: --bg is the floor and every plane
-   above it is lighter, so the panel sits ABOVE --bg. Contrast ratio is
-   degenerate near black, so the 3:1 boundaries are carried by opaque
-   border tokens, never by fill.
-   ============================================================ */
-:root[data-theme="dark"] {
-  color-scheme: dark;
-
-  /* ---- Grounds ---- */
-  --bg: #1A110C;
-  --bg-2: #21160F;
-  --bg-sunken: #140C08;
-  --surface: #261A13;
-  --surface-2: #2E2018;
-  --surface-3: #37281E;
-  --overlay: rgba(10,5,2,.70);
-  --app-ground:
-    radial-gradient(1100px 620px at 8% -10%, rgba(255,181,154,0.10), transparent 62%),
-    radial-gradient(900px 640px at 96% 106%, rgba(254,185,212,0.08), transparent 62%),
-    #1A110C;
-  --app-bg-image: none;
-
-  /* ---- Ink ladder ---- */
-  --ink: #F8ECE6;
-  --ink-2: #E6D2C8;
-  --ink-3: #D2BCB1;
-  --ink-4: #BCA499;
-  --ink-inv: #1A110C;
-  --paper: #1A110C;
-
-  /* ---- Lines ---- */
-  --line: #3D2C22;
-  --line-2: #523D30;
-  --line-strong: #8E7568;
-  --hairline: rgba(255,255,255,.07);
-  --card-line: #3D2C22;
-
-  /* ---- Panel: the most lifted slab ---- */
-  --panel-deep: #2E1F16;
-  --panel: #3A281D;
-  --panel-2: #47321F;
-  --panel-3: #573E2C;
-  --panel-line: #5E4535;
-  --panel-line-2: #B79C8E;
-  --panel-text: #FFF3ED;
-  --panel-text-2: #EEDBD2;
-  --panel-text-3: #D6BFB4;
-  --side-bg: #33231A;
-  --side-hover: rgba(255,243,237,.07);
-  --side-active: #5A402F;
-
-  /* ---- Primary: peach on cocoa night ---- */
-  --primary: #FFB59A;
-  --primary-2: #FFCFBC;
-  --primary-hover: #FFCFBC;
-  --primary-press: #F09C7E;
-  --primary-bright: #FFCFBC;
-  --primary-glow: #FFDBCB;
-  --primary-soft: #4A2C1E;
-  --primary-soft-2: #63402E;
-  --primary-tint: rgba(255,181,154,.12);
-  --on-primary: #27130A;
-
-  /* ---- Accent ---- */
-  --gold: #F5C27A;
-  --gold-deep: #F8D39C;
-  --gold-bright: #FFE6BD;
-  --gold-soft: #3E2A06;
-  --gold-tint: rgba(245,194,122,.14);
-
-  --clay: #CFBDFF;
-  --clay-soft: #33225E;
-
-  --warmth: #F5C27A;
-  --warmth-deep: #F8D39C;
-  --warmth-bright: #FFE6BD;
-  --warmth-soft: #3E2A06;
-
-  /* ---- Semantic ---- */
-  --ok: #8DD5B4;             --ok-soft: #0F3326;
-  --warn: #F5C27A;           --warn-soft: #3E2A06;
-  --danger: #FFB4AB;         --danger-soft: #5C1212;
-  --info: #B4C8FF;           --info-soft: #172E5E;
-  --violet: #CFBDFF;         --violet-soft: #33225E;
-  --beige: #EBD3B2;          --beige-soft: #3F3020;
-  --blush: #FFB0CD;          --blush-soft: #4E1A30;
-
-  --pri-high: #FFB4AB;       --pri-high-soft: #5C1212;
-  --pri-med: #EBD3B2;        --pri-med-soft: #3F3020;
-  --pri-low: #D2BCB1;        --pri-low-soft: #37281E;
-
-  /* ---- Tiles: deep tints, light inks ---- */
-  --tile-blue: #1D2E57;      --tile-blue-ink: #C9D8FF;
-  --tile-lime: #26340F;      --tile-lime-ink: #D3EDA9;
-  --tile-pink: #4E1A30;      --tile-pink-ink: #FFC6DC;
-  --tile-amber: #3E2A06;     --tile-amber-ink: #FFD99E;
-  --tile-cyan: #0D3446;      --tile-cyan-ink: #BCE7FA;
-  --tile-rose: #4E1B1D;      --tile-rose-ink: #FFC2C3;
-  --tile-peach: #48271A;     --tile-peach-ink: #FFD3C0;
-  --tile-mint: #0F3326;      --tile-mint-ink: #B4E8D2;
-  --tile-lav: #2E2252;       --tile-lav-ink: #DCD0FF;
-  --tile-cream: #3A2C1C;     --tile-cream-ink: #F3DFC4;
-
-  --av-1: #5C1F1A; --av-2: #4A3620; --av-3: #4A2840;
-  --av-4: #1D2E57; --av-5: #0F3326; --av-6: #3E2A06;
-  --av-ink: #FFF3ED;
-
-  --th-bg: #2E2018;
-
-  /* ---- Gradients ---- */
-  --grad-primary: linear-gradient(180deg, #FFC3AA, #FFB59A);
-  --grad-primary-hover: linear-gradient(180deg, #FFCFBC, #FFC3AA);
-  --grad-sky: linear-gradient(180deg, #FFCFBC, #FFB59A);
-  --grad-clay: linear-gradient(180deg, #DACBFF, #CFBDFF);
-  --grad-ok: linear-gradient(180deg, #9FDDC0, #8DD5B4);
-  --grad-ink: linear-gradient(160deg, #47321F, #3A281D);
-  --grad-ink-aurora:
-    radial-gradient(760px 420px at 18% -6%, rgba(255,219,203,0.08), transparent 62%),
-    linear-gradient(160deg, #3A281D, #33231A);
-  --grad-text: linear-gradient(92deg, #FFB59A, #FFB0CD 55%, #FFB59A);
-  --grad-hairline: linear-gradient(90deg, transparent, #FFB59A 22%, #FFB0CD 55%, #FFE6BD 88%, transparent);
-  --grad-sheen: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02));
-
-  /* ---- Elevation: a lit ring, not a black hole ---- */
-  --hi: inset 0 1px 0 rgba(255,255,255,0.07);
-  --hi-dark: inset 0 1px 0 rgba(255,255,255,0.06);
-  --sh-1: 0 0 0 1px rgba(255,255,255,.05);
-  --sh-2: 0 0 0 1px rgba(255,255,255,.07), 0 6px 16px -10px rgba(10,5,2,.60);
-  --sh-3: 0 0 0 1px rgba(255,255,255,.09), 0 14px 30px -14px rgba(10,5,2,.70);
-  --sh-4: 0 0 0 1px rgba(255,255,255,.11), 0 26px 52px -20px rgba(10,5,2,.78);
-  --sh-float: 0 0 0 1px rgba(255,255,255,.13), 0 34px 70px -22px rgba(10,5,2,.84);
-  --sh-primary: 0 4px 14px -4px rgba(255,181,154,.30);
-  --sh-primary-lg: 0 12px 30px -8px rgba(255,181,154,.36);
-  --sh-panel: 1px 0 0 #B79C8E, 0 16px 44px -10px rgba(10,5,2,.80);
-  --sh-gold: 0 8px 22px -8px rgba(245,194,122,.36);
-  --ring: 0 0 0 3px rgba(255,181,154,.40);
-  --ring-danger: 0 0 0 3px rgba(255,180,171,.38);
-}
-
-/* ============================================================
-   COLORFUL: the bad-light theme. Same skeleton and the same cocoa
-   identity, but no neutral surface anywhere, chip fills at roughly
-   2x light's chroma, and accent inks one rung deeper so a badge is
-   identifiable by colour before it is read. For a family member
-   holding a phone outdoors, where shadow dies in glare and only hue,
-   edge and area survive.
-   ============================================================ */
-:root[data-theme="colorful"] {
-  color-scheme: light;
-
-  /* ---- Grounds: blush; --surface is never pure white ---- */
-  --bg: #FFD8E2;
-  --bg-2: #FFCAD8;
-  --bg-sunken: #FBC6D4;
-  --surface: #FFF6F8;
-  --surface-2: #FFEDF2;
-  --surface-3: #FCE0E8;
-  --overlay: rgba(42,10,20,.52);
-  --app-ground: linear-gradient(180deg, #FFCDB0 0%, #FFC0C4 45%, #FFA9C9 100%);
-  --app-bg-image: none;
-
-  /* ---- Ink ladder ---- */
-  --ink: #2A0F16;
-  --ink-2: #4A2C34;
-  --ink-3: #5A3B44;
-  --ink-4: #684952;
-  --ink-inv: #FFF6F8;
-  --paper: #FFF6F8;
-
-  /* ---- Lines ---- */
-  --line: #F4CCD7;
-  --line-2: #E3AFBE;
-  --line-strong: #93707B;
-  --hairline: rgba(42,10,20,.08);
-  --card-line: #F4CCD7;
-
-  /* ---- Panel: plum cocoa ---- */
-  --panel-deep: #1E0910;
-  --panel: #2A0F16;
-  --panel-2: #2A0F16;
-  --panel-3: #461A28;
-  --panel-line: #5A2A39;
-  --panel-line-2: #A9808C;
-  --panel-text: #FFF3F6;
-  --panel-text-2: #F0D2DB;
-  --panel-text-3: #D9B2BE;
-  --side-bg: #3A1420;
-  --side-hover: rgba(255,243,246,.08);
-  --side-active: #5E2536;
-
-  /* ---- Primary ---- */
-  --primary: #2A0F16;
-  --primary-2: #461A28;
-  --primary-hover: #461A28;
-  --primary-press: #1E0910;
-  --primary-bright: #9C5368;
-  --primary-glow: #FFB59A;
-  --primary-soft: #FFC9B5;
-  --primary-soft-2: #F7A98F;
-  --primary-tint: rgba(42,10,20,.06);
-  --on-primary: #FFF6F8;
-
-  /* ---- Accent ---- */
-  --gold: #633B00;
-  --gold-deep: #523000;
-  --gold-bright: #E09A2B;
-  --gold-soft: #FFD089;
-  --gold-tint: rgba(99,59,0,.12);
-
-  --clay: #4A2E8C;
-  --clay-soft: #CDB9FF;
-
-  --warmth: #633B00;
-  --warmth-deep: #523000;
-  --warmth-bright: #E09A2B;
-  --warmth-soft: #FFD089;
-
-  /* ---- Semantic ---- */
-  --ok: #0E5A3E;             --ok-soft: #9EE0C2;
-  --warn: #633B00;           --warn-soft: #FFD089;
-  --danger: #8F0A12;         --danger-soft: #FFB4AB;
-  --info: #123E9C;           --info-soft: #A9C2FF;
-  --violet: #4A2E8C;         --violet-soft: #CDB9FF;
-  --beige: #4E3A1C;          --beige-soft: #EBCB9C;
-  --blush: #7A0A36;          --blush-soft: #FFB3CF;
-
-  --pri-high: #8F0A12;       --pri-high-soft: #FFB4AB;
-  --pri-med: #4E3A1C;        --pri-med-soft: #EBCB9C;
-  --pri-low: #4A2C34;        --pri-low-soft: #FCE0E8;
-
-  /* ---- Tiles: stronger pastels ---- */
-  --tile-blue: #A9C2FF;      --tile-blue-ink: #13306F;
-  --tile-lime: #D4F7A3;      --tile-lime-ink: #2E4A08;
-  --tile-pink: #FFB3CF;      --tile-pink-ink: #6E0832;
-  --tile-amber: #FFD089;     --tile-amber-ink: #563300;
-  --tile-cyan: #A6E2FF;      --tile-cyan-ink: #0A4058;
-  --tile-rose: #FFB4AB;      --tile-rose-ink: #73121A;
-  --tile-peach: #FFC9B5;     --tile-peach-ink: #632E15;
-  --tile-mint: #9EE0C2;      --tile-mint-ink: #144834;
-  --tile-lav: #CDB9FF;       --tile-lav-ink: #3B2775;
-  --tile-cream: #FBE2BF;     --tile-cream-ink: #4A3616;
-
-  --av-1: #FFB4AB; --av-2: #EBCB9C; --av-3: #F0B8D6;
-  --av-4: #A9C2FF; --av-5: #9EE0C2; --av-6: #FFD089;
-  --av-ink: #2A0F16;
-
-  --th-bg: #FFE3C8;
-
-  /* ---- Gradients ---- */
-  --grad-primary: linear-gradient(180deg, #461A28, #2A0F16);
-  --grad-primary-hover: linear-gradient(180deg, #5A2236, #461A28);
-  --grad-sky: linear-gradient(180deg, #5A2236, #2A0F16);
-  --grad-clay: linear-gradient(180deg, #5B3FA0, #4A2E8C);
-  --grad-ok: linear-gradient(180deg, #146B4B, #0E5A3E);
-  --grad-ink: linear-gradient(160deg, #3A1420, #3A1420);
-  --grad-ink-aurora:
-    radial-gradient(760px 420px at 18% -6%, rgba(255,181,154,0.14), transparent 62%),
-    linear-gradient(160deg, #3A1420, #2A0F16);
-  --grad-text: linear-gradient(92deg, #2A0F16, #7A0A36 55%, #633B00);
-  --grad-hairline: linear-gradient(90deg, transparent, #F7A98F 22%, #FFA9C9 55%, #E09A2B 88%, transparent);
-  --grad-sheen: linear-gradient(180deg, rgba(255,255,255,.26), rgba(255,255,255,.05));
-
-  /* ---- Elevation ---- */
-  --hi: inset 0 1px 0 rgba(255,255,255,0.6);
-  --hi-dark: inset 0 1px 0 rgba(255,255,255,0.08);
-  --sh-1: 0 1px 2px rgba(42,10,20,.07);
-  --sh-2: 0 2px 8px -2px rgba(42,10,20,.12), 0 1px 2px rgba(42,10,20,.06);
-  --sh-3: 0 10px 24px -8px rgba(42,10,20,.18), 0 2px 6px -2px rgba(42,10,20,.09);
-  --sh-4: 0 20px 44px -14px rgba(42,10,20,.26), 0 4px 10px -4px rgba(42,10,20,.11);
-  --sh-float: 0 28px 60px -18px rgba(42,10,20,.32), 0 8px 18px -8px rgba(42,10,20,.15);
-  --sh-primary: 0 4px 14px -4px rgba(42,10,20,.32);
-  --sh-primary-lg: 0 12px 30px -8px rgba(42,10,20,.38);
-  --sh-panel: 0 12px 34px -6px rgba(42,10,20,.42);
-  --sh-gold: 0 8px 22px -8px rgba(99,59,0,.34);
-  --ring: 0 0 0 3px rgba(42,10,20,.26);
-  --ring-danger: 0 0 0 3px rgba(143,10,18,.28);
-}
-
-/* ============================================================
-   CLASSIC: the previous look (v10 "Ward Paper": sand ground, petrol
-   teal, a slate sidebar, Archivo type), kept one tap away for anyone
-   who prefers it. Same layouts and flows as the other three themes;
-   only colour, type and corner tokens change, plus the four shape
-   rules at the end of this block. Colour values are v10's light tokens
-   verbatim (build 20260929b); the tokens v11 introduced (sidebar, chips,
-   avatars, table band) get classic values solved to 4.5:1 or better.
-   Archivo and Spline Sans Mono load only while this theme is on
-   (js/theme.js and the bootstrap in index.html), so nobody else pays
-   for them.
-   ============================================================ */
-:root[data-theme="classic"] {
-  color-scheme: light;
-
-  /* ---- Grounds: sand, white cards ---- */
-  --bg: #F6F2EA;
-  --bg-2: #EDE7DB;
-  --bg-sunken: #E8E1D4;
-  --surface: #FFFFFF;
-  --surface-2: #FBF8F3;
-  --surface-3: #F2EDE2;
-  --overlay: rgba(13,10,5,.52);
-  --app-ground:
-    radial-gradient(1100px 620px at 8% -10%, rgba(0,100,105,0.07), transparent 62%),
-    radial-gradient(900px 520px at 96% 4%, rgba(122,76,0,0.07), transparent 60%),
-    radial-gradient(1000px 700px at 50% 108%, rgba(91,72,146,0.05), transparent 64%),
-    #F6F2EA;
-  --app-bg-image: none;
-
-  /* ---- Ink ladder: 17.1 / 10.9 / 8.2 / 6.0 on --surface ---- */
-  --ink: #201B12;
-  --ink-2: #433C2F;
-  --ink-3: #554E40;
-  --ink-4: #6A6253;
-  --ink-inv: #FBF8F3;
-  --paper: #FBF8F3;
-
-  /* ---- Lines ---- */
-  --line: #E8E1D4;
-  --line-2: #C4BBAA;
-  --line-strong: #8F8777;
-  --hairline: rgba(13,10,5,.08);
-  --card-line: #E8E1D4;
-
-  /* ---- Night panel: slate, one hue with the primary ---- */
-  --panel-deep: #050C0C;
-  --panel: #0A1516;
-  --panel-2: #111F1F;
-  --panel-3: #182828;
-  --panel-line: #1F3031;
-  --panel-line-2: #758D8E;
-  --panel-text: #EAF5F5;
-  --panel-text-2: #9CB6B6;
-  --panel-text-3: #829B9C;
-  --side-bg: var(--grad-ink-aurora);
-  --side-hover: rgba(255,255,255,.06);
-  --side-active: #182828;
-
-  /* ---- Primary: petrol teal ---- */
-  --primary: #006469;
-  --primary-2: #005255;
-  --primary-hover: #005255;
-  --primary-press: #003A3D;
-  --primary-bright: #00979E;
-  --primary-glow: #00AAB1;
-  --primary-soft: #BCE7E9;
-  --primary-soft-2: #99DBDE;
-  --primary-tint: rgba(0,100,105,.07);
-  --on-primary: #FFFFFF;
-
-  /* ---- Accents ---- */
-  --gold: #7A4C00;
-  --gold-deep: #643D00;
-  --gold-bright: #C7862F;
-  --gold-soft: #F3D8BB;
-  --gold-tint: rgba(122,76,0,.12);
-  --clay: #5B4892;
-  --clay-soft: #DED8FC;
-  --warmth: #7A4C00;
-  --warmth-deep: #643D00;
-  --warmth-bright: #C7862F;
-  --warmth-soft: #F3D8BB;
-
-  /* ---- Semantic: each ink carries 4.5:1 on its own chip ---- */
-  --ok: #106841;             --ok-soft: #C7E6D3;
-  --warn: #7A4C00;           --warn-soft: #F3D8BB;
-  --danger: #953028;         --danger-soft: #FFD1CA;
-  --info: #295B86;           --info-soft: #CAE0F5;
-  --violet: #5B4892;         --violet-soft: #DED8FC;
-  /* v11's category chips ("Follow-up") go teal here, 6.7:1; blush goes violet, 5.5:1 */
-  --beige: #005255;          --beige-soft: #BCE7E9;
-  --blush: #5B4892;          --blush-soft: #DED8FC;
-
-  /* ---- Priority ---- */
-  --pri-high: #953028;       --pri-high-soft: #FFD1CA;
-  --pri-med: #7A4C00;        --pri-med-soft: #F3D8BB;
-  --pri-low: #554E40;        --pri-low-soft: #F2EDE2;
-
-  /* ---- Avatars: v10's soft tones as discs, ink initials at 12.4:1 or more ---- */
-  --av-1: #FFD1CA; --av-2: #F3D8BB; --av-3: #DED8FC;
-  --av-4: #CAE0F5; --av-5: #C7E6D3; --av-6: #BCE7E9;
-  --av-ink: #201B12;
-
-  --th-bg: #FBF8F3;
-
-  /* ---- Gradients ---- */
-  --grad-primary: linear-gradient(180deg, #00757A, #006469 58%, #005255);
-  --grad-primary-hover: linear-gradient(180deg, #00858B, #00757A 58%, #006469);
-  --grad-sky: linear-gradient(180deg, #00979E, #006469);
-  --grad-clay: linear-gradient(180deg, #6A55A8, #5B4892);
-  --grad-ok: linear-gradient(180deg, #1A784D, #106841);
-  --grad-ink: linear-gradient(160deg, #111F1F, #0A1516 46%, #050C0C);
-  --grad-ink-aurora:
-    radial-gradient(760px 420px at 18% -6%, rgba(0,170,177,0.145), transparent 62%),
-    radial-gradient(620px 380px at 92% 104%, rgba(199,134,47,0.14), transparent 60%),
-    linear-gradient(160deg, #111F1F, #0A1516 46%, #050C0C);
-  --grad-text: linear-gradient(92deg, #006469, #00979E 50%, #006469);
-  --grad-hairline: linear-gradient(90deg, transparent, #00979E 22%, #00AAB1 55%, #C7862F 88%, transparent);
-  --grad-sheen: linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,.05));
-
-  /* ---- Elevation ---- */
-  --hi: inset 0 1px 0 rgba(255,255,255,0.6);
-  --hi-dark: inset 0 1px 0 rgba(255,255,255,0.079);
-  --sh-1: 0 1px 2px rgba(13,10,5,.06);
-  --sh-2: 0 2px 6px -1px rgba(13,10,5,.10), 0 1px 2px rgba(13,10,5,.06);
-  --sh-3: 0 8px 20px -6px rgba(13,10,5,.16), 0 2px 6px -2px rgba(13,10,5,.09);
-  --sh-4: 0 18px 40px -12px rgba(13,10,5,.22), 0 4px 10px -4px rgba(13,10,5,.10);
-  --sh-float: 0 28px 60px -18px rgba(13,10,5,.30), 0 8px 18px -8px rgba(13,10,5,.14);
-  --sh-primary: 0 4px 14px -4px rgba(0,100,105,.30);
-  --sh-primary-lg: 0 12px 30px -8px rgba(0,100,105,.38);
-  --sh-panel: 0 12px 34px -6px rgba(13,10,5,.42);
-  --sh-gold: 0 8px 22px -8px rgba(122,76,0,.34);
-  --ring: 0 0 0 3px rgba(0,100,105,.28);
-  --ring-danger: 0 0 0 3px rgba(149,48,40,.26);
-
-  /* ---- Type: Archivo grotesk + Spline mono, v10's weights ---- */
-  --font-ui: 'Archivo', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'Spline Sans Mono', 'JetBrains Mono', ui-monospace, 'Cascadia Mono', monospace;
-  --stretch-wide: 104%;
-  --stretch-narrow: 86%;
-  --w-display: 660;
-  --w-number: 620;
-  --t-display: 660 34px/1.1 var(--font-ui);
-  --t-h1: 660 26px/1.16 var(--font-ui);
-  --t-h2: 640 21px/1.22 var(--font-ui);
-  --t-h3: 620 17px/1.3 var(--font-ui);
-  --t-xs: 500 12px/1.4 var(--font-ui);
-  --t-label: 600 11.5px/1.2 var(--font-ui);
-  --t-mono: 500 12px/1.4 var(--font-mono);
-  --t-mono-label: 600 10.5px/1.3 var(--font-mono);
-
-  /* ---- Corners: precise, not bubbly ---- */
-  --r-xs: 6px; --r-sm: 9px; --r-md: 11px; --r-lg: 14px; --r-xl: 18px; --r-2xl: 24px;
-  --r-card: 14px;
-  --r-chip: 6px;
-}
-/* v11 made buttons pills and icon buttons round; classic keeps v10's corners. */
-:root[data-theme="classic"] .btn { border-radius: var(--r-md); }
-:root[data-theme="classic"] .btn-lg { border-radius: var(--r-lg); }
-:root[data-theme="classic"] .btn-sm,
-:root[data-theme="classic"] .btn-icon { border-radius: var(--r-sm); }
 
 @media (prefers-reduced-motion: reduce) {
   :root { --fast: 0ms; --base: 0ms; --slow: 0ms; --slower: 0ms; }

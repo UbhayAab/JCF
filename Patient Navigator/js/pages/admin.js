@@ -256,8 +256,8 @@ function showCredentialsModal(name, email, password, role) {
       <h3 style="margin-bottom:var(--s2)">${sanitize(name)} can sign in now</h3>
       <p style="color:var(--ink-2);margin-bottom:var(--s5)">Share these once. They'll be asked to set their own password immediately:</p>
       <div class="card" style="text-align:left">
-        ${email && email !== '(their email)' ? `<div class="form-group"><label class="form-label">Email</label><code style="color:var(--primary)">${email}</code></div>` : ''}
-        <div class="form-group" style="margin-bottom:${role === 'reset' ? '0' : 'var(--s4)'}"><label class="form-label">First-time password</label><code style="color:var(--primary)">${password}</code></div>
+        ${email && email !== '(their email)' ? `<div class="form-group"><label class="form-label">Email</label><code style="color:var(--primary-ink)">${email}</code></div>` : ''}
+        <div class="form-group" style="margin-bottom:${role === 'reset' ? '0' : 'var(--s4)'}"><label class="form-label">First-time password</label><code style="color:var(--primary-ink)">${password}</code></div>
         ${role !== 'reset' ? `<div class="form-group" style="margin:0"><label class="form-label">Role</label>${getRoleBadge(role)}</div>` : ''}
       </div>
       <div class="form-actions" style="justify-content:center;border:none;margin-top:var(--s4)">

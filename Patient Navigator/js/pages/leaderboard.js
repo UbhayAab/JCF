@@ -175,7 +175,7 @@ function podium(top) {
         <div style="font-size:22px;line-height:1">${m.medal}</div>
         <span class="avatar avatar-lg" style="background:${avatarColor(r.full_name)};box-shadow:0 0 0 3px ${m.ring};margin:6px auto 8px">${initials(r.full_name)}</span>
         <div style="font:var(--t-body-strong);font-weight:650;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.full_name}</div>
-        <div style="font:var(--t-h2);font-weight:800;color:var(--primary);line-height:1.1">${r.mvp}</div>
+        <div style="font:var(--t-h2);font-weight:800;color:var(--primary-ink);line-height:1.1">${r.mvp}</div>
         <div class="faint" style="font-size:11px;color:var(--ink-3);margin-bottom:8px">MVP</div>
         <div style="height:${m.h}px;border-radius:10px 10px 0 0;background:linear-gradient(180deg,var(--primary-bright),var(--primary));display:flex;align-items:flex-start;justify-content:center;padding-top:8px;color:var(--on-primary);font-weight:800;font-size:20px">${r.rank}</div>
       </div>`;
@@ -214,7 +214,7 @@ function table(rows) {
   });
   const head = `<th style="text-align:left;padding:9px 10px;position:sticky;left:0;background:var(--surface)">#</th>
     <th style="text-align:left;padding:9px 10px;position:sticky;left:0;background:var(--surface)">Mentor</th>
-    ${COLS.map(c => `<th class="lb-th" data-sort="${c.key}" style="padding:9px 8px;text-align:center;cursor:pointer;white-space:nowrap;min-width:${c.w}px">${c.label}${SORT.key===c.key?`<span style="color:var(--primary)"> ${SORT.dir<0?'▼':'▲'}</span>`:''}</th>`).join('')}
+    ${COLS.map(c => `<th class="lb-th" data-sort="${c.key}" style="padding:9px 8px;text-align:center;cursor:pointer;white-space:nowrap;min-width:${c.w}px">${c.label}${SORT.key===c.key?`<span style="color:var(--primary-ink)"> ${SORT.dir<0?'▼':'▲'}</span>`:''}</th>`).join('')}
     <th style="padding:9px 10px;text-align:right;white-space:nowrap">Last active</th>`;
   return `<div class="card" style="padding:0;overflow-x:auto">
     <table class="lb-table" style="width:100%;border-collapse:collapse;font-size:13px">
@@ -325,7 +325,7 @@ function openMentorModal(id) {
       </div>
       <div style="text-align:center;flex:none">
         <div style="font-size:22px;line-height:1">${medal}</div>
-        <div style="font-size:30px;font-weight:800;color:var(--primary);line-height:1.1">${r.mvp}</div>
+        <div style="font-size:30px;font-weight:800;color:var(--primary-ink);line-height:1.1">${r.mvp}</div>
         <div class="faint" style="font-size:11px;color:var(--ink-3)">MVP · rank #${r.rank} of ${N}</div>
       </div>
     </div>

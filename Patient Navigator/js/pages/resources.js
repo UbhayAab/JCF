@@ -487,7 +487,7 @@ function patientBarHTML() {
 
   return `<div class="card" style="padding:12px 15px;margin-bottom:var(--s4);border-left:4px solid var(--primary)">
     <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
-      <span style="width:16px;height:16px;flex:none;color:var(--primary);display:inline-flex">${icon('handHeart')}</span>
+      <span style="width:16px;height:16px;flex:none;color:var(--primary-ink);display:inline-flex">${icon('handHeart')}</span>
       <div style="font:var(--t-sm);color:var(--ink-1)"><strong>${esc(p.full_name || 'This family')}</strong>
         <span style="color:var(--ink-3)"> &middot; ${bits.join(' &middot; ')}</span></div>
       <span style="flex:1"></span>

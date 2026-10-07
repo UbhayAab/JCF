@@ -132,9 +132,9 @@ function setPill(state) {
   const pill = document.getElementById('live-pill');
   if (!pill) return;
   if (state === 'refreshing') {
-    pill.innerHTML = '<span style="width:7px;height:7px;border-radius:50%;background:#B0780E;box-shadow:0 0 0 3px #B0780E22"></span>UPDATING…';
+    pill.innerHTML = '<span style="width:7px;height:7px;border-radius:50%;background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb, var(--warn) 13%, transparent)"></span>UPDATING…';
   } else {
-    pill.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;background:#1E6A4F;box-shadow:0 0 0 3px #1E6A4F22"></span>LIVE · updated ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
+    pill.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb, var(--ok) 13%, transparent)"></span>LIVE · updated ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
   }
 }
 
@@ -261,14 +261,14 @@ function sectionBand(tag, title, subtitle, color) {
   const id = tag.toLowerCase().replace(/[^a-z]/g, '');
   return `
     <div class="ria-band" id="band-${id}" style="display:flex;align-items:center;gap:16px;margin:38px 0 10px;scroll-margin-top:80px">
-      <span style="font-family:var(--font-mono);font-weight:600;font-size:10.5px;letter-spacing:.24em;color:#fff;background:${color};padding:6px 12px 6px 14px;border-radius:6px;white-space:nowrap;box-shadow:var(--hi-dark),0 4px 12px ${color}44">${tag}</span>
+      <span style="font-family:var(--font-mono);font-weight:600;font-size:10.5px;letter-spacing:.24em;color:var(--on-status);background:${color};padding:6px 12px 6px 14px;border-radius:6px;white-space:nowrap;box-shadow:var(--hi-dark),0 4px 12px color-mix(in srgb, ${color} 27%, transparent)">${tag}</span>
       <div style="flex:1;min-width:0">
         <div style="font-family:var(--font-display);font-size:21px;font-weight:790;font-stretch:112%;letter-spacing:-0.025em;color:var(--ink);line-height:1.15">${title}</div>
         <div style="font-size:13px;color:var(--ink-3)">${subtitle}</div>
       </div>
-      <div style="flex:2;height:1px;background:linear-gradient(90deg,${color}55,transparent)"></div>
+      <div style="flex:2;height:1px;background:linear-gradient(90deg,color-mix(in srgb, ${color} 33%, transparent),transparent)"></div>
     </div>
-    <div id="insight-${id}" style="display:none;margin:0 0 16px;padding:11px 14px;border-radius:var(--r-sm);background:${color}0d;border:1px solid ${color}26;font-size:13px;line-height:1.55;color:var(--ink-2)"></div>`;
+    <div id="insight-${id}" style="display:none;margin:0 0 16px;padding:11px 14px;border-radius:var(--r-sm);background:color-mix(in srgb, ${color} 5%, transparent);border:1px solid color-mix(in srgb, ${color} 15%, transparent);font-size:13px;line-height:1.55;color:var(--ink-2)"></div>`;
 }
 function setSectionInsight(id, html) {
   const el = document.getElementById('insight-' + id);
@@ -309,7 +309,7 @@ export async function renderAnalytics(container) {
         <div class="flex gap-2 items-center" style="flex-wrap:wrap">
           <a href="#report" class="btn btn-secondary btn-sm" title="Open the monthly impact report and download it as a PDF"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>Monthly report</a>
           <span id="live-pill" style="display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:11px;color:var(--ink-3);padding:5px 10px;border:1px solid var(--line-2);border-radius:99px">
-            <span style="width:7px;height:7px;border-radius:50%;background:#1E6A4F;box-shadow:0 0 0 3px #1E6A4F22"></span>
+            <span style="width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb, var(--ok) 13%, transparent)"></span>
             LIVE · loading…
           </span>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
@@ -323,8 +323,8 @@ export async function renderAnalytics(container) {
 
       <!-- Jump nav: the upper-level view first, then dig in -->
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:var(--s4)">
-        ${[['reach', 'REACH', '#7A4A00'], ['action', 'ACTION', '#1A43A8'], ['safetynet', 'SAFETY NET', '#BA1A1A'], ['nutrition', 'NUTRITION', '#1E6A4F'], ['impact', 'IMPACT', '#5B3FA0'], ['correlate', 'CORRELATE', '#7A4A00']]
-          .map(([id, label, color]) => `<button class="jump-btn" data-target="band-${id}" style="border:1px solid ${color}44;background:${color}0d;color:var(--ink-2);border-radius:99px;padding:4px 12px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;cursor:pointer">${label}</button>`).join('')}
+        ${[['reach', 'REACH', 'var(--warn)'], ['action', 'ACTION', 'var(--info)'], ['safetynet', 'SAFETY NET', 'var(--danger)'], ['nutrition', 'NUTRITION', 'var(--ok)'], ['impact', 'IMPACT', 'var(--violet)'], ['correlate', 'CORRELATE', 'var(--warn)']]
+          .map(([id, label, color]) => `<button class="jump-btn" data-target="band-${id}" style="border:1px solid color-mix(in srgb, ${color} 27%, transparent);background:color-mix(in srgb, ${color} 5%, transparent);color:var(--ink-2);border-radius:99px;padding:4px 12px;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;cursor:pointer">${label}</button>`).join('')}
       </div>
 
       <!-- The cohort filter: this decides who every number below is about -->
@@ -405,7 +405,7 @@ export async function renderAnalytics(container) {
 // The chart sections. Rebuilt on range change so cards/badges stay honest.
 function chartsScaffold() {
   return `
-    ${sectionBand('REACH', 'Who we reach', 'The people and clinical reality behind the numbers', '#7A4A00')}
+    ${sectionBand('REACH', 'Who we reach', 'The people and clinical reality behind the numbers', 'var(--warn)')}
     <div class="chart-grid">
       ${chartCard('chart-intake', 'Registry growth: new patients per day', { full: true, height: 90 })}
       ${chartCard('chart-cancer-types', 'GI cancer subtypes', { scope: 'snapshot' })}
@@ -429,7 +429,7 @@ function chartsScaffold() {
       ${chartCard('chart-completeness', 'What we know vs. what’s still vague', { scope: 'snapshot', badge: '<span class="badge badge-warn">caregiver mentors get prompted for the gaps</span>', full: true, height: 100, delay: 360 })}
     </div>
 
-    ${sectionBand('ACTION', 'What we do', 'Every dial, every support lever, and how far the relationship travels', '#1A43A8')}
+    ${sectionBand('ACTION', 'What we do', 'Every dial, every support lever, and how far the relationship travels', 'var(--info)')}
     <div class="chart-grid">
       ${chartCard('chart-calls-timeline', 'Calls over time', { full: true, height: 100, badge: '<span class="badge badge-primary badge-dot">Total</span><span class="badge badge-success badge-dot">Connected</span>' })}
       ${chartCard('chart-outcomes', 'What happened to every dial', { delay: 40 })}
@@ -448,7 +448,7 @@ function chartsScaffold() {
       ${chartCard('chart-caller-perf', 'Caregiver mentor performance', { full: true, height: 90, delay: 360 })}
     </div>
 
-    ${sectionBand('SAFETY NET', 'Concerns we caught', 'Red flags stop living in people’s memories. This is the escalation queue as data', '#BA1A1A')}
+    ${sectionBand('SAFETY NET', 'Concerns we caught', 'Red flags stop living in people’s memories. This is the escalation queue as data', 'var(--danger)')}
     <div class="chart-grid">
       ${chartCard('chart-concerns', 'Why patients get flagged', { full: true, height: 90 })}
       <div class="chart-card animate-fade-in" style="animation-delay:60ms">
@@ -458,14 +458,14 @@ function chartsScaffold() {
       </div>
     </div>
 
-    ${sectionBand('NUTRITION', 'The nutrition arm', 'From assignment to plans to malnutrition risk, and who on the team is carrying it', '#1E6A4F')}
+    ${sectionBand('NUTRITION', 'The nutrition arm', 'From assignment to plans to malnutrition risk, and who on the team is carrying it', 'var(--ok)')}
     <div class="chart-grid">
       ${chartCard('chart-nutrition-funnel', 'From touched to fed', { scope: 'snapshot', badge: '<span class="badge badge-ok">nutrition funnel</span>' })}
       ${chartCard('chart-nutrition-must', 'MUST malnutrition risk', { scope: 'snapshot', badge: '<span class="badge badge-warn">latest score per patient</span>', delay: 60 })}
       ${chartCard('chart-nutrition-team', 'Nutrition team performance', { badge: '<span class="badge badge-info">check-ins · patients · 1:1s held</span>', full: true, height: 90, delay: 120 })}
     </div>
 
-    ${sectionBand('IMPACT', 'The change we see', 'In oncology a STABLE score is a win. Quality of life holding up is the outcome', '#5B3FA0')}
+    ${sectionBand('IMPACT', 'The change we see', 'In oncology a STABLE score is a win. Quality of life holding up is the outcome', 'var(--violet)')}
     <div class="chart-grid">
       <div class="chart-card chart-full-width animate-fade-in">
         <div class="chart-header">
@@ -484,7 +484,7 @@ function chartsScaffold() {
       ${chartCard('chart-activation', 'Patient activation', { scope: 'snapshot', badge: '<span class="badge badge-info">“I know what to do if…”</span>', delay: 200 })}
     </div>
 
-    ${sectionBand('CORRELATE', 'What moves with what', 'Does the support, the trust, the time actually correlate with better lives', '#7A4A00')}
+    ${sectionBand('CORRELATE', 'What moves with what', 'Does the support, the trust, the time actually correlate with better lives', 'var(--warn)')}
     <div class="chart-grid">
       ${chartCard('chart-dose-response', 'Support dose vs well-being', { scope: 'snapshot', badge: '<span class="badge badge-gold">levers received → trajectory</span>' })}
       ${chartCard('chart-warming', 'The warming curve', { scope: 'snapshot', badge: '<span class="badge badge-info">receptiveness by nth conversation</span>', delay: 60 })}
@@ -656,18 +656,18 @@ async function loadHeadline() {
         <div class="flex justify-between items-center">
           <div><div class="stat-value">${val}</div><div class="stat-label">${label}</div>
             ${sub ? `<div style="font-size:11px;color:var(--color-text-muted);margin-top:2px">${sub}</div>` : ''}</div>
-          <div class="stat-icon" style="background:${color}14;color:${color};border-color:${color}22">${svg}</div>
+          <div class="stat-icon" style="background:color-mix(in srgb, ${color} 8%, transparent);color:${color};border-color:color-mix(in srgb, ${color} 13%, transparent)">${svg}</div>
         </div>
       </div>`;
     const el = document.getElementById('impact-headline');
     if (!el) return;
     el.innerHTML =
-      card(fmtRs(d.aid_disbursed), metricTerm('hero_aid', 'Financial aid disbursed'), `${d.aid_families || 0} families`, '#1A43A8', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>') +
-      card(d.patients_improved || 0, metricTerm('hero_improved', 'Patients improved'), 'on ≥1 wellbeing measure', '#1E6A4F', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>') +
-      card(d.support_delivered || 0, metricTerm('hero_support', 'Support actions delivered'), `${d.wellbeing_sessions || 0} well-being sessions`, '#5B3FA0', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 1 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg>') +
+      card(fmtRs(d.aid_disbursed), metricTerm('hero_aid', 'Financial aid disbursed'), `${d.aid_families || 0} families`, 'var(--info)', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>') +
+      card(d.patients_improved || 0, metricTerm('hero_improved', 'Patients improved'), 'on ≥1 wellbeing measure', 'var(--ok)', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>') +
+      card(d.support_delivered || 0, metricTerm('hero_support', 'Support actions delivered'), `${d.wellbeing_sessions || 0} well-being sessions`, 'var(--violet)', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 1 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg>') +
       card(d.assessments || 0, 'Wellbeing check-ins logged',
         `${instrumentChip('phq4_patient', 'PHQ-4')} ${instrumentChip('qol_physical', 'QoL')} ${instrumentChip('must_malnutrition', 'MUST')} ${instrumentChip('zarit_burden', 'Zarit')} <span style="color:var(--ink-4)">(hover any to see the questions)</span>`,
-        '#5B3FA0', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>');
+        'var(--violet)', '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>');
   } catch (err) { console.error('Headline error:', err); }
 }
 
