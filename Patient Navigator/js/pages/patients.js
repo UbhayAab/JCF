@@ -1567,7 +1567,7 @@ async function loadSessionsCard(mount, p, sb) {
             <span class="stat-ico ${s.kind === 'nutrition' ? 'ok' : s.kind === 'caregiver' ? 'info' : 'warn'}" style="width:30px;height:30px;border-radius:8px">${icon(k.icon)}</span>
             <div style="flex:1;min-width:150px">
               <div class="lever-label">${k.label}<span class="badge badge-${st.tone}" style="margin-left:8px">${st.label}</span></div>
-              <div class="due-meta">${when}${s.assignee?.full_name ? ' · with ' + s.assignee.full_name : ''}${s.duration_mins ? ' · ' + s.duration_mins + ' min' : ''}</div>
+              <div class="due-meta">${when}${s.assignee?.full_name ? ' · with ' + sanitize(s.assignee.full_name) : ''}${s.duration_mins ? ' · ' + s.duration_mins + ' min' : ''}</div>
               ${s.session_notes ? `<div class="due-meta" style="font-style:italic;margin-top:2px">${s.session_notes}</div>` : ''}
             </div>
           </div>`;
@@ -1894,7 +1894,7 @@ function renderCallsTab(el, p, calls, reload, failed = false) {
                   ${c.receptiveness_bucket ? `<span class="badge badge-primary">${capitalize(c.receptiveness_bucket.replace(/_/g, ' '))}</span>` : ''}
                   ${c.patient_mindset ? `<span class="badge badge-neutral">${capitalize(c.patient_mindset)}</span>` : ''}
                   ${cond ? `<span class="badge badge-${cond.tone === 'ok' ? 'ok' : cond.tone === 'danger' ? 'danger' : cond.tone === 'warn' ? 'warn' : 'neutral'}">${cond.label}</span>` : ''}
-                  <span class="tl-when">${capitalize((c.caller_name || c.profiles?.full_name || c.contacted_by_name || 'N/A').toLowerCase())} · ${formatDate(c.call_date)} · ${c.call_duration_mins || 0} min</span>
+                  <span class="tl-when">${sanitize(capitalize((c.caller_name || c.profiles?.full_name || c.contacted_by_name || 'N/A').toLowerCase()))} · ${formatDate(c.call_date)} · ${c.call_duration_mins || 0} min</span>
                 </div>
                 ${c.caller_notes ? `<div class="tl-body">${sanitize(c.caller_notes)}</div>` : ''}
                 ${reqText ? `<div class="tl-body"><strong>Asked for:</strong> ${sanitize(reqText)}</div>` : ''}

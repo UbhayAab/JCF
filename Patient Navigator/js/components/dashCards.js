@@ -106,7 +106,7 @@ function resourceThread(t, i) {
   return `
     <div>
       <div class="due-row clickable" data-thr="${i}" style="cursor:pointer">
-        <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span>
+        <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span>
         <div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(name)}</div><div class="due-meta cell-clamp">“${sanitize(snippet)}”</div></div>
         <span class="badge badge-neutral">${formatRelativeTime(t.last_reply_at)}</span>
       </div>
@@ -137,7 +137,7 @@ export async function loadBlockedCard() {
         <div class="card-head"><h3>Blocked patients</h3><span class="badge badge-danger">${total}</span></div>
         <div class="due-list">${rows.map(r => `
           <div class="due-row clickable wrap-meta" data-patient="${r.patient_id}" style="cursor:pointer">
-            <span class="avatar avatar-sm" style="background:var(--av-1)">${initials(r.full_name || '?')}</span>
+            <span class="avatar avatar-sm" style="background:var(--av-1)">${sanitize(initials(r.full_name || '?'))}</span>
             <div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(r.full_name || 'Unknown')} <span class="due-meta">${sanitize(r.patient_code || '')}</span></div><div class="due-meta">${sanitize(r.blacklist_reason || 'No reason recorded')}</div></div>
             <span class="row-go" aria-hidden="true">${icon('chevronRight')}</span>
           </div>`).join('')}</div>
@@ -187,7 +187,7 @@ export async function loadDocsWaitingCard() {
           const pages = `${r.page_count || 0} ${Number(r.page_count) === 1 ? 'page' : 'pages'}`;
           return `
           <div class="due-row clickable wrap-meta" data-patient="${r.patient_id}" style="cursor:pointer" title="${how}">
-            <span class="avatar avatar-sm" style="background:var(--av-6)">${initials(nameOf[r.patient_id] || '?')}</span>
+            <span class="avatar avatar-sm" style="background:var(--av-6)">${sanitize(initials(nameOf[r.patient_id] || '?'))}</span>
             <div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(nameOf[r.patient_id] || r.patient_code || 'Unknown')} <span class="due-meta">${sanitize(r.patient_code || '')}</span></div>
             <div class="due-meta">${what} · ${pages}</div></div>
             <span class="chip chip-${Number(r.days_waiting) >= 7 ? 'danger' : 'warn'}" title="${r.days_waiting} day(s) waiting">${r.days_waiting}d</span>

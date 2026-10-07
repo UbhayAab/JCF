@@ -20,6 +20,8 @@ import { openCallForm } from '../components/callForm.js';
 import { formatRelativeTime, capitalize, formatDate } from '../utils/formatters.js';
 import { giLabel, leverLabel } from '../utils/catalog.js';
 import { AVATAR_COLORS, avatarColor, initials } from '../utils/avatar.js';
+// Family text comes from outside (referral form, WhatsApp, uploads); staff names are typed by people.
+import { sanitize } from '../utils/validators.js';
 
 
 let tab = 'care';   // 'care' | 'outreach'
@@ -349,8 +351,8 @@ function cardHTML(r) {
     ? `<span class="badge badge-primary" style="font-size:11px" title="${r.owner_since ? 'Yours since ' + formatDate(r.owner_since) : 'Yours'}">Yours</span>
        <button class="btn btn-ghost btn-sm" data-act="release" style="padding:2px 7px;font-size:11.5px" title="Hand them back to Unclaimed">Hand back</button>`
     : isTheirs
-      ? `<span class="badge badge-neutral" style="font-size:11px" title="${r.continuity_name} is holding this patient">${icon('user')}${r.continuity_name}</span>
-         ${canReassign ? `<button class="btn btn-ghost btn-sm" data-act="release" style="padding:2px 7px;font-size:11.5px" title="Take this patient off ${r.continuity_name}">Unassign</button>` : ''}`
+      ? `<span class="badge badge-neutral" style="font-size:11px" title="${sanitize(r.continuity_name)} is holding this patient">${icon('user')}${sanitize(r.continuity_name)}</span>
+         ${canReassign ? `<button class="btn btn-ghost btn-sm" data-act="release" style="padding:2px 7px;font-size:11.5px" title="Take this patient off ${sanitize(r.continuity_name)}">Unassign</button>` : ''}`
       : `<span class="badge badge-gold" style="font-size:11px" title="Nobody is holding this patient yet">Unclaimed</span>`;
 
   // "Why is this person on my list?", the question the team kept asking.
@@ -381,23 +383,23 @@ function cardHTML(r) {
   return `
     <div class="card${r.just_claimed ? ' nut-claimed' : ''}" data-pid="${r.patient_id}" style="padding:16px;display:flex;flex-direction:column;gap:11px">
       <div style="display:flex;align-items:center;gap:11px">
-        <span class="avatar" style="background:${avatarColor(name)}">${initials(name)}</span>
+        <span class="avatar" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span>
         <div style="flex:1;min-width:0">
-          <div style="font:var(--t-body-strong);font-weight:650">${name}</div>
-          <div class="faint" style="font-size:12px;color:var(--ink-3)">${r.patient_code || ''} · ${loc}</div>
+          <div style="font:var(--t-body-strong);font-weight:650">${sanitize(name)}</div>
+          <div class="faint" style="font-size:12px;color:var(--ink-3)">${sanitize(r.patient_code)} · ${sanitize(loc)}</div>
         </div>
         <span style="display:flex;align-items:center;gap:5px;flex:none">${ownerBadge}</span>
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <div class="faint" style="font-size:12.5px;color:var(--ink-2);flex:1;min-width:0">${cancer}${r.assigned_by ? ` · <span style="color:var(--ink-3)">by ${r.assigned_by}</span>` : ''}</div>
+        <div class="faint" style="font-size:12.5px;color:var(--ink-2);flex:1;min-width:0">${sanitize(cancer)}${r.assigned_by ? ` · <span style="color:var(--ink-3)">by ${sanitize(r.assigned_by)}</span>` : ''}</div>
         ${must}
       </div>
       ${phone
-        ? `<a class="cg-call" href="tel:${phone}" style="align-self:flex-start">${icon('phone')}<span class="tnum">${r.phone_full}</span></a>`
+        ? `<a class="cg-call" href="tel:${sanitize(phone)}" style="align-self:flex-start">${icon('phone')}<span class="tnum">${sanitize(r.phone_full)}</span></a>`
         : `<div class="faint" style="font-size:12.5px;color:var(--ink-3)">No number on file</div>`}
       ${why}
       <div style="display:flex;flex-wrap:wrap;gap:6px">${leverChips}</div>
-      ${r.last_note ? `<div class="hist-note" style="font-size:12.5px;color:var(--ink-2);font-style:italic">“${r.last_note}”</div>` : ''}
+      ${r.last_note ? `<div class="hist-note" style="font-size:12.5px;color:var(--ink-2);font-style:italic">“${sanitize(r.last_note)}”</div>` : ''}
       <div class="faint" style="font-size:11.5px;color:var(--ink-3)">${r.last_call_at ? 'Last contact ' + formatRelativeTime(r.last_call_at) : 'Not called yet'}</div>
       <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap">${actions}</div>
     </div>`;
@@ -487,26 +489,26 @@ function outCardHTML(r) {
   return `
     <div class="card" data-pid="${r.patient_id}" data-qid="${r.queue_id}" style="padding:16px;display:flex;flex-direction:column;gap:11px">
       <div style="display:flex;align-items:center;gap:11px">
-        <span class="avatar" style="background:${avatarColor(name)}">${initials(name)}</span>
+        <span class="avatar" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span>
         <div style="flex:1;min-width:0">
-          <div style="font:var(--t-body-strong);font-weight:650">${name}</div>
-          <div class="faint" style="font-size:12px;color:var(--ink-3)">${r.patient_code || ''} · ${loc}</div>
+          <div style="font:var(--t-body-strong);font-weight:650">${sanitize(name)}</div>
+          <div class="faint" style="font-size:12px;color:var(--ink-3)">${sanitize(r.patient_code)} · ${sanitize(loc)}</div>
         </div>
         ${r.mine
           ? `<span class="badge badge-gold" style="font-size:11px" title="The builder picked this call for you this morning. It is not the same as holding the patient.">Picked for you</span>`
-          : `<span class="badge badge-neutral" style="font-size:11px" title="Picked for ${r.assigned_name || 'a teammate'} this morning">${r.assigned_name || 'Teammate'}</span>`}
+          : `<span class="badge badge-neutral" style="font-size:11px" title="Picked for ${sanitize(r.assigned_name) || 'a teammate'} this morning">${sanitize(r.assigned_name) || 'Teammate'}</span>`}
       </div>
-      <div class="faint" style="font-size:12.5px;color:var(--ink-2)">${cancer}</div>
+      <div class="faint" style="font-size:12.5px;color:var(--ink-2)">${sanitize(cancer)}</div>
       ${phone
-        ? `<a class="cg-call" href="tel:${phone}" style="align-self:flex-start">${icon('phone')}<span class="tnum">${r.phone_full}</span></a>`
+        ? `<a class="cg-call" href="tel:${sanitize(phone)}" style="align-self:flex-start">${icon('phone')}<span class="tnum">${sanitize(r.phone_full)}</span></a>`
         : `<div class="faint" style="font-size:12.5px;color:var(--ink-3)">No number on file</div>`}
       <div style="display:flex;gap:7px;align-items:flex-start;padding:8px 10px;border-radius:8px;background:var(--surface-2, rgba(127,127,127,.08));font-size:12px;color:var(--ink-2)">
         <span style="width:14px;height:14px;flex:none;color:var(--ink-3);margin-top:1px">${icon('info')}</span>
-        <span>The caregiver team has spoken with them <strong>${r.conversations} times</strong>${r.mentor_name ? ` (${r.mentor_name})` : ''}, and nobody has called for <strong>${quiet} days</strong>. No nutrition support offered yet.</span>
+        <span>The caregiver team has spoken with them <strong>${Number(r.conversations) || 0} times</strong>${r.mentor_name ? ` (${sanitize(r.mentor_name)})` : ''}, and nobody has called for <strong>${quiet} days</strong>. No nutrition support offered yet.</span>
       </div>
-      ${r.last_note ? `<div class="hist-note" style="font-size:12.5px;color:var(--ink-2);font-style:italic">“${r.last_note}”</div>` : ''}
+      ${r.last_note ? `<div class="hist-note" style="font-size:12.5px;color:var(--ink-2);font-style:italic">“${sanitize(r.last_note)}”</div>` : ''}
       ${r.owner_name
-        ? `<div class="faint" style="font-size:11.5px;color:var(--ink-3)">In nutrition care with <strong>${r.owner_name}</strong></div>`
+        ? `<div class="faint" style="font-size:11.5px;color:var(--ink-3)">In nutrition care with <strong>${sanitize(r.owner_name)}</strong></div>`
         : ''}
       <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap">
         <button class="btn btn-primary btn-sm grow" data-act="log" style="flex:1">${icon('phone')}Log this call</button>

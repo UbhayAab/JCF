@@ -247,7 +247,7 @@ function paint() {
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                 <strong style="font-size:13.5px">${patientName(r)}</strong>
                 <span class="badge badge-neutral">${concernReason(r.reason).label}</span>
-                <span class="hist-meta">resolved by ${r.resolver?.full_name || 'N/A'} · ${formatRelativeTime(r.resolved_at)}</span>
+                <span class="hist-meta">resolved by ${sanitizeText(r.resolver?.full_name || 'N/A')} · ${formatRelativeTime(r.resolved_at)}</span>
               </div>
               ${r.resolution_note ? `<div style="font:var(--t-xs);color:var(--ink-2);margin-top:4px">${sanitizeText(r.resolution_note)}</div>` : ''}
             </div>`).join('')}
@@ -410,7 +410,9 @@ function statCard(label, n, tone, ico, filterKey) {
 
 function patientName(r) {
   // RLS can hide the patient row from a non-manager raiser, degrade politely.
-  return r.patient?.full_name || r.patient?.patient_code || 'Patient (restricted)';
+  // Escaped: every caller puts it straight into HTML, and the name can come
+  // from outside (referral form, WhatsApp, uploads).
+  return sanitizeText(r.patient?.full_name || r.patient?.patient_code || 'Patient (restricted)');
 }
 
 // One patient, one name, however many flags they carry. A single flag renders
@@ -511,7 +513,7 @@ function concernCard(r, compact = false) {
   const acked = r.status === 'acknowledged';
   const canAct = isManagerOrAdmin();
   const open = r.status === 'open' || r.status === 'acknowledged';
-  const place = [r.patient?.city, r.patient?.state].filter(Boolean).join(', ');
+  const place = sanitizeText([r.patient?.city, r.patient?.state].filter(Boolean).join(', '));
   const phone = primaryPhone(r);
   return `
     <div class="${compact ? '' : 'card'}" style="padding:${compact ? '4px 2px' : '12px 14px'}${compact ? '' : `;border-left:4px solid ${SEV_COLOR[r.severity] || 'var(--line)'}`}">
@@ -524,13 +526,13 @@ function concernCard(r, compact = false) {
             ${r.reassign_status === 'pending' ? `<span class="badge badge-danger" title="This mentor asked to be taken off this patient. The patient is already off her list.">Asked to be taken off</span>` : ''}
             ${r.reassign_status === 'done' ? `<span class="badge badge-ok">Reassigned</span>` : ''}
             ${r.reassign_status === 'declined' ? `<span class="badge badge-neutral">Reassignment declined</span>` : ''}
-            ${acked ? `<span class="badge badge-primary">Being handled · ${r.acknowledger?.full_name || ''}</span>` : ''}
+            ${acked ? `<span class="badge badge-primary">Being handled · ${sanitizeText(r.acknowledger?.full_name || '')}</span>` : ''}
             ${r.resolve_requested ? `<span class="badge badge-gold" title="Someone covering this patient says the need is met. A supervisor reviews the call notes before closing.">Resolve requested${r.requester?.full_name ? ' · ' + sanitizeText(r.requester.full_name) : ''}</span>` : ''}
             ${r.source === 'auto' ? (isCareGap(r.reason)
               ? `<span class="badge badge-warn" title="Raised automatically because the team has not acted on this family in time. It closes by itself once someone does.">Care gap</span>`
               : `<span class="badge badge-gold" title="Raised automatically from a score threshold">Auto-flag</span>`) : ''}
             ${r.care_gap_since ? `<span class="badge badge-warn" title="${sanitizeText(r.care_gap_note || 'No call logged since this was raised')}">Nobody has called</span>` : ''}
-            <span class="hist-meta">${r.patient?.patient_code || ''}${place ? ' · ' + place : ''}</span>
+            <span class="hist-meta">${sanitizeText(r.patient?.patient_code || '')}${place ? ' · ' + place : ''}</span>
             ${phone ? `<a class="cg-call" href="tel:${phone.replace(/[^+\d]/g, '')}" style="padding:3px 9px;font-size:13px"
               onclick="event.stopPropagation()">${icon('phone')}<span class="tnum">${sanitizeText(phone)}</span></a>` : ''}
           </div>
@@ -538,7 +540,7 @@ function concernCard(r, compact = false) {
           ${r.care_gap_note ? `<p style="font:var(--t-sm);color:var(--warn);margin:6px 0 0">${sanitizeText(r.care_gap_note)}</p>` : ''}
           ${reviewLine(r)}
           <div class="hist-meta" style="margin-top:6px">
-            ${r.source === 'auto' ? 'Flagged automatically' : `Raised by ${r.raiser?.full_name || 'N/A'}`} · ${formatRelativeTime(r.created_at)}
+            ${r.source === 'auto' ? 'Flagged automatically' : `Raised by ${sanitizeText(r.raiser?.full_name || 'N/A')}`} · ${formatRelativeTime(r.created_at)}
           </div>
         </div>
         ${canAct ? `

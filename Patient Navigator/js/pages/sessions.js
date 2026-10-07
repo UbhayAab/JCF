@@ -13,6 +13,8 @@ import { showToast } from '../components/toast.js';
 import { showModal, closeModal } from '../components/modal.js';
 import { icon } from '../components/icons.js';
 import { formatRelativeTime } from '../utils/formatters.js';
+// Family text comes from outside (referral form, WhatsApp, uploads); staff names are typed by people.
+import { sanitize } from '../utils/validators.js';
 import { SESSION_KINDS, sessionKind, sessionStatus } from '../utils/catalog.js';
 
 let rows = [];
@@ -133,7 +135,7 @@ function paint() {
                 <strong style="font-size:13.5px">${pname(r)}</strong>
                 <span class="badge badge-${st.tone}">${st.label}</span>
                 <span class="badge badge-neutral">${sessionKind(r.kind).label}</span>
-                <span class="hist-meta">${r.status === 'held' ? `${r.assignee?.full_name || 'N/A'} · ${r.duration_mins ? r.duration_mins + ' min · ' : ''}${formatRelativeTime(r.held_at)}` : formatRelativeTime(r.updated_at || r.created_at)}</span>
+                <span class="hist-meta">${r.status === 'held' ? `${sanitize(r.assignee?.full_name) || 'N/A'} · ${r.duration_mins ? r.duration_mins + ' min · ' : ''}${formatRelativeTime(r.held_at)}` : formatRelativeTime(r.updated_at || r.created_at)}</span>
               </div>
               ${r.session_notes ? `<div style="font:var(--t-xs);color:var(--ink-2);margin-top:4px">${r.session_notes}</div>` : ''}
             </div>`;
@@ -162,7 +164,8 @@ function statCard(label, n, tone, ico) {
     </div>`;
 }
 
-function pname(r) { return r.patient?.full_name || r.patient?.patient_code || 'Patient (restricted)'; }
+// Escaped: every caller puts it straight into HTML.
+function pname(r) { return sanitize(r.patient?.full_name || r.patient?.patient_code) || 'Patient (restricted)'; }
 
 function section(title, sub, list, stage) {
   if (!list.length) return '';
@@ -183,7 +186,7 @@ function sessionRow(r, stage) {
   const when = r.scheduled_at ? new Date(r.scheduled_at) : null;
   const whenStr = when ? when.toLocaleString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
   const overdue = stage === 'scheduled' && when && when < new Date();
-  const place = [r.patient?.city, r.patient?.state].filter(Boolean).join(', ');
+  const place = sanitize([r.patient?.city, r.patient?.state].filter(Boolean).join(', '));
   return `
     <div class="lever-row" style="align-items:flex-start">
       <span class="stat-ico ${r.kind === 'nutrition' ? 'ok' : r.kind === 'caregiver' ? 'info' : 'warn'}" style="width:34px;height:34px;border-radius:9px">${icon(k.icon)}</span>
@@ -195,10 +198,10 @@ function sessionRow(r, stage) {
           ${overdue ? `<span class="badge badge-danger">was due</span>` : ''}
         </div>
         <div class="due-meta" style="margin-top:3px">
-          ${r.patient?.patient_code || ''}${place ? ' · ' + place : ''}${r.patient?.primary_language ? ' · speaks ' + r.patient.primary_language : ''}
+          ${sanitize(r.patient?.patient_code)}${place ? ' · ' + place : ''}${r.patient?.primary_language ? ' · speaks ' + sanitize(r.patient.primary_language) : ''}
         </div>
         <div class="hist-meta" style="margin-top:5px">
-          ${stage === 'scheduled' ? `<strong style="color:var(--ink-2)">${whenStr}</strong> · with ${r.assignee?.full_name || 'unassigned'}` : `invited by ${r.inviter?.full_name || 'N/A'} · ${formatRelativeTime(r.invited_at || r.created_at)}`}
+          ${stage === 'scheduled' ? `<strong style="color:var(--ink-2)">${whenStr}</strong> · with ${sanitize(r.assignee?.full_name) || 'unassigned'}` : `invited by ${sanitize(r.inviter?.full_name) || 'N/A'} · ${formatRelativeTime(r.invited_at || r.created_at)}`}
         </div>
       </div>
       <div style="display:flex;gap:7px;flex-wrap:wrap">
@@ -281,7 +284,7 @@ function openScheduleModal(id) {
       <div class="form-group"><label class="form-label">When</label>
         <input class="input" type="datetime-local" id="sm-when" value="${toLocalInput(defaultDt)}" /></div>
       <div class="form-group"><label class="form-label">Who holds it</label>
-        <select class="select" id="sm-who"><option value="${me.id}">Me · ${me.full_name}</option></select>
+        <select class="select" id="sm-who"><option value="${me.id}">Me · ${sanitize(me.full_name)}</option></select>
         <div id="sm-continuity" class="due-meta" style="margin-top:5px;display:none"></div></div>
     </div>
     <div class="form-actions">
@@ -296,7 +299,7 @@ function openScheduleModal(id) {
     if (!sel) return;
     if (isManagerOrAdmin()) {
       const list = await loadAssignables();
-      if (list.length) sel.innerHTML = list.map(a => `<option value="${a.id}" ${a.id === me.id ? 'selected' : ''}>${a.full_name}${a.id === me.id ? ' (me)' : ''}</option>`).join('');
+      if (list.length) sel.innerHTML = list.map(a => `<option value="${a.id}" ${a.id === me.id ? 'selected' : ''}>${sanitize(a.full_name)}${a.id === me.id ? ' (me)' : ''}</option>`).join('');
     }
     const prev = r?.assigned_to
       ? { assigned_to: r.assigned_to, assignee: r.assignee }   // inviter already routed it
@@ -304,7 +307,7 @@ function openScheduleModal(id) {
     if (!prev?.assigned_to) return;
     const name = prev.assignee?.full_name || 'the previous specialist';
     if (![...sel.options].some(o => o.value === prev.assigned_to)) {
-      sel.insertAdjacentHTML('afterbegin', `<option value="${prev.assigned_to}">${name} · saw them before</option>`);
+      sel.insertAdjacentHTML('afterbegin', `<option value="${prev.assigned_to}">${sanitize(name)} · saw them before</option>`);
     }
     sel.value = prev.assigned_to;
     const hint = el.querySelector('#sm-continuity');

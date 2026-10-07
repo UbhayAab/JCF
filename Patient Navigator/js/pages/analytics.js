@@ -902,7 +902,7 @@ async function loadGeographic() {
     const total = data.reduce((a, d) => a + Number(d.patient_count), 0);
     const top = data[0];
     setStory('chart-geographic',
-      `<strong>${top.state}</strong> leads with ${fmtIN(top.patient_count)} patients (${pct(top.patient_count, total)}% of the mapped ${fmtIN(total)}), across ${data.length} states in all. ` +
+      `<strong>${sanitize(top.state)}</strong> leads with ${fmtIN(top.patient_count)} patients (${pct(top.patient_count, total)}% of the mapped ${fmtIN(total)}), across ${data.length} states in all. ` +
       `Geography decides what help means. Distance to a treatment centre is part of the vulnerability score, and the resources directory is organised by state for exactly this reason.`);
   } catch (err) { console.error('Geographic error:', err); }
 }

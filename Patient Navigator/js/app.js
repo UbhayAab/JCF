@@ -3,6 +3,7 @@
 // ============================================================
 
 import { initAuth, getCurrentUser, getCurrentProfile, getUserRole, signIn, isImpersonating, stopImpersonation } from './auth.js';
+import { sanitize } from './utils/validators.js';
 import { registerRoute, initRouter, navigate, setAuthGuard, setRoleGuard } from './router.js';
 import { renderSidebar, bindSidebarSync } from './components/sidebar.js';
 import { showToast } from './components/toast.js';
@@ -265,7 +266,7 @@ function renderAppShell() {
       <div class="sidebar-overlay" id="sidebar-overlay"></div>
       <aside class="sidebar" id="sidebar"></aside>
       <main class="main-content">
-        ${isImpersonating() ? `<div class="imp-banner">Viewing as <strong>${getCurrentProfile()?.full_name || 'user'}</strong> · ${getCurrentProfile()?.role || ''}<button id="imp-exit" type="button">Exit to your account</button></div>` : ''}
+        ${isImpersonating() ? `<div class="imp-banner">Viewing as <strong>${sanitize(getCurrentProfile()?.full_name) || 'user'}</strong> · ${getCurrentProfile()?.role || ''}<button id="imp-exit" type="button">Exit to your account</button></div>` : ''}
         <header class="header">
           <div class="header-left">
             <button class="mobile-menu-btn" id="mobile-menu-btn" aria-label="Open menu">
@@ -408,7 +409,7 @@ function renderPasswordChangeScreen() {
           <div class="logo-icon">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           </div>
-          <h1>Welcome, ${prof?.full_name?.split(' ')[0] || 'there'}</h1>
+          <h1>Welcome, ${sanitize(prof?.full_name?.split(' ')[0]) || 'there'}</h1>
           <p>Set your own password to start. Only you will know it.</p>
         </div>
         <div class="card">
@@ -502,7 +503,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261008q';  // bumped on every breaking deploy
+const APP_BUILD = '20261008r';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];

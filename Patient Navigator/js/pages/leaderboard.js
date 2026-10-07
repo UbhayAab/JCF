@@ -6,6 +6,8 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
+// Names are typed by people; escape them before they reach innerHTML.
+import { sanitize } from '../utils/validators.js';
 import { icon } from '../components/icons.js';
 import { navigate } from '../router.js';
 import { formatRelativeTime } from '../utils/formatters.js';
@@ -173,8 +175,8 @@ function podium(top) {
       const m = meta[i];
       return `<div data-open="${r.caller_id}" style="cursor:pointer;flex:1;max-width:170px;text-align:center">
         <div style="font-size:22px;line-height:1">${m.medal}</div>
-        <span class="avatar avatar-lg" style="background:${avatarColor(r.full_name)};box-shadow:0 0 0 3px ${m.ring};margin:6px auto 8px">${initials(r.full_name)}</span>
-        <div style="font:var(--t-body-strong);font-weight:650;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.full_name}</div>
+        <span class="avatar avatar-lg" style="background:${avatarColor(r.full_name)};box-shadow:0 0 0 3px ${m.ring};margin:6px auto 8px">${sanitize(initials(r.full_name))}</span>
+        <div style="font:var(--t-body-strong);font-weight:650;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sanitize(r.full_name)}</div>
         <div style="font:var(--t-h2);font-weight:800;color:var(--primary-ink);line-height:1.1">${r.mvp}</div>
         <div class="faint" style="font-size:11px;color:var(--ink-3);margin-bottom:8px">MVP</div>
         <div style="height:${m.h}px;border-radius:10px 10px 0 0;background:linear-gradient(180deg,var(--primary-bright),var(--primary));display:flex;align-items:flex-start;justify-content:center;padding-top:8px;color:var(--on-primary);font-weight:800;font-size:20px">${r.rank}</div>
@@ -195,7 +197,7 @@ function awardsRow(rows) {
         <span style="font-size:16px">${a.emoji}</span>
         <div style="line-height:1.15">
           <div style="font-size:11px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em">${a.label}</div>
-          <div style="font-size:13px;font-weight:650">${r.full_name.split(' ')[0]} <span class="faint" style="color:var(--ink-3);font-weight:400">· ${awardValue(a.key, r)}</span></div>
+          <div style="font-size:13px;font-weight:650">${sanitize(r.full_name.split(' ')[0])} <span class="faint" style="color:var(--ink-3);font-weight:400">· ${awardValue(a.key, r)}</span></div>
         </div>
       </div>`).join('')}
   </div>`;
@@ -233,8 +235,8 @@ function rowHTML(r) {
     <td style="padding:8px 10px;font-size:15px;position:sticky;left:0;background:var(--surface)">${medal}</td>
     <td style="padding:8px 10px;position:sticky;left:0;background:var(--surface)">
       <div style="display:flex;align-items:center;gap:9px;min-width:150px">
-        <span class="avatar" style="background:${avatarColor(r.full_name)};width:30px;height:30px;font-size:12px">${initials(r.full_name)}</span>
-        <div style="min-width:0"><div style="font-weight:600;white-space:nowrap">${r.full_name}</div>
+        <span class="avatar" style="background:${avatarColor(r.full_name)};width:30px;height:30px;font-size:12px">${sanitize(initials(r.full_name))}</span>
+        <div style="min-width:0"><div style="font-weight:600;white-space:nowrap">${sanitize(r.full_name)}</div>
           <div style="display:flex;gap:3px">${r.awards.slice(0,3).map(a => `<span title="${a.label}">${a.emoji}</span>`).join('')}</div></div>
       </div>
     </td>
@@ -318,9 +320,9 @@ function openMentorModal(id) {
   const el = document.createElement('div');
   el.innerHTML = `
     <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
-      <span class="avatar avatar-lg" style="background:${avatarColor(r.full_name)}">${initials(r.full_name)}</span>
+      <span class="avatar avatar-lg" style="background:${avatarColor(r.full_name)}">${sanitize(initials(r.full_name))}</span>
       <div style="flex:1;min-width:0">
-        <div style="font:var(--t-h2);font-weight:750">${r.full_name}</div>
+        <div style="font:var(--t-h2);font-weight:750">${sanitize(r.full_name)}</div>
         <div class="faint" style="color:var(--ink-3);font-size:13px">Caregiver mentor · last active ${r.last_call ? formatRelativeTime(r.last_call) : 'N/A'}</div>
       </div>
       <div style="text-align:center;flex:none">

@@ -297,7 +297,7 @@ function renderDue(open, reload) {
       const name = r.full_name || r.patient_code || 'Patient';
       return `
       <div class="due-row dq-row" data-pid="${r.patient_id}">
-        <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span>
+        <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span>
         <div class="grow" style="flex:1;min-width:0">
           <div class="due-name">${sanitize(name)}</div>
           <div class="dq-sub">${stageChip(r.conversations || 0)}<span class="due-meta">with ${sanitize(r.assigned_name || 'no one')}</span></div>
@@ -344,7 +344,7 @@ function renderCover(rows, nameOf, reload, onCoverAll) {
         const why = r.assigned_to ? `${sanitize(nameOf[r.assigned_to] || r.assigned_name || 'Their mentor')} is off today` : 'No caller assigned';
         return `
         <div class="due-row dq-row" data-pid="${r.patient_id}">
-          <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span>
+          <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span>
           <div class="grow" style="flex:1;min-width:0">
             <div class="due-name">${sanitize(name)}</div>
             <div class="dq-sub">${stageChip(r.conversations || 0)}<span class="due-meta">${why}</span></div>
@@ -397,7 +397,7 @@ async function loadUrgentFlags() {
         const urgent = r.severity === 'urgent';
         return `
         <div class="due-row dq-row" data-pid="${r.patient_id}">
-          <span class="avatar avatar-sm" style="background:${urgent ? 'var(--av-1)' : 'var(--av-2)'}">${initials(name)}</span>
+          <span class="avatar avatar-sm" style="background:${urgent ? 'var(--av-1)' : 'var(--av-2)'}">${sanitize(initials(name))}</span>
           <div class="grow" style="flex:1;min-width:0">
             <div class="due-name">${sanitize(name)}</div>
             <div class="due-meta">${sanitize(concernReason(r.reason).label)} · ${formatRelativeTime(r.created_at)}</div>
@@ -448,7 +448,7 @@ async function loadCareGaps() {
           const who = h.holder_id ? (h.holder || 'Someone') : 'Not held by anyone';
           return `
           <div class="due-row">
-            <span class="avatar avatar-sm" style="background:${avatarColor(who)}">${initials(who)}</span>
+            <span class="avatar avatar-sm" style="background:${avatarColor(who)}">${sanitize(initials(who))}</span>
             <div style="flex:1;min-width:0">
               <div class="due-name">${sanitize(who)}</div>
               <div class="due-meta wraps">${gapBreakdown(h)}</div>
@@ -480,7 +480,7 @@ async function loadRestores() {
         <div class="rs-list">${rows.map(r => `
           <div class="rs-item">
             <div class="rs-top">
-              <span class="avatar avatar-sm" style="background:${avatarColor(r.full_name)}">${initials(r.full_name)}</span>
+              <span class="avatar avatar-sm" style="background:${avatarColor(r.full_name)}">${sanitize(initials(r.full_name))}</span>
               <div class="rs-name">${sanitize(r.full_name)}</div>
               <button class="btn btn-primary btn-sm" data-restore="${r.user_id}" data-name="${sanitize(r.full_name)}" data-n="${r.n}">Restore all</button>
             </div>
@@ -566,7 +566,7 @@ async function loadConversations() {
         const dur = c.call_duration_mins ? ` · ${Math.round(c.call_duration_mins)} min` : '';
         return `
         <div class="convo" data-pid="${c.patient_id || ''}">
-          <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span>
+          <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span>
           <div class="convo-main">
             <div class="convo-top"><span class="due-name">${sanitize(name)}</span><span class="convo-when">${formatRelativeTime(c.call_date)}${dur}</span></div>
             <div class="convo-chips"><span class="chip ${cls}">${ico ? icon(ico) : ''}${label}</span>${recep}${next}</div>

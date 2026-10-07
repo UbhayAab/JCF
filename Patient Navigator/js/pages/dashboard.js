@@ -15,6 +15,8 @@ import { showToast } from '../components/toast.js';
 import { navigate } from '../router.js';
 import { icon } from '../components/icons.js';
 import { avatarColor, initials } from '../utils/avatar.js';
+// Family names and places come from outside (referral form, WhatsApp, uploads).
+import { sanitize } from '../utils/validators.js';
 import { loadSaturdayCard, loadResourceReplies, loadDocsWaitingCard } from '../components/dashCards.js';
 import { renderAdminDashboard } from './dashboardAdmin.js';
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
@@ -246,11 +248,11 @@ async function loadSpecialistPeople(role) {
         const mustChip = p.must_score != null
           ? ` · <span style="color:var(--${Number(p.must_score) >= 2 ? 'danger' : Number(p.must_score) === 1 ? 'warn' : 'ok'})">MUST ${p.must_score}</span>`
           : '';
-        const meta = ([p.city, p.gi_subtype || p.cancer_type].filter(Boolean).join(' · ') || (p.patient_code || '')) + mustChip;
+        const meta = sanitize([p.city, p.gi_subtype || p.cancer_type].filter(Boolean).join(' · ') || (p.patient_code || '')) + mustChip;
         const tag = mineRow
           ? `<span class="badge badge-primary" title="Yours. You claimed them, or a lead assigned them to you.">Yours</span>`
           : `<span class="badge badge-gold" title="Nobody is holding them yet. Press Claim on the Nutrition page.">Unclaimed</span>`;
-        return `<div class="due-row clickable" data-pid="${p.patient_id}" style="cursor:pointer"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${name}</div><div class="due-meta">${meta}</div></div>${tag}</div>`;
+        return `<div class="due-row clickable" data-pid="${p.patient_id}" style="cursor:pointer"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(name)}</div><div class="due-meta">${meta}</div></div>${tag}</div>`;
       }).join('')}</div>${unclaimed.length && shown.length < (mine.length + unclaimed.length)
         ? `<div class="due-meta" style="padding:10px 14px;color:var(--ink-3)">+ ${mine.length + unclaimed.length - shown.length} more in the nutrition pool: open the full worklist to claim them.</div>`
         : ''}`;
@@ -270,7 +272,7 @@ async function loadSpecialistPeople(role) {
       el.innerHTML = `<div class="due-list">${rows.map(r => {
         const name = r.patients?.full_name || r.patients?.patient_code || 'Patient';
         const when = r.scheduled_at ? new Date(r.scheduled_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : 'needs a date';
-        return `<div class="due-row clickable" data-pid="${r.patients?.id || ''}" style="cursor:pointer"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${name}</div><div class="due-meta">${capitalize(r.kind)} · ${when}</div></div><span class="badge badge-${r.status === 'scheduled' ? 'primary' : 'gold'}">${r.status === 'scheduled' ? 'Scheduled' : 'Said yes'}</span></div>`;
+        return `<div class="due-row clickable" data-pid="${r.patients?.id || ''}" style="cursor:pointer"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(name)}</div><div class="due-meta">${capitalize(r.kind)} · ${when}</div></div><span class="badge badge-${r.status === 'scheduled' ? 'primary' : 'gold'}">${r.status === 'scheduled' ? 'Scheduled' : 'Said yes'}</span></div>`;
       }).join('')}</div>`;
       el.querySelectorAll('[data-pid]').forEach(r => r.addEventListener('click', () => { if (r.dataset.pid) navigate('patients/' + r.dataset.pid); }));
     }
@@ -298,7 +300,7 @@ async function loadRecentCheckins() {
     }
     el.innerHTML = `<div class="table-wrap"><table class="data"><thead><tr><th>Patient</th><th>Measure</th><th>Score</th><th>When</th></tr></thead><tbody>
       ${data.map(a => { const name = a.patients?.full_name || a.patients?.patient_code || 'N/A';
-        return `<tr class="clickable" data-id="${a.patients?.id || ''}"><td><div style="display:flex;align-items:center;gap:8px"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span>${name}</div></td>
+        return `<tr class="clickable" data-id="${a.patients?.id || ''}"><td><div style="display:flex;align-items:center;gap:8px"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span>${sanitize(name)}</div></td>
           <td>${measureLabel(a.measure)}</td><td class="cell-mono">${a.score}</td><td style="color:var(--ink-2)">${formatRelativeTime(a.recorded_at)}</td></tr>`; }).join('')}
       </tbody></table></div>`;
     el.querySelectorAll('tr.clickable').forEach(tr => tr.addEventListener('click', () => { if (tr.dataset.id) navigate(`patients/${tr.dataset.id}`); }));
@@ -360,7 +362,7 @@ async function loadRecentCalls() {
     const condBadge = (k) => { const m = { improving: ['ok', 'Improving'], stable: ['info', 'Stable'], declining: ['warn', 'Declining'], critical: ['danger', 'Critical'] }[k]; return m ? `<span class="badge badge-${m[0]}">${m[1]}</span>` : '<span style="color:var(--ink-3)">N/A</span>'; };
     el.innerHTML = `<div class="table-wrap"><table class="data"><thead><tr><th>Patient</th><th>Outcome</th><th class="col-hide-sm">Duration</th><th class="col-hide-sm">Condition</th><th>When</th></tr></thead><tbody>
       ${data.map(c => { const name = c.patients?.full_name || c.patients?.patient_code || 'N/A'; const dur = c.call_duration_mins ? `${c.call_duration_mins} min` : '<span style="color:var(--ink-3)">N/A</span>';
-        return `<tr class="clickable" data-id="${c.patient_id || ''}"><td><div style="display:flex;align-items:center;gap:8px"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span>${name}</div></td>
+        return `<tr class="clickable" data-id="${c.patient_id || ''}"><td><div style="display:flex;align-items:center;gap:8px"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span>${sanitize(name)}</div></td>
           <td>${outcomeBadge(c.dial_status)}</td><td class="cell-mono col-hide-sm">${dur}</td><td class="col-hide-sm">${condBadge(c.patient_condition)}</td><td style="color:var(--ink-2)">${formatRelativeTime(c.call_date)}</td></tr>`; }).join('')}
       </tbody></table></div>`;
     el.querySelectorAll('tr.clickable').forEach(tr => tr.addEventListener('click', () => { if (tr.dataset.id) navigate(`patients/${tr.dataset.id}`); }));
@@ -386,8 +388,8 @@ async function loadDueToday(isIntake = false) {
         return;
       }
       el.innerHTML = `<div class="due-list">${data.map(p => { const name = p.full_name || p.patient_code || 'Lead';
-        const place = [p.treating_hospital, p.city].filter(Boolean).join(' · ') || 'Ground intake';
-        return `<div class="due-row"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${name}</div><div class="due-meta">${place}</div></div><span class="badge badge-neutral">${formatRelativeTime(p.created_at)}</span></div>`; }).join('')}</div>`;
+        const place = sanitize([p.treating_hospital, p.city].filter(Boolean).join(' · ')) || 'Ground intake';
+        return `<div class="due-row"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(name)}</div><div class="due-meta">${place}</div></div><span class="badge badge-neutral">${formatRelativeTime(p.created_at)}</span></div>`; }).join('')}</div>`;
       return;
     }
     if (!admin) {
@@ -401,7 +403,7 @@ async function loadDueToday(isIntake = false) {
     if (!data || data.length === 0) { el.innerHTML = `<div class="empty" style="padding:var(--s6)"><div class="ico-wrap" style="background:var(--ok-soft);color:var(--ok)">${icon('checkCircle')}</div><h4>${admin ? 'No calls queued' : 'All caught up'}</h4><p>${admin ? "Click 'Build today's assignments' to generate the list." : 'Nothing assigned to you right now.'}</p></div>`; return; }
     el.innerHTML = `<div class="due-list">${data.map(q => { const name = q.patients?.full_name || q.patients?.patient_code || 'N/A'; const kind = q.source === 'followup' ? 'Follow-up' : 'New lead';
       const tone = q.source === 'followup' ? 'primary' : 'gold';
-      return `<div class="due-row"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${name}</div><div class="due-meta">${kind}</div></div><span class="badge badge-${tone}">${capitalize(q.priority || 'medium')}</span></div>`; }).join('')}</div>`;
+      return `<div class="due-row"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(name)}</div><div class="due-meta">${kind}</div></div><span class="badge badge-${tone}">${capitalize(q.priority || 'medium')}</span></div>`; }).join('')}</div>`;
   } catch (err) { console.error('Due-today error:', err); const el = document.getElementById('due-today'); if (el) el.innerHTML = `<div class="empty" style="padding:var(--s6)"><p>Could not load the list.</p></div>`; }
 }
 
@@ -432,9 +434,9 @@ async function loadMyWorklistCard() {
       const kind = r.source === 'followup' ? 'Follow-up' : 'New lead';
       const tone = r.source === 'followup' ? 'primary' : 'gold';
       const meta = r.overdue_days > 0
-        ? `<span style="color:var(--${r.overdue_days >= 7 ? 'danger' : 'clay'})">${r.overdue_days}d overdue</span>`
+        ? `<span style="color:var(--${r.overdue_days >= 7 ? 'danger' : 'clay'})">${Number(r.overdue_days) || 0}d overdue</span>`
         : (r.last_call_date ? `Last call ${formatRelativeTime(r.last_call_date)}` : 'First conversation');
-      return `<div class="due-row clickable" data-nav="calling" style="cursor:pointer" title="Open the calling portal"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${name}</div><div class="due-meta">${meta}</div></div><span class="badge badge-${tone}">${kind}</span></div>`;
+      return `<div class="due-row clickable" data-nav="calling" style="cursor:pointer" title="Open the calling portal"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(name)}</div><div class="due-meta">${meta}</div></div><span class="badge badge-${tone}">${kind}</span></div>`;
     }).join('');
     const restingHTML = waiting.length ? `
       <details style="border-top:1px solid var(--line)">
@@ -443,7 +445,7 @@ async function loadMyWorklistCard() {
           ${waiting.slice(0, 10).map(r => {
             const name = r.full_name || r.patient_code || 'N/A';
             const when = r.resting ? `resurfaces ${fmtDay(r.resting_until)}` : r.scheduled_for ? `scheduled ${fmtDay(r.scheduled_for)}` : 'waiting';
-            return `<div class="due-row"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${name}</div><div class="due-meta">${when}</div></div></div>`;
+            return `<div class="due-row"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(name)}</div><div class="due-meta">${when}</div></div></div>`;
           }).join('')}
           ${waiting.length > 10 ? `<div class="due-meta" style="padding:8px 6px;color:var(--ink-3)">+ ${waiting.length - 10} more</div>` : ''}
         </div>

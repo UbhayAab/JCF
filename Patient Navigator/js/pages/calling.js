@@ -9,6 +9,9 @@ import { getCurrentProfile, getUserRole } from '../auth.js';
 import { showToast } from '../components/toast.js';
 import { openAssessmentFlow } from '../components/assessmentFlow.js';
 import { formatRelativeTime, capitalize } from '../utils/formatters.js';
+// Family text comes from outside: the public referral form, WhatsApp, bulk
+// uploads. Every value from a record goes through sanitize() before innerHTML.
+import { sanitize } from '../utils/validators.js';
 import { icon } from '../components/icons.js';
 import { DIAL_STATUSES, RECEPTIVENESS, REQUIREMENTS, CONDITIONS, giLabel, statusBadge, vulnerabilityBadge, stageGuide, GI_SUBTYPES, dataGaps, CONCERN_REASONS, CALLER_CONCERNS, CONCERN_SEVERITIES, sessionKind, sessionStatus, LEVER_GROUPS } from '../utils/catalog.js';
 import { showModal, closeModal } from '../components/modal.js';
@@ -257,7 +260,7 @@ function overdueBadge(days) {
   const d = days || 0;
   if (d <= 0) return '';
   const tone = d >= 7 ? 'danger' : 'warn';
-  return `<span class="badge badge-${tone}">${icon('clock')}${d}d overdue</span>`;
+  return `<span class="badge badge-${tone}">${icon('clock')}${Number(d) || 0}d overdue</span>`;
 }
 
 function fmtTimer(s) { return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
@@ -344,7 +347,7 @@ async function mountReady() {
       <div style="width:100%;max-width:450px;display:flex;flex-direction:column;gap:var(--s5)">
       <div class="ready-card">
         <div class="ready-ico">${icon('phoneCall')}</div>
-        <h2>Ready when you are, ${me.full_name?.split(' ')[0] || 'there'}.</h2>
+        <h2>Ready when you are, ${sanitize(me.full_name?.split(' ')[0]) || 'there'}.</h2>
         <p>${summary.pending > 0
           ? `You have <strong>${summary.pending}</strong> ${summary.pending === 1 ? 'person' : 'people'} to reach today: ${summary.follow_ups} follow-up${summary.follow_ups === 1 ? '' : 's'} and ${summary.new_leads} new. One conversation at a time.`
           : emptyReason(summary)}</p>
@@ -442,7 +445,7 @@ function worklistRowHTML(r, kind) {
   return `
     <div class="due-row wl-row" data-wl="${sanitizeText(r.patient_id)}" data-q="${sanitizeText(r.queue_id)}" data-kind="${kind}">
       <div class="wl-main" role="button" tabindex="0" aria-expanded="false" title="See ${sanitizeText(name)} before you call"${kind === 'resting' ? ' style="opacity:.6"' : ''}>
-        <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${initials(name)}</span>
+        <span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span>
         <div class="grow" style="flex:1;min-width:0">
           <div class="due-name">${sanitizeText(name)}</div>
           <div class="due-meta">${meta}</div>
@@ -788,11 +791,11 @@ function mountActive(p, history) {
       <div class="col-left">
         <div class="card pcard">
           <div class="pcard-head">
-            <span class="avatar avatar-lg" style="background:${avatarColor(name)}">${initials(name)}</span>
+            <span class="avatar avatar-lg" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span>
             <div class="grow" style="flex:1;min-width:0">
-              <h2 class="pcard-name">${name}</h2>
+              <h2 class="pcard-name">${sanitize(name)}</h2>
               <div class="row gap2" style="display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap">
-                <span class="faint tnum" style="font-size:12.5px;color:var(--ink-3)">${p.patient_code || ''}</span>
+                <span class="faint tnum" style="font-size:12.5px;color:var(--ink-3)">${sanitize(p.patient_code)}</span>
                 ${srcBadge}${overdueBadge(p.days_overdue)}<span class="badge badge-${attemptTone}">Attempt ${p.attempt || 1}</span>
                 ${p.patient_status ? statusBadge(p.patient_status) : ''}${vulnerabilityBadge(p.vulnerability_score)}
                 ${consentBadge(p)}
@@ -821,17 +824,17 @@ function mountActive(p, history) {
           <div class="strategy">
             <div class="strategy-head"><span class="strategy-ico">${icon('handHeart')}</span>
               <div><div class="strategy-title">A note from the last call</div>
-              ${p.receptiveness_bucket ? `<div class="faint" style="font-size:12.5px;color:var(--ink-3)">Last spoke · they were <strong style="color:var(--ink-2)">${capitalize(p.receptiveness_bucket)}</strong></div>` : ''}</div>
+              ${p.receptiveness_bucket ? `<div class="faint" style="font-size:12.5px;color:var(--ink-3)">Last spoke · they were <strong style="color:var(--ink-2)">${sanitize(capitalize(p.receptiveness_bucket))}</strong></div>` : ''}</div>
             </div>
-            <p class="strategy-body">${p.followup_strategy_notes}</p>
+            <p class="strategy-body">${sanitize(p.followup_strategy_notes)}</p>
           </div>` : ''}
           ${renderSessionBanner()}
-          <div class="info-grid">${info.map(i => `<div class="info-cell"><div class="info-label">${i.label}</div><div class="info-value">${i.value}</div></div>`).join('')}</div>
+          <div class="info-grid">${info.map(i => `<div class="info-cell"><div class="info-label">${i.label}</div><div class="info-value">${sanitize(i.value)}</div></div>`).join('')}</div>
           ${p.caregiver_name ? `
           <div class="caregiver">
             <div class="row gap2" style="display:flex;align-items:center;gap:8px"><span class="cg-ico">${icon('users')}</span>
-              <div><div class="info-label">Caregiver</div><div class="info-value">${p.caregiver_name}${p.caregiver_relationship ? ' · ' + p.caregiver_relationship : ''}</div></div></div>
-            ${p.caregiver_phone_full && !(Array.isArray(p.phones) && p.phones.length > 1) ? `<a class="cg-call" href="tel:${p.caregiver_phone_full.replace(/\s/g, '')}">${icon('phone')}<span class="tnum">${p.caregiver_phone_full}</span></a>` : ''}
+              <div><div class="info-label">Caregiver</div><div class="info-value">${sanitize(p.caregiver_name)}${p.caregiver_relationship ? ' · ' + sanitize(p.caregiver_relationship) : ''}</div></div></div>
+            ${p.caregiver_phone_full && !(Array.isArray(p.phones) && p.phones.length > 1) ? `<a class="cg-call" href="tel:${sanitize(String(p.caregiver_phone_full).replace(/\s/g, ''))}">${icon('phone')}<span class="tnum">${sanitize(p.caregiver_phone_full)}</span></a>` : ''}
           </div>` : ''}
           <div class="timer">
             <div class="timer-display"><span class="timer-dot" id="t-dot"></span><span class="timer-time tnum" id="t-time">${fmtTimer(timerSeconds)}</span></div>
@@ -852,7 +855,7 @@ function mountActive(p, history) {
           ${p.legacy_notes ? `
           <details class="history" style="border-top:1px solid var(--line);padding-top:var(--s4)">
             <summary class="info-label" style="cursor:pointer;margin-bottom:6px">Notes from intake</summary>
-            <div class="hist-note" style="margin-top:6px">${p.legacy_notes}</div>
+            <div class="hist-note" style="margin-top:6px">${sanitize(p.legacy_notes)}</div>
           </details>` : ''}
           ${renderFullHistory(history)}
         </div>
@@ -987,20 +990,20 @@ function renderFullHistory(history) {
       <div class="info-label" style="margin-bottom:8px">The story so far · ${history.length} call${history.length === 1 ? '' : 's'}</div>
       <div style="max-height:340px;overflow-y:auto;padding-right:6px">
         ${history.map(h => {
-          const ds = DIAL_STATUSES.find(d => d.key === h.dial_status) || { label: capitalize(h.dial_status || 'N/A'), tone: 'neutral' };
+          const ds = DIAL_STATUSES.find(d => d.key === h.dial_status) || { label: sanitize(capitalize(h.dial_status || 'N/A')), tone: 'neutral' };
           const reqs = h.structured?.requirements || [];
           const cond = CONDITIONS.find(c => c.key === h.patient_condition);
           return `<div class="hist-row" style="flex-direction:column;gap:5px;align-items:stretch">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
               ${badge(ds.tone, ds.label)}
-              ${h.receptiveness_bucket ? `<span class="badge badge-primary">${capitalize(h.receptiveness_bucket)}</span>` : ''}
+              ${h.receptiveness_bucket ? `<span class="badge badge-primary">${sanitize(capitalize(h.receptiveness_bucket))}</span>` : ''}
               ${cond ? `<span class="badge badge-${cond.tone === 'ok' ? 'ok' : cond.tone === 'danger' ? 'danger' : cond.tone === 'warn' ? 'warn' : 'neutral'}">${cond.label}</span>` : ''}
-              <span class="hist-meta">${h.is_mine ? 'You' : capitalize((h.caller_name || 'N/A').toLowerCase())} · ${formatRelativeTime(h.call_date)}${h.call_duration_mins ? ` · ${h.call_duration_mins} min` : ''}</span>
+              <span class="hist-meta">${h.is_mine ? 'You' : sanitize(capitalize((h.caller_name || 'N/A').toLowerCase()))} · ${formatRelativeTime(h.call_date)}${h.call_duration_mins ? ` · ${h.call_duration_mins} min` : ''}</span>
             </div>
-            ${h.caller_notes ? `<div class="hist-note">${h.caller_notes}</div>` : ''}
-            ${h.feedback_patient ? `<div class="hist-note" style="font-style:italic">“${h.feedback_patient}” · patient</div>` : ''}
-            ${h.followup_strategy_notes ? `<div class="hist-note" style="color:var(--clay)">↪ for the next caregiver mentor: ${h.followup_strategy_notes}</div>` : ''}
-            ${reqs.length ? `<div style="display:flex;gap:5px;flex-wrap:wrap">${reqs.map(r => `<span class="badge badge-gold" style="font-size:11px;padding:2px 8px">${r}</span>`).join('')}</div>` : ''}
+            ${h.caller_notes ? `<div class="hist-note">${sanitize(h.caller_notes)}</div>` : ''}
+            ${h.feedback_patient ? `<div class="hist-note" style="font-style:italic">“${sanitize(h.feedback_patient)}” · patient</div>` : ''}
+            ${h.followup_strategy_notes ? `<div class="hist-note" style="color:var(--clay)">↪ for the next caregiver mentor: ${sanitize(h.followup_strategy_notes)}</div>` : ''}
+            ${reqs.length ? `<div style="display:flex;gap:5px;flex-wrap:wrap">${reqs.map(r => `<span class="badge badge-gold" style="font-size:11px;padding:2px 8px">${sanitize(r)}</span>`).join('')}</div>` : ''}
           </div>`;
         }).join('')}
       </div>
@@ -1162,7 +1165,7 @@ function renderGapsPanel(p) {
   if (!gaps.length) {
     return `<div class="card" style="padding:14px 18px;display:flex;align-items:center;gap:10px">
       <span class="stat-ico ok">${icon('checkCircle')}</span>
-      <div><div class="info-value">Record complete</div><div class="due-meta">Nothing missing for ${(p.full_name || '').split(' ')[0]}: just be there for them.</div></div>
+      <div><div class="info-value">Record complete</div><div class="due-meta">Nothing missing for ${sanitize((p.full_name || '').split(' ')[0])}: just be there for them.</div></div>
     </div>`;
   }
   const unlocked = gaps.filter(g => g.unlocked);
@@ -1357,7 +1360,7 @@ function renderLogForm(p) {
     <div class="card card-flush logform">
       <div class="lf-head"><h3>How did it go?</h3>
         <div style="display:flex;align-items:center;gap:10px">
-          <span class="faint" style="font-size:13px;color:var(--ink-3)">${(p.full_name || '').split(' ')[0]}</span>
+          <span class="faint" style="font-size:13px;color:var(--ink-3)">${sanitize((p.full_name || '').split(' ')[0])}</span>
           <!-- Relabelled 2026-09-10. The RPC behind this modal has been live
                since sql/113 and had been used ZERO times (321 concerns, 0 with
                reassign_requested). Prachi's report on 01/09 asks for an
@@ -1576,7 +1579,7 @@ function updateInviteMoment(p) {
         : choice === 'agreed-self'
           ? 'Lovely. It’s yours. Give it a date on the 1:1 Sessions page.'
           : continuityName
-            ? `Lovely. Going back to ${continuityName}, who has worked with them before.`
+            ? `Lovely. Going back to ${sanitize(continuityName)}, who has worked with them before.`
             : `Lovely. The ${sessionKind(kind).label.toLowerCase()} team takes it from here.`;
       mount.innerHTML = `
         <div class="followup" style="display:flex;align-items:center;gap:9px">
@@ -1738,7 +1741,7 @@ function openConcernModal(p) {
       <button class="btn btn-secondary" id="cn-cancel">Cancel</button>
       <button class="btn btn-danger" id="cn-save">${icon('alertTriangle')}Raise it now</button>
     </div>`;
-  showModal({ title: `Raise a concern · ${p.full_name || ''}`, content: el, size: 'lg' });
+  showModal({ title: `Raise a concern · ${sanitize(p.full_name)}`, content: el, size: 'lg' });
 
   // One selection across BOTH chip rows: the welfare list and the two that
   // are about the caller. Picking either clears the other.
@@ -1830,21 +1833,21 @@ function openClinicalDetailsModal(p) {
     </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Hospital</label>
-        <input class="input" id="cd-hospital" value="${p.treating_hospital || ''}" /></div>
+        <input class="input" id="cd-hospital" value="${sanitize(p.treating_hospital)}" /></div>
       <div class="form-group"><label class="form-label">Current treatment</label>
-        <input class="input" id="cd-treatment" value="${p.current_treatment || ''}" placeholder="e.g., chemo cycle 3" /></div>
+        <input class="input" id="cd-treatment" value="${sanitize(p.current_treatment)}" placeholder="e.g., chemo cycle 3" /></div>
     </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Paying via</label>
-        <input class="input" id="cd-payment" value="${p.payment_method || ''}" placeholder="e.g., Ayushman Bharat, savings" /></div>
+        <input class="input" id="cd-payment" value="${sanitize(p.payment_method)}" placeholder="e.g., Ayushman Bharat, savings" /></div>
       <div class="form-group"><label class="form-label">Primary language</label>
-        <input class="input" id="cd-language" value="${p.primary_language || ''}" /></div>
+        <input class="input" id="cd-language" value="${sanitize(p.primary_language)}" /></div>
     </div>
     <div class="form-actions">
       <button class="btn btn-secondary" id="cd-cancel">Cancel</button>
       <button class="btn btn-primary" id="cd-save">${icon('check')}Save details</button>
     </div>`;
-  showModal({ title: 'Clinical details · ' + (p.full_name || ''), content: el, size: 'lg' });
+  showModal({ title: 'Clinical details · ' + sanitize(p.full_name), content: el, size: 'lg' });
   el.querySelector('#cd-cancel').addEventListener('click', () => closeModal());
   el.querySelector('#cd-save').addEventListener('click', async () => {
     const btn = el.querySelector('#cd-save');

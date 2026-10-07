@@ -6,6 +6,7 @@
 // ============================================================
 
 import { getCurrentProfile, getUserRole, signOut } from '../auth.js';
+import { sanitize } from '../utils/validators.js';
 import { getSupabase } from '../supabase.js';
 import { navigate } from '../router.js';
 import { showToast } from './toast.js';
@@ -136,9 +137,9 @@ export function renderSidebar() {
       <div id="freshstart-slot"></div>
       <div class="sidebar-user">
         <button class="sidebar-user-main ${active === 'profile' ? 'active' : ''}" id="sidebar-profile-btn" title="My profile">
-          <div class="avatar" style="background: ${avatarColor(profile?.full_name)}">${getInitials(profile?.full_name)}</div>
+          <div class="avatar" style="background: ${avatarColor(profile?.full_name)}">${sanitize(getInitials(profile?.full_name))}</div>
           <div class="sidebar-user-info">
-            <div class="sidebar-user-name">${profile?.full_name || 'User'}</div>
+            <div class="sidebar-user-name">${sanitize(profile?.full_name) || 'User'}</div>
             <div class="sidebar-user-role">${role ? roleLabel(role) : ''}</div>
           </div>
         </button>

@@ -276,7 +276,7 @@ async function loadNutritionRoster() {
         return `
         <div class="card team-card">
           <div style="display:flex;align-items:center;gap:11px;margin-bottom:10px">
-            <span class="avatar" style="background:${avColor(r.full_name)}">${inits(r.full_name)}</span>
+            <span class="avatar" style="background:${avColor(r.full_name)}">${sanitize(inits(r.full_name))}</span>
             <div style="flex:1;min-width:0">
               <div class="info-value">${sanitize(r.full_name)}</div>
               <div class="due-meta">${r.last_nutrition_touch ? 'last worked ' + formatRelativeTime(r.last_nutrition_touch) : 'no nutrition work logged yet'}</div>
@@ -370,7 +370,7 @@ async function openProbationSteps() {
   el.innerHTML = `
     <p class="muted" style="margin-bottom:var(--s4);color:var(--ink-2)">Someone on probation sees only the Calling Portal (Nutrition for the Nutrition team), the Learning Hub and their profile. The rest opens in two steps, counted in answered calls since probation began.</p>
     ${PROBATION_TEAMS.map(([role, label]) => `
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--s3);margin-bottom:var(--s4)">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--s3);align-items:end;margin-bottom:var(--s4)">
         <div style="grid-column:1/-1;font:var(--t-body-strong)">${label}</div>
         <label class="form-label">Patients, Call Logs and Resources after${field(role, 'some', byRole[role]?.unlock_some ?? 10)}</label>
         <label class="form-label">Everything after${field(role, 'all', byRole[role]?.unlock_all ?? 20)}</label>
@@ -510,7 +510,7 @@ async function loadAvailability() {
           return `
           <div class="card team-card">
             <div class="tc-head">
-              <span class="avatar avatar-lg" style="background:${avColor(m.full_name)}">${inits(m.full_name)}</span>
+              <span class="avatar avatar-lg" style="background:${avColor(m.full_name)}">${sanitize(inits(m.full_name))}</span>
               <div class="tc-id">
                 <div class="tc-name">${sanitize(m.full_name)}</div>
                 <div class="tc-role">${capitalize(m.role)}</div>
@@ -590,7 +590,7 @@ async function loadTeamMembers() {
       const mgr = p.manager_id && byId[p.manager_id] ? byId[p.manager_id].full_name : null;
       return `<div class="card team-card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
-          <div style="display:flex;gap:11px;align-items:center;min-width:0"><span class="avatar" style="background:${avColor(p.full_name)}">${inits(p.full_name)}</span>
+          <div style="display:flex;gap:11px;align-items:center;min-width:0"><span class="avatar" style="background:${avColor(p.full_name)}">${sanitize(inits(p.full_name))}</span>
             <div style="min-width:0"><div class="info-value">${sanitize(p.full_name)}</div><div style="margin-top:3px">${getRoleBadge(p.role)}</div></div></div>
           <span class="badge ${p.is_active ? 'badge-ok' : 'badge-danger'}"><span class="dot"></span>${p.is_active ? 'Active' : 'Inactive'}</span>
         </div>
@@ -881,7 +881,7 @@ export async function showMoveQueueModal(row, { onMoved = loadQueue, handOver = 
         ${team.map(m => `
           <label style="display:flex;align-items:center;gap:11px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;cursor:${!m.available ? 'not-allowed' : 'pointer'};opacity:${!m.available ? '.55' : '1'}">
             <input type="radio" name="move-target" value="${m.caller_id}" ${!m.available ? 'disabled' : ''} />
-            <span class="avatar" style="background:${avColor(m.full_name)}">${inits(m.full_name)}</span>
+            <span class="avatar" style="background:${avColor(m.full_name)}">${sanitize(inits(m.full_name))}</span>
             <span class="info-value" style="flex:1;min-width:0">${sanitize(m.full_name)}</span>
             ${!m.available ? '<span class="badge badge-danger">Off today</span>' : ''}
             <span class="tc-num ${(!isNutRow && (m.today ?? 0) > 22) ? 'over' : 'muted'}" style="font-size:14px" title="${isNutRow ? 'Outreach calls waiting for them' : `Calls due today${(m.today ?? 0) > 22 ? ': already over the ~22/day target' : ''}`}">${m.today ?? 0} ${isNutRow ? 'to offer' : 'today'}</span>
@@ -980,7 +980,7 @@ async function showAssignPatientsModal(presetMentorId = null, opts = {}) {
       ${mentors.map(m => `
         <label style="display:flex;align-items:center;gap:11px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;cursor:pointer">
           <input type="radio" name="ap-mentor" value="${m.caller_id}" data-off="${!m.available}" />
-          <span class="avatar" style="background:${avColor(m.full_name)}">${inits(m.full_name)}</span>
+          <span class="avatar" style="background:${avColor(m.full_name)}">${sanitize(inits(m.full_name))}</span>
           <span class="info-value" style="flex:1;min-width:0">${sanitize(m.full_name)}</span>
           ${!m.available ? '<span class="badge badge-danger">Off today</span>' : ''}
           <span class="due-meta" style="white-space:nowrap">${isNut ? `holds ${m.owned ?? 0} · ${m.today ?? 0} to offer` : `owns ${m.owned ?? 0} · ${m.today ?? 0} today`}</span>

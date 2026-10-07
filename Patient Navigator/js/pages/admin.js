@@ -315,7 +315,7 @@ async function loadUsers() {
       <div class="user-list">
         ${(profiles || []).map(u => `
           <div class="urow">
-            <span class="avatar avatar-sm" style="background:${avColor(u.full_name)}">${inits(u.full_name)}</span>
+            <span class="avatar avatar-sm" style="background:${avColor(u.full_name)}">${sanitize(inits(u.full_name))}</span>
             <span class="urow-name">${sanitize(u.full_name)}${u.is_active ? '' : ' <span class="badge badge-warning badge-dot">Inactive</span>'}</span>
             <select class="form-select urow-role" data-user-id="${u.id}" data-action="role" title="Role">${roleOpts(u.role)}</select>
             <button class="btn btn-ghost btn-sm" data-user-id="${u.id}" data-action="managers">Managers</button>
@@ -548,7 +548,7 @@ async function loadAuditLog() {
             ${data.map(a => `
               <tr>
                 <td>${formatDateTime(a.created_at)}</td>
-                <td>${a.profiles?.full_name || 'N/A'}</td>
+                <td>${sanitize(a.profiles?.full_name) || 'N/A'}</td>
                 <td><span class="badge ${a.action === 'DELETE' ? 'badge-danger' : a.action === 'INSERT' ? 'badge-success' : 'badge-info'}">${a.action}</span></td>
                 <td>${a.table_name}</td>
                 <td class="text-muted">${(a.record_id || '').slice(0, 8)}...</td>
