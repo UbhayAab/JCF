@@ -171,15 +171,19 @@ async function renderSpecialistStats(id) {
   if (role === 'nutritionist') {
     try {
       const { data } = await sb.rpc('get_nutrition_outreach');
-      outMine = (data || []).filter(r => r.mine).length;
+      // By the person on screen: 'mine' is the signed-in account's, which a
+      // manager viewing as a nutritionist is not (Fixboard #26).
+      outMine = (data || []).filter(r => r.assigned_to === id).length;
     } catch (e) { console.warn('outreach count', e); }
   }
   // Her own saved calls (sql/145). get_specialist_stats counts people and
   // check-ins only, so a specialist's calls never showed on her own
   // dashboard: "her work activity is not being reflected" (C1.1b, 22 Sep).
+  // Counted for the person on screen: a manager viewing as an intern saw her
+  // own count there, 0 against the intern's 8 (Fixboard #26, sql/165).
   let calls = null;
   try {
-    const { data, error } = await sb.rpc('my_call_counts');
+    const { data, error } = await sb.rpc('my_call_counts', { p_user: id });
     if (error) throw error;
     calls = data;
   } catch (e) { console.warn('call counts', e); }

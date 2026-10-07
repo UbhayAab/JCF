@@ -16,6 +16,7 @@ import { getSupabase } from '../supabase.js';
 import { isManagerOrAdmin, getUserRole } from '../auth.js';
 import { showToast } from '../components/toast.js';
 import { capitalize, exportToCSV } from '../utils/formatters.js';
+import { sanitize } from '../utils/validators.js';
 import {
   giLabel, measureLabel, leverLabel, PATIENT_STATUSES, TRAJECTORIES, MEASURES,
   DIAL_STATUSES, concernReason, sessionKind,
@@ -462,7 +463,7 @@ function chartsScaffold() {
     <div class="chart-grid">
       ${chartCard('chart-nutrition-funnel', 'From touched to fed', { scope: 'snapshot', badge: '<span class="badge badge-ok">nutrition funnel</span>' })}
       ${chartCard('chart-nutrition-must', 'MUST malnutrition risk', { scope: 'snapshot', badge: '<span class="badge badge-warn">latest score per patient</span>', delay: 60 })}
-      ${chartCard('chart-nutrition-team', 'Nutrition team performance', { badge: '<span class="badge badge-info">check-ins · patients · 1:1s held</span>', full: true, height: 90, delay: 120 })}
+      ${chartCard('chart-nutrition-team', 'Nutrition team performance', { badge: '<span class="badge badge-info">calls · check-ins · patients · 1:1s</span>', full: true, height: 90, delay: 120 })}
     </div>
 
     ${sectionBand('IMPACT', 'The change we see', 'In oncology a STABLE score is a win. Quality of life holding up is the outcome', 'var(--violet)')}
@@ -1858,31 +1859,36 @@ async function loadNutritionSection() {
         `<strong>${m.high}</strong> ${Number(m.high) === 1 ? 'person is' : 'people are'} at high malnutrition risk and <strong>${m.unscreened}</strong> of ${screened + Number(m.unscreened)} still have no MUST score. Screening them is the fastest way to find who needs the team first.`);
     }
 
-    // Team performance: grouped bars per nutritionist
-    const team = (data.team || []).map(t => ({ ...t, checkins: Number(t.checkins), patients_reached: Number(t.patients_reached), sessions_held: Number(t.sessions_held) }));
+    // Team performance: grouped bars per nutritionist. Calls count too (sql/165):
+    // with check-ins alone, an intern who called but logged no check-in had no
+    // bar at all and was told to take "a nudge" (Fixboard #26).
+    const team = (data.team || []).map(t => ({ ...t, calls: Number(t.calls) || 0, calls_answered: Number(t.calls_answered) || 0, checkins: Number(t.checkins), patients_reached: Number(t.patients_reached), sessions_held: Number(t.sessions_held) }));
     const canvas = document.getElementById('chart-nutrition-team');
     if (canvas && team.length) {
       const totalCheckins = team.reduce((s, t) => s + t.checkins, 0);
-      if (!totalCheckins && !team.some(t => t.sessions_held)) {
+      const totalCalls = team.reduce((s, t) => s + t.calls, 0);
+      const totalAnswered = team.reduce((s, t) => s + t.calls_answered, 0);
+      if (!totalCalls && !totalCheckins && !team.some(t => t.sessions_held)) {
         canvas.closest('.chart-card').insertAdjacentHTML('beforeend',
-          `<div class="empty" style="padding:var(--s5) 0"><p>No nutrition check-ins logged in this window yet. Check-ins are logged from the Nutrition worklist → “Nutrition check-in”.</p></div>`);
+          `<div class="empty" style="padding:var(--s5) 0"><p>No nutrition calls or check-ins logged in this window yet. Check-ins are logged from the Nutrition worklist → “Nutrition check-in”.</p></div>`);
         (canvas.closest('.chart-canvas-wrap')||canvas).remove();
       } else {
         mkChart('chart-nutrition-team', 'bar', {
           labels: team.map(t => t.name),
           datasets: [
+            { label: 'Calls', data: team.map(t => t.calls), backgroundColor: 'rgba(26,67,168,0.55)', borderColor: CHART_COLORS.info, borderWidth: 1, borderRadius: 5, maxBarThickness: 20 },
             { label: 'Check-ins', data: team.map(t => t.checkins), backgroundColor: 'rgba(12,110,116,0.65)', borderColor: CHART_COLORS.primary, borderWidth: 1, borderRadius: 5, maxBarThickness: 20 },
             { label: 'Patients reached', data: team.map(t => t.patients_reached), backgroundColor: 'rgba(23,173,180,0.6)', borderColor: CHART_COLORS.accent, borderWidth: 1, borderRadius: 5, maxBarThickness: 20 },
             { label: '1:1 sessions held', data: team.map(t => t.sessions_held), backgroundColor: 'rgba(46,125,85,0.6)', borderColor: CHART_COLORS.success, borderWidth: 1, borderRadius: 5, maxBarThickness: 20 },
           ],
         }, { ...liveAnim(), plugins: { legend: { display: true, labels: { boxWidth: 8, padding: 12, font: { size: 11 } } } } });
-        const active = team.filter(t => t.checkins > 0);
-        const idle = team.length - active.length;
-        const top = team[0];
+        // Idle means no call, no check-in and no 1:1 in the window, not just no check-in.
+        const idle = team.filter(t => !t.calls && !t.checkins && !t.sessions_held).length;
+        const top = team[0];   // the server orders by calls, then check-ins
         setStory('chart-nutrition-team',
-          `<strong>${fmtIN(totalCheckins)}</strong> check-in${totalCheckins === 1 ? '' : 's'} in the last ${rangeLabel()}` +
-          (top && top.checkins ? `. <strong>${top.name}</strong> leads with ${fmtIN(top.checkins)}.` : '.') +
-          (idle > 0 ? ` <strong>${idle}</strong> of ${team.length} nutritionists logged none. Worth a nudge: the worklist now shows everyone they can call.` : ''));
+          `<strong>${fmtIN(totalCalls)}</strong> call${totalCalls === 1 ? '' : 's'} (${fmtIN(totalAnswered)} answered) and <strong>${fmtIN(totalCheckins)}</strong> check-in${totalCheckins === 1 ? '' : 's'} in the last ${rangeLabel()}` +
+          (top && top.calls ? `. <strong>${sanitize(top.name)}</strong> leads with ${fmtIN(top.calls)} call${top.calls === 1 ? '' : 's'}.` : '.') +
+          (idle > 0 ? ` <strong>${idle}</strong> of ${team.length} nutritionists logged no call, check-in or 1:1. Worth a nudge: the worklist shows everyone they can call.` : ''));
       }
     }
   } catch (err) { console.error('Nutrition section error:', err); }

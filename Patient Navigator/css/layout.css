@@ -552,8 +552,11 @@
   .stats { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 768px) {
-  .sidebar { width: min(288px, 85vw); transform: translateX(-100%); box-shadow: var(--sh-panel); }
+  /* The open menu is a drawer: above the header and the dock (the header's
+     Refresh and theme picker sat on the menu's logo), below modals and toasts. */
+  .sidebar { width: min(288px, 85vw); transform: translateX(-100%); box-shadow: var(--sh-panel); z-index: var(--z-drawer); }
   .sidebar.open { transform: translateX(0); }
+  .sidebar-overlay { z-index: calc(var(--z-drawer) - 1); }
   .main-content { margin-left: 0; width: 100%; min-width: 0; padding-bottom: var(--bottomnav-h); }
   .mobile-menu-btn { display: flex; }
   .bottom-nav { display: block; }

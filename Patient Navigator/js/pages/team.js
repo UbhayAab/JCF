@@ -355,6 +355,51 @@ async function buildAssignments() {
 }
 
 // ---- Availability roster ----
+// Fixboard #23: how many answered calls open the rest of the menu, per team
+// (probation_policy, sql/163). The database checks the same limits.
+const PROBATION_TEAMS = [['caregiver_mentor', 'CGMP'], ['nutritionist', 'Nutrition']];
+async function openProbationSteps() {
+  const sb = getSupabase();
+  const el = document.createElement('div');
+  el.innerHTML = '<div class="sk skeleton-row"></div>';
+  showModal({ title: 'Probation steps', content: el });
+  const { data, error } = await sb.from('probation_policy').select('role, unlock_some, unlock_all');
+  if (error) { el.innerHTML = `<p class="muted">Could not read the steps: ${sanitize(error.message)}</p>`; return; }
+  const byRole = Object.fromEntries((data || []).map(r => [r.role, r]));
+  const field = (role, k, v) => `<input class="form-input" type="number" inputmode="numeric" min="0" max="500" step="1" data-role="${role}" data-k="${k}" value="${v}">`;
+  el.innerHTML = `
+    <p class="muted" style="margin-bottom:var(--s4);color:var(--ink-2)">Someone on probation sees only the Calling Portal (Nutrition for the Nutrition team), the Learning Hub and their profile. The rest opens in two steps, counted in answered calls since probation began.</p>
+    ${PROBATION_TEAMS.map(([role, label]) => `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--s3);margin-bottom:var(--s4)">
+        <div style="grid-column:1/-1;font:var(--t-body-strong)">${label}</div>
+        <label class="form-label">Patients, Call Logs and Resources after${field(role, 'some', byRole[role]?.unlock_some ?? 10)}</label>
+        <label class="form-label">Everything after${field(role, 'all', byRole[role]?.unlock_all ?? 20)}</label>
+      </div>`).join('')}
+    <div style="display:flex;justify-content:flex-end;gap:var(--s2)">
+      <button class="btn btn-secondary" id="ps-cancel">Cancel</button>
+      <button class="btn btn-primary" id="ps-save">Save</button>
+    </div>`;
+  el.querySelector('#ps-cancel').addEventListener('click', () => closeModal());
+  const save = el.querySelector('#ps-save');
+  save.addEventListener('click', async () => {
+    const val = (role, k) => Number(el.querySelector(`input[data-role="${role}"][data-k="${k}"]`).value);
+    for (const [role, label] of PROBATION_TEAMS) {
+      const some = val(role, 'some'); const all = val(role, 'all');
+      if (!Number.isInteger(some) || !Number.isInteger(all) || some < 0 || all < some || all > 500) {
+        showToast(`${label}: the first step must be 0 or more, and the second at least the first (500 at most).`, 'error');
+        return;
+      }
+    }
+    save.disabled = true;
+    for (const [role, label] of PROBATION_TEAMS) {
+      const { error: err } = await sb.rpc('set_probation_policy', { p_role: role, p_unlock_some: val(role, 'some'), p_unlock_all: val(role, 'all') });
+      if (err) { save.disabled = false; showToast(`${label}: ${err.message}`, 'error'); return; }
+    }
+    closeModal();
+    showToast('Probation steps saved. Interns on probation see them within a minute.', 'success');
+  });
+}
+
 async function loadAvailability() {
   const sb = getSupabase(); const content = document.getElementById('team-content');
   try {
@@ -423,6 +468,7 @@ async function loadAvailability() {
           ${Object.entries(SORTS).map(([k, s]) =>
             `<option value="${k}"${k === chosen ? ' selected' : ''}>${s.label}</option>`).join('')}
         </select>
+        <button class="btn btn-ghost btn-sm" id="prob-steps" title="How many answered calls open the rest of the menu for someone on probation">${icon('book')} Probation steps</button>
       </div>
       <div class="team-grid">
         ${sorted.map(m => {
@@ -507,6 +553,7 @@ async function loadAvailability() {
         : `${sanitize(btn.dataset.name) || 'They'} is on probation: give her families by hand with Give patients`, 'success');
       loadAvailability();
     }));
+    content.querySelector('#prob-steps')?.addEventListener('click', openProbationSteps);
     content.querySelector('#team-sort')?.addEventListener('change', (e) => {
       teamSort = e.target.value;
       loadAvailability();
