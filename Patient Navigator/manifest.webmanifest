@@ -11,6 +11,14 @@
   "background_color": "#0F1A1D",
   "theme_color": "#0C6E74",
   "categories": ["health", "medical", "productivity"],
+  "share_target": {
+    "action": "./share-recording",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [{ "name": "recording", "accept": ["audio/*", ".m4a", ".mp3", ".wav", ".aac", ".ogg", ".opus"] }]
+    }
+  },
   "lang": "en-IN",
   "dir": "ltr",
   "icons": [

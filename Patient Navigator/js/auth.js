@@ -252,6 +252,9 @@ export async function sendPasswordReset() {
 export async function signOut() {
   const sb = getSupabase();
   stopImpersonation();                 // never carry an "open as" session past logout
+  // A call recording shared into the app and not used yet never outlives the
+  // session on this phone (sw.js share target, Fixboard #22).
+  try { if ('caches' in window) await caches.delete('jcf-shared-recording'); } catch { /* none kept */ }
   const { error } = await sb.auth.signOut();
   if (error) throw new Error(error.message);
   currentUser = null;

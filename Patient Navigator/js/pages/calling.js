@@ -28,6 +28,12 @@ import { openDisinterestModal, openBlacklistModal } from '../components/escalate
 // shown BEFORE the call (today's list preview) and at the top of the call.
 import { loadCallContext, flagCardHTML, flagChipsHTML, phoneListHTML, wirePhoneList, docStripHTML } from '../components/callContext.js';
 import { openDocumentViewer, fmtDay, daysAgo } from '../components/docViewer.js';
+// sql/166, Fixboard #22: call recordings. Footprint in this file: this import,
+// form.recording (blankForm, applySavedForm), the reminder on tel: links
+// (wireDialArea, wireActive), the #rec-mount div and the privacy line in
+// renderLogForm, mountRecording() and applyRecordingSuggestions(), the upload
+// wait and attachRecordingToLog() in submitCallLog, and .rec-slot in history.
+import { blankRecording, guardDialLinks, mountRecordingSection, attachRecordingToLog, decorateRecordings, PRIVACY_LINE } from '../components/callRecording.js';
 
 // ---- module state ----
 let me = null;                 // current profile
@@ -47,6 +53,7 @@ let lastLoggedCall = null;      // { id, name, at } - powers "Fix that log" afte
 let availableToday = true;
 let currentContext = null;      // get_call_context row for the family on the call (sql/146)
 let listContext = new Map();    // patient_id -> get_call_context row, for today's list
+let recordingSection = null;    // the mounted recording box ({ refresh, dispose }), sql/166
 const form = blankForm();
 
 // --- active-call persistence: survive a WebView reload, leaving the site to
@@ -78,6 +85,7 @@ function clearActive() { try { localStorage.removeItem(ACTIVE_KEY()); sessionSto
 let saveSoonTimer = null;
 function saveActiveSoon() { clearTimeout(saveSoonTimer); saveSoonTimer = setTimeout(saveActive, 400); }
 async function restoreActive(s) {
+  recordingSection?.dispose(); recordingSection = null;   // see startCallSession
   // The saved draft outlives the claim. A colleague can log the call, a
   // manager can move the patient, the row can be cancelled - all while the
   // caller is away from the site (the draft lives for ~20 hours). Remounting
@@ -153,6 +161,8 @@ function applySavedForm(saved) {
     const el = document.getElementById('f-followup'); if (el) el.value = saved.followupDate;
     const auto = document.getElementById('fu-auto'); if (auto) auto.style.display = 'none';
   }
+  // The recording box comes back as left (a transcript in flight is asked for again).
+  if (saved.recording) { form.recording = saved.recording; if (currentPatient) mountRecording(currentPatient); }
   updateSubmit();
   saveActive();
 }
@@ -161,6 +171,9 @@ function blankForm() {
   return { dialStatus: '', receptiveness: '', services: [], whatsapp: null, social: null, waLink: null,
     requirements: [], customReq: '', condition: '', notes: '', followupDate: '', strategy: '',
     fbPatient: '', fbCaregiver: '', consent: null, dateManual: false,
+    // The recording's state (callRecording.js): reminder shown, the family's
+    // answer, the upload and its transcript. Here so a new call clears it.
+    recording: null,
     // Set by recordConsentNow(). MUST live here: Object.assign(form,
     // blankForm()) is how a new call resets the form, and a key that is
     // absent from blankForm is never cleared - so a leftover true would
@@ -606,6 +619,9 @@ async function getNextCall(justSkippedId = null) {
 // One entry into the active-call view: get_next_call and the tappable
 // Today's list both land here with the same claimed-queue JSON.
 async function startCallSession(data) {
+  // First, before any wait: a transcript still on its way belongs to the call
+  // that was on screen, never to this one (Skip and the flag exits land here).
+  recordingSection?.dispose(); recordingSection = null;
   currentQueueId = data.queue_id;
   currentPatient = data;
   Object.assign(form, blankForm());
@@ -768,6 +784,7 @@ function wireUndoBar() {
 // ============================================================ Active view
 function mountActive(p, history) {
   currentHistory = history || [];
+  recordingSection?.dispose(); recordingSection = null;
   const el = root(); if (!el) return;
   const name = p.full_name || p.patient_code || 'Patient';
   const attemptTone = p.attempt >= 3 ? 'danger' : p.attempt === 2 ? 'warn' : 'info';
@@ -872,6 +889,7 @@ function mountActive(p, history) {
   wireGapsPanel(p);
   wireLeversPanel(p);
   wireUndoBar();
+  decorateRecordings(el).catch((e) => console.warn('[portal] recordings unavailable:', e.message));
 }
 
 // The number the big button dials. It used to read patients.phone_full only,
@@ -909,10 +927,76 @@ function dialBlockHTML(p) {
 // Covers the main "Tap to call" button and every dial-order number:
 // multi-phone patients dial from the list, not the main button, which is why
 // their duration was not being tracked.
+// ---- Call recordings (sql/166, Fixboard #22) ----
+const recState = () => form.recording || blankRecording();
+const setRecState = (rec) => { form.recording = rec; saveActive(); };
+// The first tap on a number in this call shows the recording reminder; the
+// dial itself still starts the timer, exactly like a plain tap.
+const recDialCtx = () => ({ get: recState, set: setRecState, onDial: () => { if (!timerRunning) startTimer(); } });
+
+function mountRecording(p) {
+  recordingSection?.dispose();
+  recordingSection = mountRecordingSection(document.getElementById('rec-mount'), {
+    patientId: p.patient_id,
+    get: recState,
+    set: setRecState,
+    consentOnFile: () => !!(p.consent_given || form.consentSaved),
+    // Only a stopped clock is the call's length; a running one also counts the
+    // minutes since, which would make every recording look too short.
+    callSeconds: () => (timerRunning ? 0 : timerSeconds),
+    apply: applyRecordingSuggestions,
+  });
+}
+
+// Suggestions from the recording fill only what is still empty: never over
+// anything the caller chose or typed. Returns the labels it filled.
+function applyRecordingSuggestions(result) {
+  const s = result?.suggestions || {};
+  const filled = [];
+  const click = (sel) => { const b = document.querySelector(sel); if (!b) return false; b.click(); return true; };
+  const val = (k) => s[k]?.value;
+  if (!form.dialStatus && val('dial_status') && click(`#seg-outcome .seg-btn[data-status="${CSS.escape(val('dial_status'))}"]`)) filled.push('Call outcome');
+  if (!form.receptiveness && val('receptiveness') && click(`#recep .recep-btn[data-recep="${CSS.escape(val('receptiveness'))}"]`)) filled.push('How they were doing');
+  if (!form.condition && val('condition') && click(`#seg-condition .seg-btn[data-cond="${CSS.escape(val('condition'))}"]`)) filled.push('How the patient is doing');
+  const reqs = (s.requirements || []).map((r) => r.value).filter((k) => !form.requirements.includes(k));
+  const added = reqs.filter((k) => click(`#reqs .chip[data-req="${CSS.escape(k)}"]`));
+  if (added.length) filled.push(`What they asked for (${added.join(', ')})`);
+  const setIfEmpty = (id, field, text, label) => {
+    const elx = document.getElementById(id);
+    if (!elx || !text || String(form[field] || '').trim()) return;
+    elx.value = text; form[field] = text; filled.push(label);
+  };
+  setIfEmpty('f-notes', 'notes', result.summary, 'General notes');
+  setIfEmpty('f-strategy', 'strategy', val('next_mentor_note'), 'Note for the next caregiver mentor');
+  setIfEmpty('f-fb-patient', 'fbPatient', val('patient_feedback'), 'Feedback from patient');
+  setIfEmpty('f-fb-caregiver', 'fbCaregiver', val('caregiver_feedback'), 'Feedback from caregiver');
+  const days = Number(val('followup_in_days'));
+  if (!form.dateManual && Number.isInteger(days) && days >= 3) {
+    // The phone's own calendar day: addDays() goes through UTC, which is the
+    // previous day between midnight and 05:30 in India.
+    const d = new Date(); d.setDate(d.getDate() + days);
+    let date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    // The same rule as a typed date (suggestFollowup): a connected call rests
+    // at least 7 days, anything else at least 3.
+    const minDate = addDays(form.dialStatus === 'connected' ? 7 : 3);
+    const moved = date < minDate;
+    if (moved) date = minDate;
+    const box = document.getElementById('f-followup');
+    if (box) {
+      box.value = date; form.followupDate = date; form.dateManual = true;
+      filled.push(moved ? 'Next check-in (the agreed day was sooner; a connected call rests 7 days)' : 'Next check-in');
+    }
+    const auto = document.getElementById('fu-auto'); if (auto) auto.style.display = 'none';
+  }
+  updateSubmit(); saveActive();
+  return filled;
+}
+
 function wireDialArea(p) {
   ['dial-block', 'dial-order-mount'].forEach(id => document.getElementById(id)
     ?.querySelectorAll('.callbtn, .cg-call, .ph-num')
     .forEach(a => a.addEventListener('click', () => { if (!timerRunning) startTimer(); })));
+  guardDialLinks([...document.querySelectorAll('#dial-block a[href^="tel:"], #dial-order-mount a[href^="tel:"]')], recDialCtx());
   // Copy number: tap-to-call fails on some phones, so offer a paste-able number.
   document.getElementById('copy-num')?.addEventListener('click', async (e) => {
     const num = e.currentTarget.dataset.num || '';
@@ -999,6 +1083,7 @@ function renderFullHistory(history) {
               ${h.receptiveness_bucket ? `<span class="badge badge-primary">${sanitize(capitalize(h.receptiveness_bucket))}</span>` : ''}
               ${cond ? `<span class="badge badge-${cond.tone === 'ok' ? 'ok' : cond.tone === 'danger' ? 'danger' : cond.tone === 'warn' ? 'warn' : 'neutral'}">${cond.label}</span>` : ''}
               <span class="hist-meta">${h.is_mine ? 'You' : sanitize(capitalize((h.caller_name || 'N/A').toLowerCase()))} · ${formatRelativeTime(h.call_date)}${h.call_duration_mins ? ` · ${h.call_duration_mins} min` : ''}</span>
+              ${h.id ? `<span class="rec-slot" data-log="${sanitize(String(h.id))}"></span>` : ''}
             </div>
             ${h.caller_notes ? `<div class="hist-note">${sanitize(h.caller_notes)}</div>` : ''}
             ${h.feedback_patient ? `<div class="hist-note" style="font-style:italic">“${sanitize(h.feedback_patient)}” · patient</div>` : ''}
@@ -1220,6 +1305,7 @@ async function recordConsentNow(p) {
     p.consent_given = true;
     if (currentPatient) currentPatient.consent_given = true;
     form.consentSaved = true;
+    recordingSection?.refresh();   // a recording waiting on this consent can now be uploaded
     if (note) { note.style.display = ''; note.textContent = 'Consent recorded. You can note their details now.'; }
     // Open the questions that were locked a second ago.
     const panel = document.getElementById('gaps-panel');
@@ -1389,10 +1475,13 @@ function renderLogForm(p) {
           <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 10px">${callNum >= 2
             ? '“May I note down a few details about the diagnosis? It stays private and helps our team guide you better.”'
             : '“Is it alright if we stay in touch and keep a few notes about your care? It stays private, and you can ask us to stop any time.”'}</p>
+          <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 10px">“${PRIVACY_LINE}”</p>
           <p style="font:var(--t-xs);color:var(--ink-3);margin:0 0 10px">Until they say yes, nothing about them can be saved. Ask this before anything else.</p>
           <div class="yesno" data-yn="consent"><button type="button" class="yn" data-v="yes">They consented</button><button type="button" class="yn" data-v="no">Not today</button></div>
           <div class="due-meta" id="consent-saved" style="display:none;margin-top:8px;color:var(--ok)"></div>
         </div>`}
+        <!-- sql/166, Fixboard #22: the recording, its transcript and suggested answers. -->
+        <div id="rec-mount"></div>
         <div class="field"><label>Call outcome <span class="req">*</span></label>
           <div class="seg seg-wrap" id="seg-outcome">
             ${DIAL_STATUSES.map(o => `<button type="button" class="seg-btn" data-status="${o.key}" data-tone="${o.tone}">${icon(o.icon)}<span>${o.label}</span></button>`).join('')}
@@ -1449,8 +1538,6 @@ function renderLogForm(p) {
           <div class="field" style="margin-top:12px"><label>A note to hand the next caregiver mentor</label>
             <textarea class="textarea" id="f-strategy" placeholder="What helped, what to lead with, the best time to reach them…"></textarea></div>
         </div>
-        <label class="upload">${icon('mic')}<div class="grow" style="flex:1"><div class="up-title" id="up-title">Attach call recording</div><div class="up-sub">Optional · auto-captured on the mobile app</div></div>${icon('upload')}
-          <input type="file" accept="audio/*,.m4a,.mp3,.wav,.ogg,.aac" hidden id="f-recording" /></label>
         ${renderLeversPanel(p)}
       </div>
       <!-- #f-why: a greyed Submit always says what it is waiting for, same
@@ -1613,6 +1700,7 @@ function wireActive(p) {
   wireDialArea(p);
   document.querySelectorAll('.caregiver .cg-call').forEach(a =>
     a.addEventListener('click', () => { if (!timerRunning) startTimer(); }));
+  guardDialLinks([...document.querySelectorAll('.caregiver a.cg-call[href^="tel:"]')], recDialCtx());
   wireDocStrip(p);
   // Send resources on WhatsApp: curate + send from the business number, mid-call.
   // Straight to the financial + accommodation shelf, the pair the field team
@@ -1665,7 +1753,6 @@ function wireActive(p) {
   textField('f-notes', 'notes');
   textField('f-strategy', 'strategy');
   document.getElementById('f-followup')?.addEventListener('input', e => { form.followupDate = e.target.value; form.dateManual = true; document.getElementById('fu-auto').style.display = 'none'; saveActive(); });
-  document.getElementById('f-recording')?.addEventListener('change', e => { const f = e.target.files[0]; if (f) document.getElementById('up-title').textContent = f.name; });
   document.getElementById('f-details-btn')?.addEventListener('click', () => openClinicalDetailsModal(p));
   document.getElementById('f-wellbeing-btn')?.addEventListener('click', () => openAssessmentFlow({
     patient: { id: p.patient_id, full_name: p.full_name },
@@ -1694,6 +1781,7 @@ function wireActive(p) {
     { onDone: () => { try { stopTimer(); } catch {} clearActive(); getNextCall(); } }));
   document.getElementById('f-skip')?.addEventListener('click', skipPatient);
   document.getElementById('f-submit')?.addEventListener('click', submitCallLog);
+  mountRecording(p);
   updateSubmit();   // the reason shows from the first paint, not after the first tap
 }
 
@@ -2004,6 +2092,12 @@ async function submitCallLog() {
     showToast('How many minutes did you talk? Type it next to the timer, then submit.', 'warning', 6000);
     return;
   }
+  // A file still on its way would miss this log. A transcript still being
+  // made does not matter: it lands on the recording once it is ready.
+  if (form.recording?.status === 'uploading') {
+    showToast('The recording is still uploading. Wait a moment, then submit.', 'warning', 6000);
+    return;
+  }
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:17px;height:17px;border-width:2.5px"></span>Saving…'; }
   stopTimer();
   try {
@@ -2018,6 +2112,9 @@ async function submitCallLog() {
         .gte('call_date', since).limit(1);
       if (dup && dup.length) {
         showToast('Already logged for this person a moment ago, not duplicating', 'info');
+        // The recording joins the log that was saved, rather than waiting for the sweep.
+        if (form.recording?.consentId) await attachRecordingToLog(dup[0].id, form.recording);
+        recordingSection?.dispose(); recordingSection = null;
         await sb.rpc('complete_queue_call', { p_queue_id: currentQueueId, p_status: 'completed' });
         clearActive();
         setTimeout(() => getNextCall(), 300);
@@ -2064,14 +2161,10 @@ async function submitCallLog() {
       const { error: pErr } = await sb.rpc('update_patient_from_call', { p_patient_id: currentPatient.patient_id, p_fields: patch });
       if (pErr) console.warn('Patient update failed:', pErr.message);
     }
-    const file = document.getElementById('f-recording')?.files?.[0];
-    if (file && callLog) { try {
-      const fileName = `${currentPatient.patient_id}_${Date.now()}_${file.name}`;
-      const { error: upErr } = await sb.storage.from('call-recordings').upload(fileName, file);
-      if (!upErr) { const { data: urlData } = sb.storage.from('call-recordings').getPublicUrl(fileName);
-        await sb.from('call_recordings').insert({ call_log_id: callLog.id, patient_id: currentPatient.patient_id,
-          file_url: urlData?.publicUrl || fileName, file_name: file.name, file_size_bytes: file.size, duration_seconds: timerSeconds, uploaded_by: me.id }); }
-    } catch (e) { console.warn('Recording upload failed:', e); } }
+    // sql/166: the family's answer about recording, and its recording, join this
+    // log. Never blocks it; the old silent upload that saved nothing is gone.
+    if (callLog && form.recording?.consentId) await attachRecordingToLog(callLog.id, form.recording);
+    recordingSection?.dispose(); recordingSection = null;
 
     const queueStatus = (form.dialStatus === 'callback_requested') ? 'callback' : 'completed';
     await sb.rpc('complete_queue_call', { p_queue_id: currentQueueId, p_status: queueStatus,
@@ -2093,6 +2186,7 @@ async function submitCallLog() {
 }
 
 async function mountQueueEmpty() {
+  recordingSection?.dispose(); recordingSection = null;
   clearActive();
   const el = root(); if (!el) return;
 
@@ -2124,6 +2218,7 @@ async function mountQueueEmpty() {
 }
 
 function resetState() {
+  recordingSection?.dispose(); recordingSection = null;
   currentQueueId = null; currentPatient = null; currentPatientPitches = null; currentPatientPriority = null; currentHistory = []; currentPatientSessions = [];
   currentContext = null;
   Object.assign(form, blankForm()); timerSeconds = 0; timerRunning = false; timerStartEpoch = null;
