@@ -79,6 +79,8 @@ export function ensureProbation() {
   if (stateFor === profile.id && Date.now() - loadedAt < STALE_MS) return Promise.resolve(false);
   if (loading) return loading;
   const before = probationLevel();
+  // The first count changes the card's words even when the level stays 'core'.
+  const counted = !!state && stateFor === profile.id;
   loading = (async () => {
     try {
       const { data, error } = await getSupabase().rpc('my_probation');
@@ -91,7 +93,7 @@ export function ensureProbation() {
       loadedAt = Date.now();
       loading = null;
     }
-    return probationLevel() !== before;
+    return !counted || probationLevel() !== before;
   })();
   return loading;
 }
