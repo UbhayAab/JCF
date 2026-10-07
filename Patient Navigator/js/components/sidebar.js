@@ -9,7 +9,8 @@ import { getCurrentProfile, getUserRole, signOut } from '../auth.js';
 import { getSupabase } from '../supabase.js';
 import { navigate } from '../router.js';
 import { showToast } from './toast.js';
-import { confirmModal } from './modal.js';
+import { confirmModal, showModal, closeModal } from './modal.js';
+import { probationLevel, routeOpen, progressLine, ensureProbation, unlockNews } from '../utils/probation.js';
 import { icon } from './icons.js';
 import { roleLabel } from '../utils/formatters.js';
 import { mountInstallButton } from '../pwa.js';
@@ -94,7 +95,8 @@ export function renderSidebar() {
   if (!sidebar) return;
 
   const navHTML = NAV_ITEMS.map(section => {
-    const visibleItems = section.items.filter(item => item.roles.includes(role));
+    // On probation (Fixboard #23) only the open tabs show: hidden, not greyed out.
+    const visibleItems = section.items.filter(item => item.roles.includes(role) && routeOpen(item.route, role));
     if (visibleItems.length === 0) return '';
     return `
       <div class="nav-section">
@@ -123,6 +125,7 @@ export function renderSidebar() {
       ${navHTML}
     </nav>
     <div class="sidebar-footer">
+      ${progressLine() ? `<div class="probation-card" id="probation-card">${icon('book')}<span>${progressLine()}</span></div>` : ''}
       <!-- Install lives here, not in a popup: present in a browser tab,
            absent once the app is installed. -->
       <div id="pwa-install-slot"></div>
@@ -174,6 +177,32 @@ export function renderSidebar() {
 
   renderBottomNav(role, active);
   refreshConcernCount();
+
+  // On probation: count the calls (at most once a minute), redraw when a step
+  // opens, and say once what each new tab is for.
+  ensureProbation().then((changed) => {
+    if (changed && document.getElementById('sidebar')) { renderSidebar(); return; }
+    showUnlockNews();
+  });
+}
+
+function showUnlockNews() {
+  const news = unlockNews();
+  if (!news) return;
+  const learn = '<a href="#learn" class="unlock-learn">Learning Hub</a>';
+  const content = news === 'all'
+    ? `<p style="margin:0 0 10px">You have finished training: every tab of your role is in the menu now.</p>
+       <p class="due-meta" style="margin:0">Not sure what a tab is for? The ${learn} explains each one.</p>`
+    : `<p style="margin:0 0 10px">After your first conversations, three more tabs are in the menu:</p>
+       <ul style="margin:0 0 10px;padding-left:18px">${news.map(n => `<li><strong>${n.label}</strong>: ${n.what}.</li>`).join('')}</ul>
+       <p class="due-meta" style="margin:0">The ${learn} has a page on each.</p>`;
+  showModal({
+    title: news === 'all' ? 'Every tab is open' : 'New tabs are open',
+    content,
+    footer: '<button type="button" class="btn btn-primary" id="unlock-ok">Got it</button>',
+  });
+  document.getElementById('unlock-ok')?.addEventListener('click', () => closeModal());
+  document.querySelectorAll('.unlock-learn').forEach(a => a.addEventListener('click', () => closeModal()));
 }
 
 // Open-concern count pill on the Concerns nav item (managers/admins).
@@ -228,9 +257,17 @@ function renderBottomNav(role, active) {
           : { id: 'profile', label: 'Profile', route: 'profile', icon: 'user' },
       ];
 
+  // On probation (Fixboard #23): only open tabs, and the Learning Hub in reach.
+  let shown = items.filter(it => routeOpen(it.route, role));
+  if (probationLevel() !== 'all' && !shown.some(it => it.route === 'learn')) {
+    const at = shown.findIndex(it => it.route === 'profile');
+    const learn = { id: 'learn', label: 'Learn', route: 'learn', icon: 'book' };
+    shown = at < 0 ? [...shown, learn] : [...shown.slice(0, at), learn, ...shown.slice(at)];
+  }
+
   el.innerHTML = `
     <div class="bottom-nav-list">
-      ${items.map(it => `
+      ${shown.map(it => `
         <button class="bottom-nav-item ${active === it.route ? 'active' : ''}" data-route="${it.route}" aria-label="${it.label}">
           ${icon(it.icon)}
           <span>${it.label}</span>

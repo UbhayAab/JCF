@@ -505,6 +505,11 @@ table.data tbody tr:last-child td { border-bottom: none; }
    patient detail layout, timeline, split sidebar footer.
    ============================================================ */
 
+/* ---- on probation (Fixboard #23): how far training has got, in the menu ---- */
+.probation-card { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 10px; padding: 10px 12px;
+  border-radius: var(--r-md); background: var(--primary-soft); color: var(--ink-2); font: var(--t-xs); line-height: 1.45; }
+.probation-card svg { flex: none; width: 18px; height: 18px; color: var(--primary-ink); margin-top: 1px; }
+
 /* ---- sidebar footer: profile block + separate sign-out (on the surface sidebar) ---- */
 .sidebar-user { display: flex; align-items: stretch; gap: 6px; padding: 0; border: none; background: none; cursor: default; }
 .sidebar-user-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); cursor: pointer; text-align: left; transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease); }

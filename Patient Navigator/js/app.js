@@ -502,7 +502,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261007n';  // bumped on every breaking deploy
+const APP_BUILD = '20261007o';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -591,6 +591,18 @@ async function init() {
   // Set guards
   setAuthGuard(() => !!getCurrentUser());
   setRoleGuard((roles) => roles.includes(getUserRole()));
+
+  // On probation (Fixboard #23): a tab that is not open yet is closed to a
+  // saved link too. Loaded on use: a phone still holding yesterday's
+  // router.js has no setRouteGate, and must still boot.
+  import('./router.js').then((r) => r.setRouteGate?.(async (path) => {
+    const { ensureProbation, routeOpen, homeFor } = await import('./utils/probation.js');
+    await ensureProbation();
+    const role = getUserRole();
+    if (routeOpen(path, role)) return null;
+    showToast('That tab opens after more answered calls. The card in the menu shows how many.', 'info');
+    return homeFor(role);
+  })).catch(() => { /* no gate on an older router */ });
 
   // Listen for sign out to go back to login.
   // Also handle SIGNED_IN events that didn't come from our login form

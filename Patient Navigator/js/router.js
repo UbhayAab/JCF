@@ -22,6 +22,13 @@ export function registerRoute(path, handler, options = {}) {
 export function setAuthGuard(fn) { authGuard = fn; }
 export function setRoleGuard(fn) { roleGuard = fn; }
 
+// Fixboard #23: a route can be closed to someone for now (on probation). The
+// gate answers with where to go instead, or nothing. app.js installs it
+// through a dynamic import, so a phone holding an older app.js or router.js
+// simply runs without a gate rather than failing to boot.
+let routeGate = null;
+export function setRouteGate(fn) { routeGate = fn; }
+
 // Navigate to a route
 export function navigate(path) {
   window.location.hash = path;
@@ -113,6 +120,15 @@ async function handleRouteChange() {
     const hasRole = await roleGuard(route.roles);
     if (!hasRole) {
       navigate('dashboard');
+      return;
+    }
+  }
+
+  // Route gate (on probation): closed to a saved link too, not just hidden.
+  if (routeGate && route.requiresAuth !== false) {
+    const to = await routeGate(hash.slice(1));
+    if (to && to !== basePath) {
+      navigate(to);
       return;
     }
   }
