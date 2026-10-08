@@ -110,6 +110,7 @@ export function renderSidebar() {
             ${icon(item.icon)}
             <span>${item.label}</span>
             ${item.id === 'concerns' ? '<span class="nav-badge" id="navcount-concerns" style="display:none"></span>' : ''}
+            ${item.id === 'leads' ? '<span class="nav-badge" id="navcount-leads" style="display:none" title="Families waiting for the call HopeBot promised"></span>' : ''}
           </button>
         `).join('')}
       </div>
@@ -180,6 +181,7 @@ export function renderSidebar() {
 
   renderBottomNav(role, active);
   refreshConcernCount();
+  refreshHopebotCount();
 
   // On probation: count the calls (at most once a minute), redraw when a step
   // opens, and say once what each new tab is for.
@@ -226,6 +228,24 @@ async function refreshConcernCount() {
   }
   const el = document.getElementById('navcount-concerns');
   if (el) { el.textContent = concernCache.n; el.style.display = concernCache.n ? '' : 'none'; }
+}
+
+// Families waiting for the call HopeBot promised (sql/172), on WhatsApp leads.
+// Same one-minute cache. Row security decides whose requests are counted.
+const HOPEBOT_COUNT_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist'];
+let hopebotCache = { n: 0, at: 0 };
+async function refreshHopebotCount() {
+  if (!HOPEBOT_COUNT_ROLES.includes(getUserRole())) return;
+  if (Date.now() - hopebotCache.at > 60000) {
+    try {
+      const { count, error } = await getSupabase().from('hopebot_requests')
+        .select('id', { count: 'exact', head: true })
+        .neq('state', 'closed');
+      if (!error) hopebotCache = { n: count || 0, at: Date.now() };
+    } catch { /* leave the pill hidden on failure */ }
+  }
+  const el = document.getElementById('navcount-leads');
+  if (el) { el.textContent = hopebotCache.n; el.style.display = hopebotCache.n ? '' : 'none'; }
 }
 
 // Mobile bottom-nav: 5 priority destinations.

@@ -34,6 +34,9 @@ import { openDocumentViewer, fmtDay, daysAgo } from '../components/docViewer.js'
 // renderLogForm, mountRecording() and applyRecordingSuggestions(), the upload
 // wait and attachRecordingToLog() in submitCallLog, and .rec-slot in history.
 import { blankRecording, guardDialLinks, mountRecordingSection, attachRecordingToLog, decorateRecordings, PRIVACY_LINE } from '../components/callRecording.js';
+// sql/172: families who asked HopeBot for a call. Footprint in this file: this
+// import, the #hb-requests div in mountReady() and the one call after it.
+import { mountHopebotRequests } from '../components/hopebotFamily.js';
 
 // ---- module state ----
 let me = null;                 // current profile
@@ -383,6 +386,7 @@ async function mountReady() {
           <div><div class="rs-num">${summary.done_today}</div><div class="rs-lbl">Done today</div></div>
         </div>
       </div>
+      <div id="hb-requests" hidden></div>
       <div class="card card-flush" id="today-list">
         <div class="card-head"><h3>Today's list</h3><span class="badge badge-neutral" id="tl-count">…</span></div>
         <div id="tl-body"><div style="padding:var(--s4)">${Array(3).fill('<div class="sk skeleton-row"></div>').join('')}</div></div>
@@ -394,6 +398,7 @@ async function mountReady() {
   document.getElementById('goto-team')?.addEventListener('click', () => navigate('team'));
   document.getElementById('avail-toggle')?.addEventListener('click', toggleAvailability);
   el.querySelectorAll('[data-goto-list]').forEach(t => t.addEventListener('click', scrollToTodayList));
+  mountHopebotRequests(document.getElementById('hb-requests'), { mode: 'calling' });
   loadTodayList();
 }
 

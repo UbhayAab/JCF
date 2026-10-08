@@ -761,6 +761,8 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--ink-3);margin:6px 0 10px;letter-spacing:.22em;text-transform:uppercase">
         <b style="color:var(--gold);font-weight:600">Reach</b> · <b style="color:var(--primary-ink);font-weight:600">Action</b> · <b style="color:var(--clay);font-weight:600">Impact</b>: one person, three lenses
       </div>
+      <!-- sql/172: what this family asked HopeBot on WhatsApp, if they wrote. -->
+      <div id="hb-family-card" hidden></div>
       <div class="detail-tabs" role="tablist">
         <button class="dtab ${activeTab === 'overview' ? 'active' : ''}" data-tab="overview">${icon('user')}Overview</button>
         <button class="dtab ${activeTab === 'support' ? 'active' : ''}" data-tab="support">${icon('handHeart')}Support given <span class="cnt">${supportCount}</span></button>
@@ -789,6 +791,9 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       if (label) label.textContent = open ? 'Fewer actions' : 'More actions';
     });
     container.querySelector('#edit-patient-btn').addEventListener('click', () => showPatientForm(patient, reload));
+    import('../components/hopebotFamily.js')
+      .then((m) => m.mountHopebotCard(container.querySelector('#hb-family-card'), patientId))
+      .catch((e) => console.warn('[hopebot] card:', e.message));
     // The batch reader. One PDF, twenty photos or a mix, segmented into
     // documents and reviewed as one thing. See js/pages/docBatch.js.
     container.querySelector('#read-docs-btn')?.addEventListener('click', async () => {
