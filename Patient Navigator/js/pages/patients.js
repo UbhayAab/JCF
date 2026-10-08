@@ -852,11 +852,15 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       } catch (e) { showToast('Could not approve: ' + e.message, 'error'); }
     });
 
+    // Fixboard #27 (sql/174): every change goes through set_patient_status,
+    // so the status history says who and when; Inactive first asks why they
+    // dropped out. Leaving deceased still clears the date of death.
     container.querySelector('#status-select').addEventListener('change', async (e) => {
       const next = e.target.value;
-      const apply = async (extra = {}) => {
+      const apply = async () => {
         try {
-          await mustWrite(sb.from('patients').update({ patient_status: next, ...extra }).eq('id', patient.id), 'status');
+          const { error } = await sb.rpc('set_patient_status', { p_patient: patient.id, p_status: next });
+          if (error) throw error;
         } catch (err) {
           showToast('Could not change status: ' + err.message, 'error');
           e.target.value = patient.patient_status;
@@ -873,8 +877,12 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
           () => apply(), { title: 'Mark deceased', confirmLabel: 'Yes, mark deceased' }
         );
         e.target.value = patient.patient_status; // revert until confirmed
+      } else if (next === 'inactive') {
+        e.target.value = patient.patient_status; // revert until the reason is saved
+        const { openInactiveModal } = await import('../components/statusHistory.js');
+        openInactiveModal(patient, { onDone: () => { activeTab = 'overview'; reload(); } });
       } else {
-        await apply(next !== 'deceased' && patient.date_of_death ? { date_of_death: null } : {});
+        await apply();
       }
     });
 
@@ -1157,6 +1165,7 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
       </div>
     </div>` : ''}
     <div id="byc-mount"></div>
+    ${p.patient_status === 'inactive' || p.disinterest_level ? '<div id="status-history-mount" style="margin-bottom:var(--s5)"></div>' : ''}
     <div class="content-grid">
       <div class="col-span-6"><div class="card">
         <div class="card-header"><div class="card-title">Clinical profile</div></div>
@@ -1211,6 +1220,7 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
         ${p.legacy_notes ? `<div style="margin-top:var(--s4);padding:12px 14px;background:var(--surface-3);border-radius:var(--r-sm);font:var(--t-sm);color:var(--ink-2)"><strong style="font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-3)">Notes from intake</strong><br>${sanitize(p.legacy_notes)}</div>` : ''}
       </div></div>
     </div>
+    ${p.patient_status === 'inactive' || p.disinterest_level ? '' : '<div id="status-history-mount" style="margin-top:var(--s5)"></div>'}
   `;
   el.querySelector('#gaps-edit-btn')?.addEventListener('click', () => showPatientForm(p, reload));
 
@@ -1238,6 +1248,9 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
   // Not awaited: the record must not sit behind two more round trips, and
   // this card renders nothing at all when there is nothing to say.
   mountBeforeYouCall(el.querySelector('#byc-mount'), p);
+  import('../components/statusHistory.js')
+    .then((m) => m.mountStatusHistory(el.querySelector('#status-history-mount'), p, { onChange: reload }))
+    .catch((e) => console.warn('[status history]', e.message));
   loadFolderMore(p.id);
   mountPhones(el.querySelector('#phones-mount'), p, sb);
 }

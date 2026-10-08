@@ -419,6 +419,13 @@ function chartsScaffold() {
       ${chartCard('chart-gender', 'Gender (patient & primary caregiver)', { scope: 'snapshot', badge: '<span class="badge badge-info">who is cared for · who carries it</span>', delay: 290 })}
       ${chartCard('chart-language', 'Languages families speak', { scope: 'snapshot', delay: 300 })}
       ${chartCard('chart-status-mix', 'Patient lifecycle', { scope: 'snapshot', delay: 320 })}
+      <div class="chart-card animate-fade-in" style="animation-delay:325ms">
+        <div class="chart-header"><div class="chart-title">Why families drop out</div>
+          <div class="flex gap-2" style="flex-wrap:wrap;justify-content:flex-end;align-items:center"><span class="badge" title="From each family's status history. Every family, the last 180 days: the filters and the time range above do not change it.">last 6 months · every family</span>${dlBtn('chart-dropouts', 'Why families drop out')}</div>
+        </div>
+        <div class="chart-canvas-wrap"><canvas id="chart-dropouts"></canvas></div>
+        ${storySlot('chart-dropouts')}
+      </div>
       <div class="chart-card animate-fade-in" style="animation-delay:330ms">
         <div class="chart-header">${metricTitle('navigation_outcomes', 'Navigation outcomes')}
           <span class="badge" title="Derived from each patient's CURRENT status: a whole-registry snapshot since the program began, NOT affected by the time-range control.">whole cohort · all-time</span>
@@ -540,6 +547,7 @@ async function loadAllCharts() {
     () => loadDemographics(),
     () => loadGenderSplit(),
     () => loadStatusMix(),
+    () => loadDropouts(),
     () => loadNavigationOutcomes(),
     () => loadCompleteness(),
     // ACTION
@@ -990,6 +998,36 @@ async function loadStatusMix() {
       `<strong>${fmtIN(n('active'))} of ${fmtIN(total)} people (${pct(n('active'), total)}%) are in active care</strong>, with ${fmtIN(n('new_lead'))} new leads waiting for a first conversation. ` +
       `${n('deceased') ? `${fmtIN(n('deceased'))} patients have passed. Their families stay with us for bereavement support, not as closed rows.` : ''}`);
   } catch (err) { console.error('Status mix error:', err); }
+}
+
+// Fixboard #27 (sql/174): why families leave, from the status history. Each
+// family counts once, under its latest drop in the last 180 days, with the
+// latest reason recorded for it since.
+async function loadDropouts() {
+  try {
+    const { data, error } = await rpcOnce('dropout_summary', { p_days: 180 });
+    if (error) throw error;
+    if (!data || !(data.by_reason || []).length) return;
+    const { dropoutLabel } = await import('../components/statusHistory.js');
+    const rows = data.by_reason;
+    mkChart('chart-dropouts', 'bar', {
+      labels: rows.map(r => dropoutLabel(r.reason)),
+      datasets: [{
+        data: rows.map(r => r.n),
+        backgroundColor: rows.map(r => (r.reason === 'not_recorded' ? 'rgba(120,120,130,0.35)' : 'rgba(12,110,116,0.55)')),
+        borderColor: CHART_COLORS.primary, borderWidth: 1, borderRadius: 6, maxBarThickness: 30,
+      }],
+    }, { ...liveAnim(), indexAxis: 'y', plugins: { legend: { display: false } } });
+    const top = rows.find(r => r.reason !== 'not_recorded');
+    const missing = Number(rows.find(r => r.reason === 'not_recorded')?.n || 0);
+    const last3 = (data.by_month || []).slice(-3);
+    const sum = (k) => last3.reduce((a, m) => a + Number(m[k] || 0), 0);
+    setStory('chart-dropouts',
+      `<strong>${fmtIN(data.families_dropped)} families left the programme in the last 6 months</strong>; ${fmtIN(data.inactive_now)} are inactive today. ` +
+      `${top ? `The most common recorded reason is <strong>${sanitize(dropoutLabel(top.reason).toLowerCase())}</strong> (${fmtIN(top.n)}). ` : ''}` +
+      `${missing ? `${fmtIN(missing)} have no reason on record, because the status menu only asks since 8 October. ` : ''}` +
+      `In the last three months ${fmtIN(sum('not_engaging'))} were marked not engaging, ${fmtIN(sum('disinterested'))} completely disinterested, and ${fmtIN(sum('back'))} came back.`);
+  } catch (err) { console.error('Dropouts error:', err); }
 }
 
 // Navigation outcomes: the five report headings, mapped from each patient's
