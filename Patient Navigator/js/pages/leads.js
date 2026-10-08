@@ -76,7 +76,7 @@ async function load(container) {
     rows = data || [];
     // Only the calling roles read these; for anyone else this is simply empty.
     const { data: dg } = await getSupabase().from('hopebot_family_digest')
-      .select('lead_id, counts, recent, summary, summary_at').limit(1000);
+      .select('lead_id, counts, recent, summary, summary_at, report_reading').limit(1000);
     digests = new Map((dg || []).map(d => [d.lead_id, d]));
   } catch (e) {
     if (body) body.innerHTML = `<div class="empty"><h4>Could not load leads</h4><p>${sanitize(e.message)}</p></div>`;

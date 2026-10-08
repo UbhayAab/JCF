@@ -41,7 +41,12 @@ const INTENTS = {
   trials: 'Trials', community: 'Community', passport: 'Passport', roadmap: 'Roadmap',
   roadmap_status: 'Roadmap status', medical_question: 'Medical question', feelings: 'Feelings',
   complaint: 'Complaint', asks_if_human: 'Asked for a person', asks_cost: 'Asked about cost', off_topic: 'Off topic',
+  how_to_send_reports: 'How to send reports', my_reports_back: 'Wants their reports back',
 };
+// What HopeBot read from the family's reports (sql/175), in the order a caller needs it.
+const READ_FIELDS = [['patient', 'Patient'], ['diagnosis', 'Diagnosis'], ['treatment', 'Treatment'], ['genes', 'Genes or markers'],
+  ['other_conditions', 'Other conditions'], ['hospital', 'Hospital'], ['doctor', 'Doctor'], ['goal', 'What they want']];
+const readLabel = (k) => READ_FIELDS.find(([f]) => f === k)?.[1] || String(k || '').replace(/_/g, ' ');
 const CANCERS = {
   breast: 'Breast', muh_gala_ya_jeebh: 'Mouth, throat or tongue', lung_phephde: 'Lung',
   cervix_bachchedani_ka_muh: 'Cervix', ovary: 'Ovary', colon_ya_rectum: 'Colon or rectum',
@@ -119,6 +124,19 @@ function recentHTML(list, max = 3) {
     </div>`).join('')}</div>`;
 }
 
+function readingHTML(rr) {
+  const rows = READ_FIELDS.filter(([k]) => rr?.fields?.[k]);
+  const told = (rr?.told_by_family || []).slice(0, 5);
+  if (!rows.length && !told.length) return '';
+  const files = Number(rr.files_read || 0);
+  const meta = [files ? `${files} file${files === 1 ? '' : 's'} read` : null, rr.read_at ? `read ${formatRelativeTime(rr.read_at)}` : null].filter(Boolean).join(' · ');
+  return `<details style="margin-top:6px"><summary class="due-meta" style="cursor:pointer;color:var(--ink-1)"><strong>What HopeBot read from their reports</strong>${meta ? ` · ${meta}` : ''}</summary>
+    <div class="due-meta wraps" style="margin-top:4px;display:flex;flex-direction:column;gap:2px;color:var(--ink-1)">
+      ${rows.map(([k, label]) => `<div><span style="color:var(--ink-3)">${label}:</span> ${sanitize(rr.fields[k])}</div>`).join('')}</div>
+    ${told.length ? `<div class="due-meta wraps" style="margin-top:4px">The family corrected: ${told.map((t) => `"${sanitize(t.words)}"${t.field ? ` (${sanitize(readLabel(t.field))})` : ''}`).join('; ')}</div>` : ''}
+    <div class="due-meta wraps" style="margin-top:4px">Read by AI from the papers they sent, then checked with the family on WhatsApp. Confirm it on the call before acting on it.</div></details>`;
+}
+
 // Tags, last questions and summary. Used on a lead card and the record card.
 export function digestHTML(d, { max = 3 } = {}) {
   if (!d) return '';
@@ -131,7 +149,8 @@ export function digestHTML(d, { max = 3 } = {}) {
       ${d.counts?.safety ? `<span class="badge badge-danger">Safety ${Number(d.counts.safety)}</span>` : ''}
       ${d.counts?.stop ? `<span class="badge badge-warn">Said STOP</span>` : ''}
     </div>` : ''}
-    ${recentHTML(d.recent, max)}`;
+    ${recentHTML(d.recent, max)}
+    ${readingHTML(d.report_reading)}`;
 }
 
 function requestCardHTML(x) {

@@ -1008,10 +1008,10 @@ async function loadDropouts() {
     const { data, error } = await rpcOnce('dropout_summary', { p_days: 180 });
     if (error) throw error;
     if (!data || !(data.by_reason || []).length) return;
-    const { dropoutLabel } = await import('../components/statusHistory.js');
+    const { dropoutLabel, dropoutShort } = await import('../components/statusHistory.js');
     const rows = data.by_reason;
     mkChart('chart-dropouts', 'bar', {
-      labels: rows.map(r => dropoutLabel(r.reason)),
+      labels: rows.map(r => dropoutShort(r.reason)),
       datasets: [{
         data: rows.map(r => r.n),
         backgroundColor: rows.map(r => (r.reason === 'not_recorded' ? 'rgba(120,120,130,0.35)' : 'rgba(12,110,116,0.55)')),
@@ -1020,7 +1020,10 @@ async function loadDropouts() {
     }, { ...liveAnim(), indexAxis: 'y', plugins: { legend: { display: false } } });
     const top = rows.find(r => r.reason !== 'not_recorded');
     const missing = Number(rows.find(r => r.reason === 'not_recorded')?.n || 0);
-    const last3 = (data.by_month || []).slice(-3);
+    // The last three calendar months, not the last three months that had events.
+    const now = new Date();
+    const keys = [0, 1, 2].map((k) => { const d = new Date(now.getFullYear(), now.getMonth() - k, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
+    const last3 = (data.by_month || []).filter((m) => keys.includes(m.month));
     const sum = (k) => last3.reduce((a, m) => a + Number(m[k] || 0), 0);
     setStory('chart-dropouts',
       `<strong>${fmtIN(data.families_dropped)} families left the programme in the last 6 months</strong>; ${fmtIN(data.inactive_now)} are inactive today. ` +

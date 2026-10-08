@@ -18,19 +18,23 @@ import { sanitize } from '../utils/validators.js';
 import { PATIENT_STATUSES } from '../utils/catalog.js';
 
 export const DROPOUT_REASONS = [
-  { key: 'treated_elsewhere', label: 'Getting care or support elsewhere' },
-  { key: 'treatment_finished', label: 'Treatment finished, no support needed now' },
-  { key: 'stopped_treatment', label: 'Stopped treatment' },
-  { key: 'too_unwell', label: 'Too unwell to take part' },
-  { key: 'moved_away', label: 'Moved away or changed hospital' },
-  { key: 'family_declined', label: 'Family does not want support any more' },
-  { key: 'unreachable', label: 'Could not be reached for a long time' },
-  { key: 'cost_or_travel', label: 'Cost or travel made it too hard' },
-  { key: 'other', label: 'Other (write it below)' },
+  { key: 'treated_elsewhere', label: 'Getting care or support elsewhere', short: 'Support elsewhere' },
+  { key: 'treatment_finished', label: 'Treatment finished, no support needed now', short: 'Treatment finished' },
+  { key: 'stopped_treatment', label: 'Stopped treatment', short: 'Stopped treatment' },
+  { key: 'too_unwell', label: 'Too unwell to take part', short: 'Too unwell' },
+  { key: 'moved_away', label: 'Moved away or changed hospital', short: 'Moved or changed hospital' },
+  { key: 'family_declined', label: 'Family does not want support any more', short: 'Family declined' },
+  { key: 'unreachable', label: 'Could not be reached for a long time', short: 'Unreachable' },
+  { key: 'cost_or_travel', label: 'Cost or travel made it too hard', short: 'Cost or travel' },
+  { key: 'other', label: 'Other (write it below)', short: 'Other' },
 ];
 export const dropoutLabel = (k) => (k === 'not_recorded' ? 'Reason not recorded'
   : k === 'completely_disinterested' ? 'Completely disinterested (Not taking part)'
     : DROPOUT_REASONS.find((r) => r.key === k)?.label || String(k || '').replace(/_/g, ' '));
+// Chart labels fit a phone.
+export const dropoutShort = (k) => (k === 'not_recorded' ? 'No reason recorded'
+  : k === 'completely_disinterested' ? 'Completely disinterested'
+    : DROPOUT_REASONS.find((r) => r.key === k)?.short || dropoutLabel(k));
 const statusLabel = (k) => PATIENT_STATUSES.find((s) => s.key === k)?.label || String(k || '').replace(/_/g, ' ');
 const dayIN = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
