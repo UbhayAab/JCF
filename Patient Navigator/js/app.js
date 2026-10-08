@@ -503,7 +503,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261008u';  // bumped on every breaking deploy
+const APP_BUILD = '20261008v';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -567,8 +567,9 @@ async function init() {
   registerRoute('leaderboard', (c) => renderLeaderboard(c), { requiresAuth: true, roles: ['admin', 'manager'] });
   // Concerns: managers triage; calling roles can follow the flags they raised.
   registerRoute('concerns', (c) => renderConcerns(c), { requiresAuth: true, roles: CARE_ROLES });
-  // WhatsApp leads: HopeBot profiles. Care roles call them, managers triage.
-  registerRoute('leads', (c) => renderLeads(c), { requiresAuth: true, roles: CARE_ROLES });
+  // WhatsApp leads: HopeBot families. The calling roles call them, managers
+  // triage. Not content staff: sql/173 keeps HopeBot families from them.
+  registerRoute('leads', (c) => renderLeads(c), { requiresAuth: true, roles: CARE_ROLES.filter((r) => r !== 'content') });
   // Fixboard #24. Loaded on demand: only managers and admins ever open it.
   registerRoute('broadcasts', (c) => import('./pages/broadcasts.js').then((m) => m.renderBroadcasts(c)),
     { requiresAuth: true, roles: ['admin', 'manager'] });

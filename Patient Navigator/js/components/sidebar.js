@@ -42,7 +42,7 @@ const NAV_ITEMS = [
       // "there does not appear to be a clear option for interns to flag such
       // cases". Zero reassignment requests have ever been made.
       { id: 'concerns',  label: 'Flags & concerns', icon: 'alertTriangle', route: 'concerns', roles: CARE_ROLES },
-      { id: 'leads',     label: 'WhatsApp leads', icon: 'inbox', route: 'leads', roles: CARE_ROLES },
+      { id: 'leads',     label: 'WhatsApp leads', icon: 'inbox', route: 'leads', roles: CARE_ROLES.filter((r) => r !== 'content') },
       // Fixboard #24: write one message, pick who and when; HopeBot sends it (sql/168).
       { id: 'broadcasts', label: 'WhatsApp messages', icon: 'message', route: 'broadcasts', roles: ['admin', 'manager'] },
       { id: 'docreads',  label: 'Document reads', icon: 'fileText', route: 'docreads', roles: ['admin', 'manager'] },

@@ -33,6 +33,8 @@ const REASONS = {
   grief: 'Bereaved: someone in the family has died',
   safety_self_harm: 'Safety: may harm themselves',
   safety_emergency: 'Medical emergency',
+  deletion_request: 'Delete request: a person handles it',
+  other: 'Asked for help (read their words)',
 };
 const INTENTS = {
   doctor_search: 'Doctor', money_help: 'Money help', stay_travel: 'Stay or travel', diet: 'Diet',
@@ -56,6 +58,12 @@ const CLOSED = { reached: 'Reached', wrong_number: 'Wrong number', not_needed: '
 
 const pretty = (s) => String(s || '').replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 export const reasonLabel = (r) => REASONS[r] || pretty(r) || 'Asked for a call';
+// HopeBot keeps an open request's first reason when a crisis arrives and only
+// marks it safety (sql/173), so say both.
+const requestTitle = (x) => (x.safety && !String(x.reason || '').startsWith('safety_')
+  ? `Safety: HopeBot flagged a crisis. First asked: ${reasonLabel(x.reason)}`
+  : reasonLabel(x.reason));
+const isDelete = (x) => x.reason === 'deletion_request' && !x.safety;
 const intentLabel = (k) => INTENTS[k] || pretty(k);
 export const cancerLabel = (c) => (c ? CANCERS[c] || pretty(c) : null);
 export const stageLabel = (s) => (!s ? null : s === 'pata_nahi' || s === 'unknown' ? 'Stage not known' : /^stage_\d$/.test(s) ? `Stage ${s.slice(6)}` : pretty(s));
@@ -80,6 +88,7 @@ function myTeams() {
 function dueBadge(x) {
   if (x.closed) return `<span class="badge badge-neutral">${sanitize(CLOSED[x.outcome] || 'Closed')}</span>`;
   if (x.safety) return `<span class="badge badge-danger"><span class="dot"></span>Call now</span>`;
+  if (isDelete(x)) return `<span class="badge badge-warn"><span class="dot"></span>Delete request</span>`;
   const late = Date.now() - Date.parse(x.due_at);
   if (late > 0) {
     const h = Math.floor(late / 3600e3); const m = Math.round((late % 3600e3) / 60e3);
@@ -131,7 +140,7 @@ function requestCardHTML(x) {
   const mine = x.held_by_me;
   const tried = x.attempts > 0 ? `Tried ${x.attempts} time${x.attempts === 1 ? '' : 's'}, last ${formatRelativeTime(x.last_attempt_at)}` : null;
   return `
-    <div class="card hb-req" data-hb="${sanitize(x.id)}" style="padding:12px 14px;${x.closed ? 'opacity:.65;' : ''}${x.safety && !x.closed ? 'border-color:var(--danger);' : ''}">
+    <div class="card hb-req" data-hb="${sanitize(x.id)}" style="padding:12px 14px;${x.closed ? 'opacity:.65;' : ''}${x.safety && !x.closed ? 'border-color:var(--danger);' : ''}${isDelete(x) && !x.closed ? 'border-color:var(--clay);' : ''}">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         ${dueBadge(x)}
         <span style="font-weight:700">${sanitize(name)}</span>
@@ -139,10 +148,11 @@ function requestCardHTML(x) {
         <span style="flex:1"></span>
         <span class="due-meta">asked ${formatRelativeTime(x.asked_at)}</span>
       </div>
-      <div style="margin-top:4px;font-weight:600">${sanitize(reasonLabel(x.reason))}</div>
+      <div style="margin-top:4px;font-weight:600">${sanitize(requestTitle(x))}</div>
       <div class="due-meta wraps" style="margin-top:2px">${familyLine(f)}</div>
       ${x.channel === 'chat' ? '<div class="due-meta wraps" style="margin-top:4px">Asked for a reply in the WhatsApp chat. A call is fine too.</div>' : ''}
       ${x.safety && !x.closed ? `<div class="due-meta wraps" style="margin-top:6px;color:var(--danger)">Call now. If they may be in danger, stay on the line and give Tele-MANAS 14416 (free, 24 hours, Hindi too) or 112.</div>` : ''}
+      ${isDelete(x) && !x.closed ? `<div class="due-meta wraps" style="margin-top:6px;color:var(--clay)">They asked HopeBot to delete their data. Nothing has been deleted: call to confirm what they want removed, then ask an admin to erase it, and log the call here.</div>` : ''}
       ${x.hopebot_status === 'claimed' && x.state === 'open' ? '<div class="due-meta" style="margin-top:4px">Someone in the HopeBot console has picked this up.</div>' : ''}
       ${tried ? `<div class="due-meta" style="margin-top:4px">${tried}</div>` : ''}
       ${digestHTML(x.digest)}
