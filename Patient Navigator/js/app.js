@@ -503,7 +503,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261008s';  // bumped on every breaking deploy
+const APP_BUILD = '20261008t';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -569,6 +569,9 @@ async function init() {
   registerRoute('concerns', (c) => renderConcerns(c), { requiresAuth: true, roles: CARE_ROLES });
   // WhatsApp leads: HopeBot profiles. Care roles call them, managers triage.
   registerRoute('leads', (c) => renderLeads(c), { requiresAuth: true, roles: CARE_ROLES });
+  // Fixboard #24. Loaded on demand: only managers and admins ever open it.
+  registerRoute('broadcasts', (c) => import('./pages/broadcasts.js').then((m) => m.renderBroadcasts(c)),
+    { requiresAuth: true, roles: ['admin', 'manager'] });
   // Document reads: what our own call notes say a family holds, staged by
   // tools/read_documents_from_calls.cjs and promoted only by a human here.
   // Managers only: agreeing writes to the patient record.

@@ -354,7 +354,8 @@ async function mountReady() {
           : `<div style="display:flex;align-items:center;gap:7px;font:var(--t-xs);color:var(--ok)"><span style="width:15px;height:15px;display:inline-flex;flex:none">${icon('checkCircle')}</span>You're all caught up.</div>`}
     </div>`;
 
-  const el = root();
+  // The person may have opened another page while the summary loaded.
+  const el = root(); if (!el) return;
   el.innerHTML = `
     <div class="ready">
       <div style="width:100%;max-width:450px;display:flex;flex-direction:column;gap:var(--s5)">

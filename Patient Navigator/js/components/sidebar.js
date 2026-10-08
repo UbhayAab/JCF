@@ -43,6 +43,8 @@ const NAV_ITEMS = [
       // cases". Zero reassignment requests have ever been made.
       { id: 'concerns',  label: 'Flags & concerns', icon: 'alertTriangle', route: 'concerns', roles: CARE_ROLES },
       { id: 'leads',     label: 'WhatsApp leads', icon: 'inbox', route: 'leads', roles: CARE_ROLES },
+      // Fixboard #24: write one message, pick who and when; HopeBot sends it (sql/168).
+      { id: 'broadcasts', label: 'WhatsApp messages', icon: 'message', route: 'broadcasts', roles: ['admin', 'manager'] },
       { id: 'docreads',  label: 'Document reads', icon: 'fileText', route: 'docreads', roles: ['admin', 'manager'] },
       { id: 'resources', label: 'Resources',      icon: 'mapPin',    route: 'resources', roles: ALL_ROLES },
       { id: 'upload',    label: 'Upload leads & docs', icon: 'upload', route: 'upload',  roles: UPLOAD_ROLES },
