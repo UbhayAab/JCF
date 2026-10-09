@@ -8,6 +8,7 @@ import { registerRoute, initRouter, navigate, setAuthGuard, setRoleGuard } from 
 import { renderSidebar, bindSidebarSync } from './components/sidebar.js';
 import { showToast } from './components/toast.js';
 import { maybeAskForPhone } from './components/phonePrompt.js';
+import { maybeShowFeatureUpdate, renderFeatureUpdates } from './components/featureUpdates.js';
 import { renderDashboard } from './pages/dashboard.js';
 import { renderPatients } from './pages/patients.js';
 import { renderCalls } from './pages/calls.js';
@@ -503,7 +504,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261010a';  // bumped on every breaking deploy
+const APP_BUILD = '20261010b';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -532,6 +533,7 @@ function bootApp() {
     // Once per member until they confirm their WhatsApp number (Fixboard #10,
     // sql/157). After the first page has painted, so it never races it.
     setTimeout(maybeAskForPhone, 900);
+    setTimeout(maybeShowFeatureUpdate, 1800);
   } catch (e) {
     console.error('[boot] FAILED to render shell:', e);
     appBooted = false;
@@ -559,6 +561,11 @@ async function init() {
   registerRoute('analytics', (c) => renderAnalytics(c), { requiresAuth: true, roles: ['admin', 'manager', 'content'] });
   registerRoute('calling', (c) => renderCalling(c), { requiresAuth: true, roles: CARE_ROLES });
   registerRoute('team', (c) => renderTeam(c), { requiresAuth: true, roles: ['admin', 'manager'] });
+  registerRoute('circles', (c) => import('./components/circleMessages.js').then(m=>{
+    c.innerHTML='<div class="page-header"><div><h1>Saturday circles</h1><p>Custom invitations, meeting links and scheduled delivery.</p></div><a class="btn btn-secondary" href="#team">Team and session history</a></div><div id="circles-workspace"></div>';
+    return m.renderCircleMessages(c.querySelector('#circles-workspace'));
+  }), { requiresAuth:true, roles:['admin','manager'] });
+  registerRoute('updates', renderFeatureUpdates, { requiresAuth:true, roles:['admin','manager'] });
   registerRoute('profile', (c) => renderProfile(c), { requiresAuth: true });
   registerRoute('learn', (c) => renderLearn(c), { requiresAuth: true, roles: CARE_ROLES });
   registerRoute('upload', (c) => renderUpload(c), { requiresAuth: true, roles: UPLOAD_ROLES });

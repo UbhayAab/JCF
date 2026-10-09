@@ -16,6 +16,7 @@ import { icon } from '../components/icons.js';
 import { navigate } from '../router.js';
 import { DIAL_STATUSES, CONDITIONS, statusBadge } from '../utils/catalog.js';
 import { withMvp, mvpBand, median } from '../utils/performance.js';
+import { renderCircleMessages } from '../components/circleMessages.js';
 
 // The one palette (js/utils/avatar.js); same hash, so nobody changes colour.
 const avColor = (n) => avatarColor(n);
@@ -323,6 +324,8 @@ async function loadSessions() {
         </div>
         <button class="btn btn-primary btn-sm" id="log-session-btn">${icon('plus')}Log a session</button>
       </div>
+      <div id="circle-messages"></div>
+      <h2>Session history</h2>
       ${!sessions || sessions.length === 0
         ? `<div class="empty"><div class="ico-wrap">${icon('users')}</div><h4>No circles logged yet</h4><p>After Saturday's WhatsApp session, log the topic and turnout here. It feeds the impact analytics.</p></div>`
         : `<div class="table-container"><table class="data"><thead><tr><th>Date</th><th>Type</th><th>Topic</th><th>Reached</th><th>Led by</th><th>Notes</th></tr></thead><tbody>
@@ -337,6 +340,7 @@ async function loadSessions() {
           </tbody></table></div>`}`;
     document.getElementById('log-session-btn')?.addEventListener('click', () =>
       openSessionForm({ defaults: { type: next.type, date: next.last ? undefined : next.date }, onSaved: loadSessions }));
+    await renderCircleMessages(content.querySelector('#circle-messages'));
   } catch (err) { showToast('Failed to load sessions: ' + err.message, 'error'); }
 }
 
