@@ -343,7 +343,13 @@
 .intake-num.warn.zero .n { color: var(--ink); }
 
 /* ============================================================ CALLING PORTAL */
-.ready { min-height: 64vh; display: grid; place-items: center; padding: var(--s6) 0; }
+.ready { min-height: 64vh; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; padding: var(--s6) 0; }
+/* A request's words must wrap inside the phone, never size the grid track. */
+.ready-column { width: 100%; max-width: 450px; min-width: 0; display: flex; flex-direction: column; gap: var(--s5); overflow-wrap: anywhere; }
+.ready-column > * { min-width: 0; max-width: 100%; }
+.ready-column .badge { max-width: 100%; white-space: normal; }
+.ready .catchup > div:first-child { flex-wrap: wrap; gap: 4px 8px; }
+.ready .avail-row { flex-wrap: wrap; }
 .ready-card { position: relative; width: 100%; max-width: 450px; background: var(--surface); border: 1px solid var(--card-line); border-radius: var(--r-2xl); box-shadow: var(--hi), var(--sh-3); padding: var(--s9) var(--s8); text-align: center; display: flex; flex-direction: column; gap: 14px; overflow: hidden; animation: springUp var(--slower) var(--ease-out) both; }
 .ready-card::before { content:""; position:absolute; top:0; left:0; right:0; height: 3px; background: var(--grad-hairline); }
 .ready-ico {

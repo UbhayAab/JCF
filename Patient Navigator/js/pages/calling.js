@@ -361,7 +361,7 @@ async function mountReady() {
   const el = root(); if (!el) return;
   el.innerHTML = `
     <div class="ready">
-      <div style="width:100%;max-width:450px;display:flex;flex-direction:column;gap:var(--s5)">
+      <div class="ready-column">
       <div class="ready-card">
         <div class="ready-ico">${icon('phoneCall')}</div>
         <h2>Ready when you are, ${sanitize(me.full_name?.split(' ')[0]) || 'there'}.</h2>
