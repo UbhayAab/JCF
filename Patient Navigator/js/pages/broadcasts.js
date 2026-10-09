@@ -52,7 +52,17 @@ async function readAll(make) {
 
 const fmtWhen = (iso) => new Date(iso).toLocaleString('en-IN', {
   timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
-const humanTpl = (name) => String(name || '').replace(/_/g, ' ');
+const TEMPLATE_FIELDS = {
+  wellness_session_invite: ['First name', 'Session date', 'Session time'],
+  wellness_session_reminder: ['First name', 'Session time', 'Joining link'],
+  care_session_invite_v1: ['First name', 'Session title', 'Session date', 'Session time', 'Joining link'],
+};
+const TEMPLATE_LABELS = {
+  wellness_session_invite: 'Wellness reminder: date and time',
+  wellness_session_reminder: 'Wellness starts in 5 minutes',
+  care_session_invite_v1: 'Session invitation with a link',
+};
+const humanTpl = (name) => TEMPLATE_LABELS[name] || String(name || '').replace(/_/g, ' ');
 const pad = (n) => String(n).padStart(2, '0');
 const localInput = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 
@@ -164,7 +174,8 @@ async function openComposer(container, existing = null) {
     <div class="form-group"><label class="form-label" for="wb-title">Name, for the team</label>
       <input class="form-input" id="wb-title" maxlength="120" placeholder="Saturday circle, 11 October" value="${sanitize(existing?.title)}"></div>
     <div class="form-group"><label class="form-label" for="wb-tpl">Message (formats approved on WhatsApp)</label>
-      <select class="form-select" id="wb-tpl">${tpls.map(t => `<option value="${sanitize(t.name)}"${t.name === state.tpl ? ' selected' : ''}>${sanitize(humanTpl(t.name))}</option>`).join('')}</select></div>
+      <select class="form-select" id="wb-tpl">${tpls.map(t => `<option value="${sanitize(t.name)}"${t.name === state.tpl ? ' selected' : ''}>${sanitize(humanTpl(t.name))}</option>`).join('')}</select>
+      <p id="wb-template-help" style="margin:8px 0 0;color:var(--ink-2);font-size:13px"></p></div>
     <div id="wb-blanks"></div>
     <div class="form-group"><label class="form-label" for="wb-aud">Who gets it</label>
       <select class="form-select" id="wb-aud">${AUDIENCES.map(a => `<option value="${a.k}"${a.k === state.kind ? ' selected' : ''}>${a.label}</option>`).join('')}</select></div>
@@ -172,7 +183,7 @@ async function openComposer(container, existing = null) {
     <div class="form-group"><label class="form-label" for="wb-when">When (India time)</label>
       <input class="form-input" id="wb-when" type="datetime-local" value="${defaultWhen(existing)}"></div>
     <div class="form-label" style="margin-bottom:6px">What they will see</div>
-    <div class="card" id="wb-preview" style="padding:12px 14px;background:var(--surface-2);white-space:pre-wrap;color:var(--ink)"></div>
+    <div class="card" id="wb-preview" style="padding:12px 14px;background:var(--surface-2);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)"></div>
     <div style="display:flex;justify-content:flex-end;gap:var(--s2);margin-top:var(--s4);flex-wrap:wrap">
       <button class="btn btn-secondary" id="wb-close" type="button">Close</button>
       <button class="btn btn-secondary" id="wb-draft" type="button">Save as draft</button>
@@ -195,14 +206,20 @@ async function openComposer(container, existing = null) {
   const paintBlanks = () => {
     const t = tplNow();
     const n = t?.variables_count || 0;
+    const fields = TEMPLATE_FIELDS[t?.name] || [];
+    el.querySelector('#wb-template-help').textContent = t?.name === 'wellness_session_invite'
+      ? 'This approved format says "reminder" and includes a date and time, with no joining link. For a new invitation with a link, choose the session invitation format when it is approved.'
+      : t?.name === 'wellness_session_reminder'
+        ? 'Use this only 5 minutes before the wellness session starts. Put the joining link in the Joining link field.'
+        : 'Customize the fields below, including a link when the format has a Joining link field. The surrounding wording is approved by WhatsApp; different wording needs a new approved format.';
     state.vars = Array.from({ length: n }, (_, i) => state.vars[i] ?? (i === 0 && /^\W*\w+\s+\{\{1\}\}/.test(t?.body || '') ? NAME_TOKEN : ''));
     el.querySelector('#wb-blanks').innerHTML = n ? `
       <div class="form-label" style="margin-bottom:6px">Fill in the blanks</div>
       ${state.vars.map((v, i) => `
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-          <span style="min-width:62px;color:var(--ink-3)">Blank ${i + 1}</span>
-          <input class="form-input" data-var="${i}" maxlength="500" value="${sanitize(v)}" style="flex:1">
-          <button class="btn btn-ghost btn-sm" type="button" data-name-var="${i}" title="Each person sees their own first name here">Their name</button>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+          <label for="wb-var-${i}" style="flex:0 0 90px;color:var(--ink-3)">${sanitize(fields[i] || `Blank ${i + 1}`)}</label>
+          <input class="form-input" id="wb-var-${i}" data-var="${i}" maxlength="500" ${fields[i] === 'Joining link' ? 'type="url" placeholder="https://..."' : 'type="text"'} value="${sanitize(v)}" style="flex:1 1 140px;min-width:0">
+          ${!fields.length || i === 0 ? `<button class="btn btn-ghost btn-sm" type="button" data-name-var="${i}" title="Each person sees their own first name here">Their name</button>` : ''}
         </div>`).join('')}` : '';
     el.querySelectorAll('[data-var]').forEach(inp => inp.addEventListener('input', () => {
       state.vars[Number(inp.dataset.var)] = inp.value;
@@ -288,6 +305,8 @@ async function openComposer(container, existing = null) {
     const when = whenStr ? new Date(whenStr) : null;
     if (!title) { showToast('Give the message a short name first.', 'error'); return; }
     if (state.vars.some(v => !String(v || '').trim())) { showToast('Fill in every blank.', 'error'); return; }
+    const invalidLink = [...el.querySelectorAll('[data-var][type="url"]')].find(inp => !/^https?:\/\//i.test(inp.value.trim()) || !inp.checkValidity());
+    if (invalidLink) { showToast('Use a complete joining link starting with https:// or http://.', 'error'); invalidLink.focus(); return; }
     if (!when || Number.isNaN(when.getTime())) { showToast('Pick a date and time.', 'error'); return; }
     if (schedule && state.kind !== HOPEBOT_LIST && !state.picked.size) { showToast('Tick at least one person.', 'error'); return; }
     const buttons = el.querySelectorAll('#wb-draft, #wb-schedule');
