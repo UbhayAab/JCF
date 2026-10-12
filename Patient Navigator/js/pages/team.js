@@ -112,7 +112,7 @@ async function loadPhoneNumbers() {
       <tbody>
         ${missing.map((r) => `
           <tr>${member(r)}
-            <td><span class="badge ${r.must_save ? 'badge-danger' : 'badge-warn'}">${r.must_save ? 'Must save next time' : 'Not yet'}</span>
+            <td style="white-space:normal;min-width:170px"><span class="badge ${r.must_save ? 'badge-danger' : 'badge-warn'}">${r.must_save ? 'Must save next time' : 'Not yet'}</span>
               <div class="hist-meta">${sanitize(askLine(r))}</div>
               ${r.must_save || r.refused_at ? `<button class="btn btn-ghost btn-sm phone-reset-btn" data-id="${sanitize(r.profile_id)}"
                 style="margin-top:4px">Give 3 more Laters</button>` : ''}</td>
@@ -125,7 +125,7 @@ async function loadPhoneNumbers() {
       <tbody>
         ${confirmed.map((r) => `
           <tr>${member(r)}
-            <td><span class="badge badge-ok">Confirmed</span>
+            <td style="white-space:normal;min-width:150px"><span class="badge badge-ok">Confirmed</span>
               <div class="hist-meta">ends in ${sanitize(r.phone_last4 || '')}, ${formatDate(r.confirmed_at)}</div></td>
           </tr>`).join('')}
       </tbody>
