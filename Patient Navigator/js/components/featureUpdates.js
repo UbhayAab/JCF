@@ -16,7 +16,9 @@ export async function maybeShowFeatureUpdate() {
   // Phone confirmation and active work take priority. Never replace another sheet.
   const openWhenFree = () => {
     if (getCurrentUser()?.id !== uid || isImpersonating()) return;
-    if (document.querySelector('.modal-overlay')) { setTimeout(openWhenFree, 1200); return; }
+    // body[data-phone-prompt]: the phone sheet is on its way (phonePrompt.js). A
+    // page signal, not an import, so old and new cached modules still link.
+    if (document.querySelector('.modal-overlay') || document.body.dataset.phonePrompt) { setTimeout(openWhenFree, 1200); return; }
     showUpdate(data[0]);
   };
   openWhenFree();

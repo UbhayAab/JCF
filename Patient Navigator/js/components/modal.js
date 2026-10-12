@@ -7,7 +7,9 @@
 let activeModal = null;
 let escHandler = null;
 
-export function showModal({ title, content, size = '', footer = '', onClose = null }) {
+// dismissible: false leaves no ✕ and ignores Esc, for the one sheet that must
+// be answered (the WhatsApp number after it was put off 3 times, Fixboard #10).
+export function showModal({ title, content, size = '', footer = '', onClose = null, dismissible = true }) {
   closeModal(); // close any existing modal first
 
   const overlay = document.createElement('div');
@@ -16,9 +18,9 @@ export function showModal({ title, content, size = '', footer = '', onClose = nu
     <div class="modal ${size ? 'modal-' + size : ''}" role="dialog" aria-modal="true" aria-label="${String(title).replace(/"/g, '&quot;')}">
       <div class="modal-header">
         <h3>${title}</h3>
-        <button class="btn btn-ghost btn-icon btn-sm modal-close-btn" aria-label="Close">
+        ${dismissible ? `<button class="btn btn-ghost btn-icon btn-sm modal-close-btn" aria-label="Close">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
+        </button>` : ''}
       </div>
       <div class="modal-body">${typeof content === 'string' ? content : ''}</div>
       ${footer ? `<div class="modal-footer">${footer}</div>` : ''}
@@ -39,6 +41,7 @@ export function showModal({ title, content, size = '', footer = '', onClose = nu
 
   requestAnimationFrame(() => overlay.classList.add('active'));
 
+  if (!dismissible) return overlay;
   overlay.querySelector('.modal-close-btn').addEventListener('click', () => closeModal(onClose));
   // Intentionally NO backdrop-click-to-close: accidental outside clicks were
   // wiping half-filled forms (reported). Close via the ✕, a Cancel button, or Esc.

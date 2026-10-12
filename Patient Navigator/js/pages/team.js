@@ -80,31 +80,63 @@ async function loadPhoneNumbers() {
   const content = document.getElementById('team-content');
   content.innerHTML = Array(4).fill('<div class="sk skeleton-row"></div>').join('');
   const { data, error } = await getSupabase().rpc('team_phone_status');
+  if (!content.isConnected || document.getElementById('team-content') !== content) return;   // left the tab meanwhile
   if (error) {
     content.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertTriangle')}</div>
       <h4>Could not load the phone numbers</h4><p>${sanitize(error.message)}</p></div>`;
     return;
   }
   const rows = data || [];
-  const done = rows.filter((r) => r.confirmed).length;
+  const missing = rows.filter((r) => !r.confirmed);
+  const confirmed = rows.filter((r) => r.confirmed);
+  // Before sql/187 the list has no asked / put-off columns: just "Not yet".
+  const tracked = rows.length > 0 && 'asked_count' in rows[0];
+  const askLine = (r) => {
+    if (!tracked) return '';
+    if (r.refused_at) return `Their number was not accepted ${formatRelativeTime(r.refused_at)} (often: it is already on another account). Sort it out with them.`;
+    if (r.must_save) return `Put it off ${r.put_off_count} times. Next time they open the Navigator it waits for the number.`;
+    if (!r.asked_count) return 'Not asked yet: they have not opened the Navigator since 13 Oct, when this count began.';
+    return `Asked ${r.asked_count} time${r.asked_count === 1 ? '' : 's'}, last ${formatRelativeTime(r.last_asked_at)}`
+      + (r.put_off_count ? `. Put off ${r.put_off_count} of 3 times.` : '.');
+  };
+  const member = (r) => `<td><strong>${sanitize(r.full_name || '')}</strong>
+    <div style="margin-top:4px">${getRoleBadge(r.role)}</div></td>`;
   content.innerHTML = `
-    <div class="hist-meta" style="margin-bottom:var(--s2)">${done} of ${rows.length} active member${rows.length === 1 ? '' : 's'}
-      ${rows.length === 1 ? 'has' : 'have'} confirmed the number they use on WhatsApp. Everyone else is asked the next time they open
-      the Navigator. HopeBot only knows confirmed numbers, and anyone whose account is switched off drops off the list at once.</div>
-    <div class="table-container"><table class="data-table">
+    <div class="hist-meta" style="margin-bottom:var(--s2)">${confirmed.length} of ${rows.length} active member${rows.length === 1 ? '' : 's'}
+      ${rows.length === 1 ? 'has' : 'have'} confirmed the number they use on WhatsApp. Everyone else is asked each time they open
+      the Navigator, and can put it off 3 times at most. HopeBot only knows confirmed numbers, and anyone whose account is
+      switched off drops off the list at once.</div>
+    <h4 style="margin:var(--s3) 0 var(--s2)">Not confirmed yet (${missing.length})</h4>
+    ${missing.length ? `<div class="table-container"><table class="data-table" id="phones-missing">
+      <thead><tr><th>Member</th><th>Asked</th></tr></thead>
+      <tbody>
+        ${missing.map((r) => `
+          <tr>${member(r)}
+            <td><span class="badge ${r.must_save ? 'badge-danger' : 'badge-warn'}">${r.must_save ? 'Must save next time' : 'Not yet'}</span>
+              <div class="hist-meta">${sanitize(askLine(r))}</div>
+              ${r.must_save || r.refused_at ? `<button class="btn btn-ghost btn-sm phone-reset-btn" data-id="${sanitize(r.profile_id)}"
+                style="margin-top:4px">Give 3 more Laters</button>` : ''}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table></div>` : '<div class="hist-meta">Nobody: every active member has confirmed.</div>'}
+    <h4 style="margin:var(--s4) 0 var(--s2)">Confirmed (${confirmed.length})</h4>
+    <div class="table-container"><table class="data-table" id="phones-confirmed">
       <thead><tr><th>Member</th><th>WhatsApp number</th></tr></thead>
       <tbody>
-        ${rows.map((r) => `
-          <tr>
-            <td><strong>${sanitize(r.full_name || '')}</strong>
-              <div style="margin-top:4px">${getRoleBadge(r.role)}</div></td>
-            <td>${r.confirmed
-              ? `<span class="badge badge-ok">Confirmed</span>
-                 <div class="hist-meta">ends in ${sanitize(r.phone_last4 || '')}, ${formatDate(r.confirmed_at)}</div>`
-              : '<span class="badge badge-warn">Not yet</span>'}</td>
+        ${confirmed.map((r) => `
+          <tr>${member(r)}
+            <td><span class="badge badge-ok">Confirmed</span>
+              <div class="hist-meta">ends in ${sanitize(r.phone_last4 || '')}, ${formatDate(r.confirmed_at)}</div></td>
           </tr>`).join('')}
       </tbody>
     </table></div>`;
+  content.querySelectorAll('.phone-reset-btn').forEach((btn) => btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    const { error: e } = await getSupabase().rpc('reset_phone_prompt', { p_user: btn.dataset.id });
+    if (e) { showToast(e.message, 'error'); btn.disabled = false; return; }
+    showToast('Done. They can put it off 3 more times.', 'success');
+    if (content.isConnected) loadPhoneNumbers();
+  }));
 }
 
 const TEAM_TAB_KEY = 'pn_team_tab';
