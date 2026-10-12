@@ -18,7 +18,9 @@ export async function maybeShowFeatureUpdate() {
     if (getCurrentUser()?.id !== uid || isImpersonating()) return;
     // body[data-phone-prompt]: the phone sheet is on its way (phonePrompt.js). A
     // page signal, not an import, so old and new cached modules still link.
-    if (document.querySelector('.modal-overlay') || document.body.dataset.phonePrompt) { setTimeout(openWhenFree, 1200); return; }
+    // and never over a live call (the Calling Portal's call view).
+    if (document.querySelector('.modal-overlay') || document.body.dataset.phonePrompt
+        || document.querySelector('#portal-content .portal-grid')) { setTimeout(openWhenFree, 1200); return; }
     showUpdate(data[0]);
   };
   openWhenFree();

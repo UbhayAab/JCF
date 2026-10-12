@@ -84,9 +84,24 @@ function wantsPrompt() {
   return !snoozed() && !stuck();
 }
 
-// Another sheet, the camera, or anything else that holds the page.
+// A live call is never interrupted: the Calling Portal's call view is on
+// screen, or a call is kept to come back to (jcf_active_call_<id>, calling.js;
+// it lives about a day, so an older one does not count).
+const CALL_KEEP_MS = 20 * 3600 * 1000;
+function inCall() {
+  if (document.querySelector('#portal-content .portal-grid')) return true;
+  try {
+    for (const id of new Set([getCurrentUser()?.id, getRealProfile()?.id].filter(Boolean))) {
+      const kept = JSON.parse(localStorage.getItem(`jcf_active_call_${id}`) || 'null');
+      if (kept && (!kept.ts || Date.now() - kept.ts < CALL_KEEP_MS)) return true;
+    }
+  } catch { /* storage blocked */ }
+  return false;
+}
+
+// Another sheet, the camera, a live call, or anything else that holds the page.
 function busy() {
-  return !!document.querySelector('.modal-overlay') || document.body.classList.contains('modal-open');
+  return !!document.querySelector('.modal-overlay') || document.body.classList.contains('modal-open') || inCall();
 }
 
 let recheck = null;
@@ -94,8 +109,10 @@ let watching = false;
 let opening = false;
 function schedule(ms) { clearTimeout(recheck); recheck = setTimeout(maybeAskForPhone, ms); }
 
+// Only a sheet that is showing counts: a replaced one lingers 250 ms while it
+// fades out (modal.js), and must not stop the ask.
 function phonePromptPending() {
-  return opening || !!document.getElementById('phone-prompt-form');
+  return opening || !!document.querySelector('.modal-overlay.active #phone-prompt-form');
 }
 // What's new (featureUpdates.js) waits while this is set.
 function setOpening(v) {
@@ -134,7 +151,7 @@ async function putOff() {
   if (data?.skips_left > 0) {
     showToast(`We will ask again in ${LATER_HOURS} hours. You can put it off ${data.skips_left} more time${data.skips_left === 1 ? '' : 's'}.`, 'info', 5000);
   } else {
-    showToast('Next time the Navigator opens, it will need your number before you carry on.', 'warning', 6000);
+    showToast(`We will ask again in ${LATER_HOURS} hours, and then it will need your number before you carry on.`, 'warning', 6000);
   }
 }
 
