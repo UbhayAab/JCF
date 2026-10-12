@@ -43,6 +43,8 @@ const NAV_ITEMS = [
       // cases". Zero reassignment requests have ever been made.
       { id: 'concerns',  label: 'Flags & concerns', icon: 'alertTriangle', route: 'concerns', roles: CARE_ROLES },
       { id: 'leads',     label: 'WhatsApp leads', icon: 'inbox', route: 'leads', roles: CARE_ROLES.filter((r) => r !== 'content') },
+      // Fixboard #32 (sql/183): families ready to share their papers, and who follows up.
+      { id: 'doccollect', label: 'Document collection', icon: 'fileText', route: 'doccollect', roles: [...CARE_ROLES.filter((r) => r !== 'content'), 'ground_poc'] },
       // Fixboard #24: write one message, pick who and when; HopeBot sends it (sql/168).
       { id: 'broadcasts', label: 'WhatsApp messages', icon: 'message', route: 'broadcasts', roles: ['admin', 'manager'] },
       { id: 'circles', label: 'Saturday circles', icon: 'users', route: 'circles', roles: ['admin','manager'] },
@@ -113,6 +115,7 @@ export function renderSidebar() {
             <span>${item.label}</span>
             ${item.id === 'concerns' ? '<span class="nav-badge" id="navcount-concerns" style="display:none"></span>' : ''}
             ${item.id === 'leads' ? '<span class="nav-badge" id="navcount-leads" style="display:none" title="Families waiting for the call HopeBot promised"></span>' : ''}
+            ${item.id === 'doccollect' ? '<span class="nav-badge" id="navcount-doccollect" style="display:none" title="Families whose document collection call is overdue"></span>' : ''}
           </button>
         `).join('')}
       </div>
@@ -184,6 +187,7 @@ export function renderSidebar() {
   renderBottomNav(role, active);
   refreshConcernCount();
   refreshHopebotCount();
+  refreshDocCollectCount();
 
   // On probation: count the calls (at most once a minute), redraw when a step
   // opens, and say once what each new tab is for.
@@ -248,6 +252,28 @@ async function refreshHopebotCount() {
   }
   const el = document.getElementById('navcount-leads');
   if (el) { el.textContent = hopebotCache.n; el.style.display = hopebotCache.n ? '' : 'none'; }
+}
+
+// Document collection (sql/183): families whose next call is overdue. A
+// caller counts the ones they follow up; a manager counts everyone's.
+let docCollectCache = { n: 0, at: 0 };
+async function refreshDocCollectCount() {
+  const role = getUserRole();
+  if (!HOPEBOT_COUNT_ROLES.includes(role)) return;
+  if (Date.now() - docCollectCache.at > 60000) {
+    try {
+      let q = getSupabase().from('document_collections')
+        .select('id', { count: 'exact', head: true })
+        .eq('state', 'open')
+        .lt('next_due_at', new Date().toISOString());
+      const me = getCurrentProfile()?.id;
+      if (!['admin', 'manager'].includes(role) && me) q = q.eq('assigned_to', me);
+      const { count, error } = await q;
+      if (!error) docCollectCache = { n: count || 0, at: Date.now() };
+    } catch { /* leave the pill hidden on failure */ }
+  }
+  const el = document.getElementById('navcount-doccollect');
+  if (el) { el.textContent = docCollectCache.n; el.style.display = docCollectCache.n ? '' : 'none'; }
 }
 
 // Mobile bottom-nav: 5 priority destinations.

@@ -763,6 +763,9 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       </div>
       <!-- sql/172: what this family asked HopeBot on WhatsApp, if they wrote. -->
       <div id="hb-family-card" hidden></div>
+      <!-- Fixboard #32 (sql/183): "Ready to share documents (consent given)",
+           or who is collecting them and when the next call is due. -->
+      ${!deceased ? '<div id="doc-collect-card" hidden></div>' : ''}
       <div class="detail-tabs" role="tablist">
         <button class="dtab ${activeTab === 'overview' ? 'active' : ''}" data-tab="overview">${icon('user')}Overview</button>
         <button class="dtab ${activeTab === 'support' ? 'active' : ''}" data-tab="support">${icon('handHeart')}Support given <span class="cnt">${supportCount}</span></button>
@@ -794,6 +797,16 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
     import('../components/hopebotFamily.js')
       .then((m) => m.mountHopebotCard(container.querySelector('#hb-family-card'), patientId))
       .catch((e) => console.warn('[hopebot] card:', e.message));
+    // The roles the Document collection page is open to (app.js 'doccollect').
+    if (container.querySelector('#doc-collect-card')
+        && ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'ground_poc'].includes(getUserRole())) {
+      import('../components/docCollection.js')
+        .then((m) => m.mountCollectStatus(container.querySelector('#doc-collect-card'), patientId, {
+          patientName: patient.full_name || patient.patient_code || '',
+          preferred: ['ground_poc', 'uploader'].includes(getUserRole()) ? 'in_person' : 'verbal_during_call',
+        }))
+        .catch((e) => console.warn('[documents] collection card:', e.message));
+    }
     // The batch reader. One PDF, twenty photos or a mix, segmented into
     // documents and reviewed as one thing. See js/pages/docBatch.js.
     container.querySelector('#read-docs-btn')?.addEventListener('click', async () => {

@@ -387,6 +387,7 @@ async function mountReady() {
         </div>
       </div>
       <div id="hb-requests" hidden></div>
+      <div id="doc-collect-due" hidden></div>
       <div class="card card-flush" id="today-list">
         <div class="card-head"><h3>Today's list</h3><span class="badge badge-neutral" id="tl-count">…</span></div>
         <div id="tl-body"><div style="padding:var(--s4)">${Array(3).fill('<div class="sk skeleton-row"></div>').join('')}</div></div>
@@ -399,6 +400,9 @@ async function mountReady() {
   document.getElementById('avail-toggle')?.addEventListener('click', toggleAvailability);
   el.querySelectorAll('[data-goto-list]').forEach(t => t.addEventListener('click', scrollToTodayList));
   mountHopebotRequests(document.getElementById('hb-requests'), { mode: 'calling' });
+  import('../components/docCollection.js')
+    .then((m) => m.mountCollectionList(document.getElementById('doc-collect-due'), { scope: 'mine', compact: true }))
+    .catch((e) => console.warn('[documents] due list:', e.message));
   loadTodayList();
 }
 
@@ -841,6 +845,8 @@ function mountActive(p, history) {
           <!-- sql/146: when the last document arrived and by whom, and the pages
                themselves one tap away, without leaving the call. -->
           <div id="doc-strip-mount">${currentContext ? docStripHTML(currentContext.documents, { canInvite: true }) : ''}</div>
+          <!-- Fixboard #32 (sql/183): they agree on this call to share their papers. -->
+          <div id="doc-collect-mount" hidden style="margin-top:8px"></div>
           ${renderPriorityBanner()}
           ${renderStageGuide(p)}
           ${p.followup_strategy_notes ? `
@@ -891,6 +897,13 @@ function mountActive(p, history) {
   // sql/125: what the ground team wants read BEFORE the call, not after it.
   renderNotesPanel(document.getElementById('ground-notes-mount'), p.patient_id,
     { compact: true, canWrite: false, canAck: true, title: 'From the ground team' });
+  // Taken now, not after the import: a fast move to the next family must not
+  // paint this family's button into that family's card.
+  const docCollectMount = document.getElementById('doc-collect-mount');
+  import('../components/docCollection.js')
+    .then((m) => m.mountCollectStatus(docCollectMount, p.patient_id,
+      { patientName: p.full_name || p.patient_code || '', preferred: 'verbal_during_call' }))
+    .catch((e) => console.warn('[documents] collection status:', e.message));
   wireActive(p);
   wireGapsPanel(p);
   wireLeversPanel(p);

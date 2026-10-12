@@ -1,5 +1,5 @@
 // ============================================================
-// HopeBot in Patient Navigator (sql/172).
+// HopeBot in Patient Navigator (sql/172; one caller per request, sql/182).
 //
 // HopeBot tells a family "a Saarthi will call this number within 4 hours,
 // 9 am to 9 pm, and will say the call is from JCF Hope Bot", and pushes the
@@ -7,18 +7,24 @@
 // short staff summary. Three views:
 //   mountHopebotRequests  open requests, on top of the Calling Portal and the
 //                         WhatsApp leads page. Safety first, then by due time.
-//                         "I will call" holds one for 30 minutes and shows the
-//                         number; the outcome closes it and HopeBot reads it.
+//                         Each request is ASSIGNED to one caller (Fixboard #31):
+//                         the database shows a caller only theirs (and safety),
+//                         managers everything, with Assign and the history.
+//                         The caller sees the number and the outcomes at once;
+//                         No answer and Call back later set the next due time,
+//                         Reached closes it and HopeBot reads it.
 //   mountHopebotCard      a PN family's HopeBot card on their record.
 //   digestHTML            tags, last questions and summary for a lead card.
 // Everything a family wrote goes through sanitize() before innerHTML.
 // ============================================================
 import { getSupabase } from '../supabase.js';
-import { getUserRole } from '../auth.js';
+import { getUserRole, isImpersonating } from '../auth.js';
 import { showToast } from './toast.js';
+import { confirmModal } from './modal.js';
 import { icon } from './icons.js';
 import { sanitize } from '../utils/validators.js';
 import { formatRelativeTime } from '../utils/formatters.js';
+import { loadRoster, rosterSelectHTML, reasonText, historyHTML, forgetRoster } from './assignPicker.js';
 
 const REASONS = {
   doctor_search: 'Wants a doctor near them',
@@ -56,6 +62,7 @@ const CANCERS = {
 const OUTCOMES = [
   ['reached', 'Reached', 'btn-primary'],
   ['no_answer', 'No answer', 'btn-secondary'],
+  ['call_back', 'Call back later', 'btn-secondary'],
   ['wrong_number', 'Wrong number', 'btn-secondary'],
   ['not_needed', 'Not needed', 'btn-secondary'],
 ];
@@ -82,24 +89,34 @@ const dayIN = (d) => {
 };
 const fmtPhone = (p) => { const d = String(p || '').replace(/\D/g, ''); return d.length === 12 ? `+91 ${d.slice(2, 7)} ${d.slice(7)}` : d; };
 
-// Which team's requests a person sees first. Everyone sees safety.
-function myTeams() {
-  const r = getUserRole();
-  if (r === 'nutritionist') return ['nutrition', 'all'];
-  if (r === 'caregiver_mentor' || r === 'caller') return ['cgmp', 'all'];
-  return null;   // managers, admins, therapists: every team
-}
+const isManager = () => ['admin', 'manager'].includes(getUserRole());
+const ago = (ms) => { const h = Math.floor(ms / 3600e3); const m = Math.round((ms % 3600e3) / 60e3); return `${h ? `${h} h ` : ''}${m} min`; };
 
+// Overdue is measured against the NEXT time a call is due: after No answer
+// that is 2 working hours later, after Call back later the time the family
+// asked for (sql/182). Before, it only read the first due time, so a family
+// that had been called still read "Overdue" (Fixboard #31).
 function dueBadge(x) {
   if (x.closed) return `<span class="badge badge-neutral">${sanitize(CLOSED[x.outcome] || 'Closed')}</span>`;
   if (x.safety) return `<span class="badge badge-danger"><span class="dot"></span>Call now</span>`;
   if (isDelete(x)) return `<span class="badge badge-warn"><span class="dot"></span>Delete request</span>`;
-  const late = Date.now() - Date.parse(x.due_at);
+  const at = x.effective_due || x.next_due_at || x.due_at;
+  const late = Date.now() - Date.parse(at);
+  const what = x.callback_at ? 'Call back' : x.attempts > 0 ? 'Try again' : null;
   if (late > 0) {
-    const h = Math.floor(late / 3600e3); const m = Math.round((late % 3600e3) / 60e3);
-    return `<span class="badge badge-danger"><span class="dot"></span>Overdue ${h ? `${h} h ` : ''}${m} min</span>`;
+    return `<span class="badge badge-danger"><span class="dot"></span>${what ? `${what}: overdue` : 'Overdue'} ${ago(late)}</span>`;
   }
-  return `<span class="badge ${late > -3600e3 ? 'badge-warn' : 'badge-info'}"><span class="dot"></span>Due ${timeIN(x.due_at)} ${dayIN(x.due_at)}</span>`;
+  const label = what === 'Call back' ? 'Call back' : what === 'Try again' ? 'Try again by' : 'Due';
+  return `<span class="badge ${late > -3600e3 ? 'badge-warn' : 'badge-info'}"><span class="dot"></span>${label} ${timeIN(at)} ${dayIN(at)}</span>`;
+}
+
+// Whose it is: a manager reads who has it and why; a caller reads "Yours".
+function ownerLine(x) {
+  if (x.closed) return '';
+  if (x.unassigned) return '<span class="badge badge-warn" title="Nobody is on shift for this team yet; a manager can pick someone">Not assigned yet</span>';
+  if (x.assigned_to_me) return '<span class="badge badge-ok">Yours</span>';
+  if (!x.assigned_name) return '';
+  return `<span class="due-meta wraps">With <strong>${sanitize(x.assigned_name)}</strong>${reasonText(x.assign_reason) ? ` · ${sanitize(reasonText(x.assign_reason))}` : ''}</span>`;
 }
 
 function familyLine(f) {
@@ -153,10 +170,18 @@ export function digestHTML(d, { max = 3 } = {}) {
     ${readingHTML(d.report_reading)}`;
 }
 
-function requestCardHTML(x) {
+function requestCardHTML(x, roster) {
   const f = x.family || {};
   const name = f.patient_name || f.name || 'Name not given';
-  const mine = x.held_by_me;
+  // Assigned to me: the number and the outcomes straight away, no "I will
+  // call" first. A safety call (everyone sees it) or a manager calling for
+  // someone still holds it first, so nobody rings twice.
+  // "Open as" someone: the screen is theirs but the database acts as you, so
+  // nothing here may be pressed (it would move their work to you).
+  const act = !isImpersonating();
+  const mine = act && !x.closed && (x.held_by_me || (x.assigned_to_me && !x.held_by));
+  // Taking someone else's request moves it to you: say so on the button.
+  const takeover = x.assigned_name && !x.assigned_to_me && !x.safety;
   const tried = x.attempts > 0 ? `Tried ${x.attempts} time${x.attempts === 1 ? '' : 's'}, last ${formatRelativeTime(x.last_attempt_at)}` : null;
   return `
     <div class="card hb-req" data-hb="${sanitize(x.id)}" style="padding:12px 14px;${x.closed ? 'opacity:.65;' : ''}${x.safety && !x.closed ? 'border-color:var(--danger);' : ''}${isDelete(x) && !x.closed ? 'border-color:var(--clay);' : ''}">
@@ -168,12 +193,15 @@ function requestCardHTML(x) {
         <span class="due-meta">asked ${formatRelativeTime(x.asked_at)}</span>
       </div>
       <div style="margin-top:4px;font-weight:600">${sanitize(requestTitle(x))}</div>
+      ${ownerLine(x) ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px">${ownerLine(x)}</div>` : ''}
       <div class="due-meta wraps" style="margin-top:2px">${familyLine(f)}</div>
       ${x.channel === 'chat' ? '<div class="due-meta wraps" style="margin-top:4px">Asked for a reply in the WhatsApp chat. A call is fine too.</div>' : ''}
       ${x.safety && !x.closed ? `<div class="due-meta wraps" style="margin-top:6px;color:var(--danger)">Call now. If they may be in danger, stay on the line and give Tele-MANAS 14416 (free, 24 hours, Hindi too) or 112.</div>` : ''}
       ${isDelete(x) && !x.closed ? `<div class="due-meta wraps" style="margin-top:6px;color:var(--clay)">They asked HopeBot to delete their data. Nothing has been deleted: call to confirm what they want removed, then ask an admin to erase it, and log the call here.</div>` : ''}
       ${x.hopebot_status === 'claimed' && x.state === 'open' ? '<div class="due-meta" style="margin-top:4px">Someone in the HopeBot console has picked this up.</div>' : ''}
       ${tried ? `<div class="due-meta" style="margin-top:4px">${tried}</div>` : ''}
+      ${x.callback_at && !x.closed ? `<div class="due-meta wraps" style="margin-top:4px">They asked to be called back ${timeIN(x.callback_at)} ${dayIN(x.callback_at)}.</div>` : ''}
+      ${x.note && !x.closed ? `<div class="due-meta wraps" style="margin-top:4px">Last note: ${sanitize(x.note)}</div>` : ''}
       ${digestHTML(x.digest)}
       <div class="hb-actions" style="margin-top:10px">
         ${x.closed
@@ -184,12 +212,17 @@ function requestCardHTML(x) {
                <textarea class="form-input hb-note" rows="2" maxlength="1000" placeholder="What did you do for them? (optional)" style="margin-top:8px;width:100%"></textarea>
                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
                  ${OUTCOMES.map(([v, label, cls]) => `<button type="button" class="btn ${cls} btn-sm" data-out="${v}">${label}</button>`).join('')}
-                 <button type="button" class="btn btn-ghost btn-sm" data-release>Not now</button>
+                 ${x.held_by_me ? '<button type="button" class="btn btn-ghost btn-sm" data-release>Not now</button>' : ''}
+                 ${x.assigned_to_me && !x.safety ? '<button type="button" class="btn btn-ghost btn-sm" data-handback title="Give it to the next caregiver on shift">I cannot call them</button>' : ''}
                </div>
-               <div class="due-meta" style="margin-top:4px">Held for you until ${timeIN(x.held_until)}.</div>`
+               ${x.held_by_me ? `<div class="due-meta" style="margin-top:4px">Held for you until ${timeIN(x.held_until)}.</div>` : ''}`
             : x.held_by
               ? `<div class="due-meta">${sanitize(x.held_by)} is calling them.</div>`
-              : `<button type="button" class="btn btn-primary btn-sm" data-take>${icon('phoneCall')}I will call</button>`}
+              : !act ? '<div class="due-meta wraps">Viewing as someone else: actions are off.</div>'
+                : `<button type="button" class="btn ${takeover ? 'btn-secondary' : 'btn-primary'} btn-sm" data-take ${takeover ? `data-takeover="${sanitize(x.assigned_name)}"` : ''}>${icon('phoneCall')}${takeover ? 'Take over and call' : 'I will call'}</button>`}
+        ${act && !x.closed && isManager() && roster ? `<div class="hb-assign" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
+            <span class="due-meta">Assign to</span>${rosterSelectHTML(roster, x.assigned_to, { id: x.id, currentName: x.assigned_name })}</div>` : ''}
+        ${isManager() ? historyHTML(x.events) : ''}
       </div>
     </div>`;
 }
@@ -200,34 +233,47 @@ function requestCardHTML(x) {
  */
 export async function mountHopebotRequests(el, { mode = 'calling' } = {}) {
   if (!el) return;
-  let all = []; let showAll = false;
+  let all = []; let filter = 'all'; const rosters = new Map();
   const load = async () => {
-    const { data, error } = await getSupabase().rpc('hopebot_requests_open', { p_closed_hours: mode === 'leads' ? 24 : 0 });
+    // Managers read the last week of closed ones on the leads page: the history.
+    const hours = mode === 'leads' ? (isManager() ? 168 : 24) : 0;
+    const { data, error } = await getSupabase().rpc('hopebot_requests_open', { p_closed_hours: hours });
     if (error) throw error;
     all = Array.isArray(data) ? data : [];
+    if (isManager()) {
+      for (const team of new Set(all.filter((x) => !x.closed).map((x) => x.team))) {
+        try { rosters.set(team, await loadRoster(team)); } catch (e) { console.warn('[hopebot] roster:', e.message); }
+      }
+    }
   };
   const paint = () => {
     if (!el.isConnected) return;
-    const teams = myTeams();
+    const mgr = isManager();
     const open = all.filter((x) => !x.closed);
-    const mineFirst = teams && !showAll ? open.filter((x) => teams.includes(x.team)) : open;
-    const others = open.length - mineFirst.length;
+    const late = (x) => x.safety || x.overdue || (x.overdue == null && Date.parse(x.due_at) < Date.now());
+    const shown = !mgr || filter === 'all' ? open
+      : filter === 'unassigned' ? open.filter((x) => x.unassigned) : open.filter(late);
     const closed = mode === 'leads' ? all.filter((x) => x.closed) : [];
     if (mode === 'calling' && !open.length) { el.hidden = true; el.innerHTML = ''; return; }
     el.hidden = false;
-    const late = mineFirst.filter((x) => x.safety || Date.parse(x.due_at) < Date.now()).length;
+    const nLate = open.filter(late).length;
+    const nFree = open.filter((x) => x.unassigned).length;
     el.innerHTML = `
-      <div class="card card-flush" style="${late ? 'border-color:var(--danger)' : ''}">
-        <div class="card-head"><h3>Asked HopeBot for a call</h3>
-          <span class="badge ${late ? 'badge-danger' : 'badge-info'}">${mineFirst.length} waiting${late ? ` · ${late} now` : ''}</span></div>
+      <div class="card card-flush" style="${nLate ? 'border-color:var(--danger)' : ''}">
+        <div class="card-head"><h3>${mgr ? 'Asked HopeBot for a call' : 'Your HopeBot call requests'}</h3>
+          <span class="badge ${nLate ? 'badge-danger' : 'badge-info'}">${open.length} waiting${nLate ? ` · ${nLate} now` : ''}${mgr && nFree ? ` · ${nFree} not assigned` : ''}</span></div>
         <div style="padding:0 var(--s5) var(--s4)">
-          <div class="due-meta wraps" style="margin-bottom:10px">HopeBot promised these families a call within 4 hours, between 9 am and 9 pm. Take one, call, and log what happened; HopeBot closes their request.</div>
+          <div class="due-meta wraps" style="margin-bottom:10px">${mgr
+            ? "HopeBot promised these families a call within 4 hours, 9 am to 9 pm. Each one goes to one caller: the family's own caregiver, else whoever is on shift with the fewest. Use Assign to change it."
+            : 'HopeBot promised these families a call within 4 hours, 9 am to 9 pm. They are yours: call, then tap what happened. No answer and Call back later set the next time; Reached closes it, here and in HopeBot.'}</div>
+          ${mgr && open.length ? `<div class="chip-row" style="margin-bottom:10px">
+            ${[['all', `All ${open.length}`], ['unassigned', `Not assigned ${nFree}`], ['late', `Due now ${nLate}`]].map(([k, l]) =>
+              `<button type="button" class="fchip ${filter === k ? 'on' : ''}" data-hbf="${k}">${l}</button>`).join('')}</div>` : ''}
           <div style="display:flex;flex-direction:column;gap:8px">
-            ${mineFirst.map(requestCardHTML).join('') || '<div class="due-meta">Nothing waiting for your team.</div>'}
+            ${shown.map((x) => requestCardHTML(x, rosters.get(x.team))).join('') || `<div class="due-meta">${open.length ? 'Nothing under this filter.' : 'Nothing waiting.'}</div>`}
           </div>
-          ${others > 0 ? `<button type="button" class="btn btn-ghost btn-sm" data-show-all style="margin-top:8px">Show ${others} for the other team</button>` : ''}
-          ${closed.length ? `<div class="due-meta" style="margin:14px 0 6px">Closed in the last day</div>
-            <div style="display:flex;flex-direction:column;gap:8px">${closed.map(requestCardHTML).join('')}</div>` : ''}
+          ${closed.length ? `<div class="due-meta" style="margin:14px 0 6px">${mgr ? 'Closed in the last 7 days' : 'Closed in the last day'}</div>
+            <div style="display:flex;flex-direction:column;gap:8px">${closed.map((x) => requestCardHTML(x, null)).join('')}</div>` : ''}
         </div>
       </div>`;
     wire();
@@ -245,16 +291,41 @@ export async function mountHopebotRequests(el, { mode = 'calling' } = {}) {
     paint();
   };
   const wire = () => {
-    el.querySelector('[data-show-all]')?.addEventListener('click', () => { showAll = true; paint(); });
+    el.querySelectorAll('[data-hbf]').forEach((b) => b.addEventListener('click', () => { filter = b.dataset.hbf; paint(); }));
     el.querySelectorAll('.hb-req').forEach((card) => {
       const id = card.dataset.hb;
-      card.querySelector('[data-take]')?.addEventListener('click', (e) => act(e.currentTarget, 'hopebot_request_take', { p_id: id }, null));
+      const x = all.find((r) => r.id === id) || {};
+      card.querySelector('[data-take]')?.addEventListener('click', (e) => {
+        const btn = e.currentTarget;
+        const from = btn.dataset.takeover;
+        if (!from) { act(btn, 'hopebot_request_take', { p_id: id }, null); return; }
+        confirmModal(`This request is with ${sanitize(from)}. Taking over moves it from them to you, and they stop seeing it.`,
+          () => act(btn, 'hopebot_request_take', { p_id: id }, 'It is yours now. Call them.'),
+          { title: 'Take over this call?', confirmLabel: 'Take over and call', danger: false });
+      });
       card.querySelector('[data-release]')?.addEventListener('click', (e) => act(e.currentTarget, 'hopebot_request_release', { p_id: id }, 'Given back for someone else to call.'));
-      card.querySelectorAll('[data-out]').forEach((b) => b.addEventListener('click', (e) => {
-        const out = e.currentTarget.dataset.out;
+      card.querySelector('[data-handback]')?.addEventListener('click', (e) => act(e.currentTarget, 'hopebot_request_handback', { p_id: id },
+        'Handed to the next caregiver on shift.'));
+      card.querySelector('[data-assign]')?.addEventListener('change', (e) => {
+        forgetRoster();
+        act(e.currentTarget, 'hopebot_request_assign', { p_id: id, p_to: e.currentTarget.value || null },
+          e.currentTarget.value ? 'Assigned.' : 'Back to automatic.');
+      });
+      card.querySelectorAll('[data-out]').forEach((b) => b.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        const out = btn.dataset.out;
         const note = card.querySelector('.hb-note')?.value || null;
-        act(e.currentTarget, 'hopebot_request_log', { p_id: id, p_outcome: out, p_note: note },
-          out === 'no_answer' ? 'Logged. It stays on the list for another try.' : 'Logged. HopeBot will close their request.');
+        let back = null;
+        if (out === 'call_back') {
+          const { pickCallbackTime } = await import('./callbackPicker.js');
+          back = await pickCallbackTime(x.family?.patient_name || x.family?.name || 'they');
+          if (!back) return;
+        }
+        act(btn, 'hopebot_request_log', back ? { p_id: id, p_outcome: out, p_note: note, p_callback_at: back } : { p_id: id, p_outcome: out, p_note: note },
+          out === 'no_answer' ? (Number(x.attempts) >= 2 ? 'That was the third try: the request is closed as not reached.'
+            : 'Logged. Try again in about 2 working hours; it is not overdue until then.')
+            : out === 'call_back' ? 'Logged. It comes due again at the time they asked for.'
+              : 'Logged. HopeBot will close their request.');
       }));
     });
   };
