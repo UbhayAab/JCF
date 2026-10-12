@@ -17,6 +17,7 @@ import { navigate } from '../router.js';
 import { DIAL_STATUSES, CONDITIONS, statusBadge } from '../utils/catalog.js';
 import { withMvp, mvpBand, median } from '../utils/performance.js';
 import { renderCircleMessages } from '../components/circleMessages.js';
+import { loadTeamRamp, rampBadges, canRamp, openRampModal } from '../components/rampUp.js';
 
 // The one palette (js/utils/avatar.js); same hash, so nobody changes colour.
 const avColor = (n) => avatarColor(n);
@@ -449,6 +450,10 @@ async function loadAvailability() {
       // Fixboard #21/#23: who is on probation, and their answered calls.
       sb.rpc('team_probation'),
     ]);
+    // Fixboard #21 (sql/185): who is ramping up, which day, last days. Not
+    // there yet (an older database) or refused: the cards simply carry none.
+    let rampById = {};
+    try { rampById = await loadTeamRamp(); } catch (e) { console.warn('[team] ramp-up:', e.message); }
     if (error) throw error;
     if (!data || data.length === 0) { content.innerHTML = '<div class="empty"><h4>No team members</h4></div>'; return; }
     const restores = restoresR.data || [];
@@ -524,8 +529,9 @@ async function loadAvailability() {
             c && needy.has(m.caller_id) ? '<span class="badge badge-warn" title="Bottom third of the team by callable caseload: consider giving them patients">Needs patients</span>' : '',
             c && (c.calls_7d || 0) === 0 ? '<span class="badge badge-danger" title="Zero calls logged in the last 7 days">No calls this week</span>' : '',
             probById[m.caller_id]?.on_probation
-              ? `<span class="badge badge-info" title="On probation: no automatic calls, sees only the families given to her, and a simple menu that opens after answered calls">On probation · ${probById[m.caller_id].answered ?? 0} answered calls</span>`
+              ? `<span class="badge badge-info" title="On probation: no automatic calls apart from her ramp-up, sees only the families she is given, and a simple menu that opens after answered calls">On probation · ${probById[m.caller_id].answered ?? 0} answered calls</span>`
               : '',
+            rampBadges(rampById[m.caller_id]),
           ].filter(Boolean).join('');
           const stats = c ? `
             <div class="tc-stats">
@@ -554,7 +560,8 @@ async function loadAvailability() {
               <div class="tc-actions">
                 ${!m.available ? `<button class="btn btn-ghost btn-sm cover-btn" data-id="${m.caller_id}" data-name="${sanitize(m.full_name)}">Cover</button>` : ''}
                 <button class="btn ${m.available ? 'btn-secondary' : 'btn-primary'} btn-sm av-toggle" data-id="${m.caller_id}" data-name="${sanitize(m.full_name)}" data-on="${m.available}">${m.available ? 'On' : 'Off'}</button>
-                ${probById[m.caller_id] ? `<button class="btn btn-ghost btn-sm prob-toggle" data-id="${m.caller_id}" data-name="${sanitize(m.full_name)}" data-on="${!!probById[m.caller_id].on_probation}" title="${probById[m.caller_id].on_probation ? 'Take off probation: normal calls and the full menu' : 'Put on probation: no automatic calls, only the families you give her, and a simple menu'}">${probById[m.caller_id].on_probation ? 'End probation' : 'Probation'}</button>` : ''}
+                ${probById[m.caller_id] ? `<button class="btn btn-ghost btn-sm prob-toggle" data-id="${m.caller_id}" data-name="${sanitize(m.full_name)}" data-on="${!!probById[m.caller_id].on_probation}" title="${probById[m.caller_id].on_probation ? 'Take off probation: normal calls and the full menu' : 'Put on probation: no automatic calls apart from her ramp-up, only the families she is given, and a simple menu'}">${probById[m.caller_id].on_probation ? 'End probation' : 'Probation'}</button>` : ''}
+                ${rampById[m.caller_id] ? `<button class="btn btn-ghost btn-sm ramp-btn" data-id="${m.caller_id}" data-name="${sanitize(m.full_name)}" data-role="${sanitize(m.role)}" title="Gradual ramp-up for a new intern, and her last day">${canRamp(m.role) ? 'Ramp-up' : 'Last day'}</button>` : ''}
               </div>
             </div>
             ${stats}
@@ -589,6 +596,9 @@ async function loadAvailability() {
         : `${sanitize(btn.dataset.name) || 'They'} is on probation: give her families by hand with Give patients`, 'success');
       loadAvailability();
     }));
+    content.querySelectorAll('.ramp-btn').forEach(btn => btn.addEventListener('click', () => openRampModal({
+      id: btn.dataset.id, name: btn.dataset.name, role: btn.dataset.role, ramp: rampById[btn.dataset.id],
+    }, loadAvailability)));
     content.querySelector('#prob-steps')?.addEventListener('click', openProbationSteps);
     content.querySelector('#team-sort')?.addEventListener('change', (e) => {
       teamSort = e.target.value;

@@ -984,6 +984,8 @@ const POC_REASON_LABELS = {
   // sql/149: a member is deactivated and their families move on automatically
   member_left: 'Handed on: previous holder left the team',
   member_left_unowned: 'Released: previous holder left the team',
+  // sql/185 (Fixboard #21): handed to a new intern in her first two weeks
+  intern_ramp: 'Handed to a new intern ramping up',
   manual_update: 'Updated',
   // v89, the nutrition side of the same table
   nutrition_claim: 'Claimed',

@@ -517,11 +517,14 @@
 /* ============================================================ TEAM GRID (legacy) */
 .team-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--s4); }
 .team-card { padding: var(--s5) !important; display: flex; flex-direction: column; gap: var(--s4); }
-.tc-head { display: flex; align-items: center; gap: 12px; }
-.tc-id { flex: 1; min-width: 0; }
+/* Cover, On/Off, Probation and Ramp-up (Fixboard #21) fit at phone width: the
+   buttons drop under the name and wrap among themselves rather than push the
+   card past the screen. */
+.tc-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tc-id { flex: 1; min-width: 150px; }
 .tc-name { font-size: 17px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tc-role { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
-.tc-actions { display: flex; gap: 6px; align-items: center; flex: none; }
+.tc-actions { display: flex; gap: 6px; align-items: center; flex: none; flex-wrap: wrap; justify-content: flex-end; max-width: 100%; margin-left: auto; }
 .tc-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding-top: var(--s4); border-top: 1px solid var(--line); }
 .tc-stat { text-align: center; padding: 10px 4px; background: var(--surface-2); border-radius: var(--r-md); transition: background var(--fast) var(--ease); }
 .tc-stat:hover { background: var(--surface-3); }
