@@ -15,6 +15,7 @@
 
 import { getSupabase } from '../supabase.js';
 import { showToast } from '../components/toast.js';
+import { showModal, closeModal } from '../components/modal.js';
 import { icon } from '../components/icons.js';
 import { sanitize } from '../utils/validators.js';
 import { formatRelativeTime } from '../utils/formatters.js';
@@ -26,6 +27,7 @@ let rows = [];
 let digests = new Map(); // lead_id -> what they wrote, tags, summary (sql/172)
 let filter = 'new'; // new | contacted | all | nocaller (managers)
 let roster = null;  // managers: who can take a family (hopebot_assignable)
+let openReqs = new Map(); // lead_id -> open HopeBot request ids this person may log
 let searchQ = '';
 
 export async function renderLeads(container) {
@@ -87,6 +89,15 @@ async function load(container) {
     const { data: dg } = await getSupabase().from('hopebot_family_digest')
       .select('lead_id, counts, recent, summary, summary_at, report_reading').limit(1000);
     digests = new Map((dg || []).map(d => [d.lead_id, d]));
+    // sql/182 (cos rework of #31): a family with an open call request is not
+    // "contacted" by a tap here; the call has to be logged on the request, or
+    // the request stays Overdue and HopeBot never hears what happened. Row
+    // security returns only the requests this person may act on.
+    openReqs = new Map();
+    // A deletion request is a person's other job (sql/173), never "a call".
+    const { data: rq } = await getSupabase().from('hopebot_requests')
+      .select('id, lead_id, team').neq('state', 'closed').neq('team', 'admin').order('due_at').limit(1000);
+    (rq || []).forEach((x) => openReqs.set(x.lead_id, [...(openReqs.get(x.lead_id) || []), x.id]));
     if (isManagerOrAdmin()) {
       try { roster = await loadRoster('cgmp'); } catch (e) { roster = null; console.warn('[leads] roster:', e.message); }
     }
@@ -129,9 +140,11 @@ function paint(container) {
           <span style="flex:1"></span>
           ${r.patient_id ? `<a class="due-meta" href="#patients/${sanitize(r.patient_id)}">Already a PN family</a>` : ''}
           <span class="due-meta">${r.last_message_at ? 'wrote ' + formatRelativeTime(r.last_message_at) : formatRelativeTime(r.updated_at || r.created_at)}</span>
-          <button class="btn ${r.contacted ? 'btn-secondary' : 'btn-primary'} btn-sm" data-lead="${r.id}" data-to="${r.contacted ? 0 : 1}">
+          ${openReqs.has(r.id)
+            ? `<button class="btn btn-primary btn-sm" data-log-call="${sanitize(r.id)}" title="They asked HopeBot for a call: say what happened, and the request closes here and in HopeBot">Log the call</button>`
+            : `<button class="btn ${r.contacted ? 'btn-secondary' : 'btn-primary'} btn-sm" data-lead="${r.id}" data-to="${r.contacted ? 0 : 1}">
             ${r.contacted ? 'Reopen' : 'Mark contacted'}
-          </button>
+          </button>`}
         </div>
         ${callerLine(r)}
         <div class="due-meta" style="margin-top:4px">${[
@@ -157,6 +170,10 @@ function paint(container) {
     }
     await load(container);
     mountHopebotRequests(container.querySelector('#wl-requests'), { mode: 'leads' });
+  }));
+  body.querySelectorAll('[data-log-call]').forEach(b => b.addEventListener('click', () => {
+    const r = rows.find(x => x.id === b.dataset.logCall);
+    openLogCall(container, r, openReqs.get(b.dataset.logCall) || []);
   }));
   body.querySelectorAll('[data-lead]').forEach(b => b.addEventListener('click', async () => {
     b.disabled = true;
@@ -184,4 +201,60 @@ function callerLine(r) {
   }
   if (r.assigned_to && r.assigned_to === getCurrentProfile()?.id) return '<div style="margin-top:6px"><span class="badge badge-ok">Yours to call</span></div>';
   return '';
+}
+
+// "Log the call" for a family with an open HopeBot request: the same outcomes
+// as the request card (hopebot_request_log), for every open request of theirs
+// this person may log. Reached also marks the family contacted here.
+const LOG_OUTCOMES = [
+  ['reached', 'Reached', 'btn-primary'],
+  ['no_answer', 'No answer', 'btn-secondary'],
+  ['call_back', 'Call back later', 'btn-secondary'],
+  ['wrong_number', 'Wrong number', 'btn-secondary'],
+  ['not_needed', 'Not needed', 'btn-ghost'],
+];
+function openLogCall(container, r, reqIds) {
+  if (!r || !reqIds.length) return;
+  const el = document.createElement('div');
+  el.innerHTML = `
+    <p style="margin:0 0 10px">${sanitize(r.name || 'This family')} asked HopeBot for a call. What happened when you called?</p>
+    <textarea class="form-input" id="lc-note" rows="2" maxlength="1000" placeholder="What did you do for them? (optional)" style="width:100%"></textarea>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+      ${LOG_OUTCOMES.map(([v, l, cls]) => `<button type="button" class="btn ${cls} btn-sm" data-lc="${v}">${l}</button>`).join('')}
+    </div>
+    <p class="due-meta wraps" style="margin-top:10px">No answer sets the next try about 2 working hours later; Call back later waits for the time they asked for. Reached closes it here and in HopeBot.</p>`;
+  showModal({ title: 'Log the call', content: el, size: 'sm' });
+  el.querySelectorAll('[data-lc]').forEach((btn) => btn.addEventListener('click', async () => {
+    const out = btn.dataset.lc;
+    const note = el.querySelector('#lc-note').value || null;
+    let back = null;
+    if (out === 'call_back') {
+      closeModal();
+      const { pickCallbackTime } = await import('../components/callbackPicker.js');
+      back = await pickCallbackTime(r.name || 'they');
+      if (!back) return;
+    }
+    el.querySelectorAll('[data-lc]').forEach((x) => { x.disabled = true; });
+    // Each request on its own: one refused (someone else on the call, already
+    // closed) never stops or repeats the others. The page reloads either way.
+    const failed = [];
+    let logged = 0;
+    for (const id of reqIds) {
+      const { error } = await getSupabase().rpc('hopebot_request_log',
+        back ? { p_id: id, p_outcome: out, p_note: note, p_callback_at: back } : { p_id: id, p_outcome: out, p_note: note });
+      if (error) failed.push(error.message); else logged++;
+    }
+    if (out === 'reached' && logged) {
+      const { error } = await getSupabase().from('hopebot_leads')
+        .update({ contacted: true, updated_at: new Date().toISOString() }).eq('id', r.id);
+      if (error) failed.push('Logged, but the family could not be marked contacted: ' + error.message);
+    }
+    if (failed.length) showToast(failed[0], 'error', 6000);
+    else showToast(out === 'reached' ? 'Logged. HopeBot will close their request.'
+      : out === 'no_answer' ? 'Logged. Try again in about 2 working hours; it is not overdue until then.'
+        : out === 'call_back' ? 'Logged. It comes due again at the time they asked for.' : 'Logged.', 'success', 3500);
+    closeModal();
+    await load(container);
+    mountHopebotRequests(container.querySelector('#wl-requests'), { mode: 'leads' });
+  }));
 }

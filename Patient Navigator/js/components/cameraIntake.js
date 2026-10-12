@@ -39,6 +39,9 @@ const CONSENT_LINE = 'If you let me photograph your hospital papers, we will rea
   + 'you can ask us to delete them at any time. Is that all right?';
 // The Android wrapper app names itself in its user agent (MainActivity) and adds a bridge.
 const IN_APP = /CarcinomeNavigator/i.test(navigator.userAgent || '') || !!window.CarcinomeNative;
+// App 1.1 (12 Oct) lends the page the camera and "Take a photo" works in it;
+// only the old 1.0 app cannot, so only it gets the "use Chrome" fallback.
+const OLD_APP = IN_APP && !/CarcinomeNavigator\/(?!1\.0\b)\d/i.test(navigator.userAgent || '');
 
 /** Every file opened in this visit, newest first. It outlives the tab view: uploads carry on elsewhere. */
 const files = [];
@@ -439,7 +442,7 @@ function openCamera(file) {
       <div class="ci-who">${sanitize(file.name || 'New patient')} <span>ends ${sanitize(file.phone.slice(-4))}</span></div>
       <button type="button" class="ci-done">Close file</button>
     </div>
-    <div class="ci-fallback" hidden>${IN_APP ? `
+    <div class="ci-fallback" hidden>${OLD_APP ? `
       <p>The Navigator app cannot open the camera yet. Take the photos with the phone's camera, then tap
         Pick photos and choose them all at once. Or open the Navigator in Chrome: the camera works there.</p>
       <label class="btn btn-primary btn-lg">${icon('upload')}Pick photos
