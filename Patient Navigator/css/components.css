@@ -607,7 +607,7 @@ table.data tbody tr:last-child td { border-bottom: none; }
 .tl-dot.danger { background: var(--danger); } .tl-dot.info { background: var(--info); } .tl-dot.neutral { background: var(--ink-4); }
 .tl-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .tl-when { font: var(--t-mono); font-size: 11px; color: var(--ink-3); }
-.tl-body { font: var(--t-sm); color: var(--ink-2); margin-top: 5px; line-height: 1.5; }
+.tl-body { font: var(--t-sm); color: var(--ink-2); margin-top: 5px; line-height: 1.5; white-space: pre-line; }
 .tl-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
 .tl-chips .badge { font-size: 10px; padding: 3px 8px; }
 
@@ -706,7 +706,7 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 .qd-call-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .qd-call-meta { font: var(--t-mono); font-size: 11px; color: var(--ink-3); margin-left: auto; }
-.qd-note { font: var(--t-sm); color: var(--ink-2); margin-top: 7px; }
+.qd-note { font: var(--t-sm); color: var(--ink-2); margin-top: 7px; white-space: pre-line; }
 .qd-quote { font-family: var(--font-serif); font-style: italic; font-size: 14.5px; }
 .qd-handoff { color: var(--clay); }
 .qd-next { font: var(--t-xs); color: var(--ok); font-weight: 700; margin-top: 7px; }

@@ -13,6 +13,11 @@ import { showModal, closeModal } from './modal.js';
 import { icon } from './icons.js';
 import { sanitize } from '../utils/validators.js';
 import { DIAL_STATUSES, RECEPTIVENESS, CONDITIONS, REQUIREMENTS, LEVER_GROUPS, MEASURES, INSTRUMENTS, leverLabel } from '../utils/catalog.js';
+// A namespace import, not named ones: for a few minutes after a deploy a phone
+// can pair this file with yesterday's callRecording.js, and a named import of a
+// name that file lacks stops the whole app at boot (tools/stale_import_check.mjs).
+// Missing names are undefined here instead, and the recording box waits for the new file.
+import * as recording from './callRecording.js';
 
 // Which wellbeing measures each care role captures by default (IMPACT section).
 const ROLE_MEASURES = {
@@ -227,6 +232,10 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
             </p>`}
         </div>`}
 
+      <!-- Fixboard #36: a family that calls back is logged here, from their
+           own page, with no queue row. Its recording is added here too (sql/193). -->
+      <div id="lc-rec-mount" style="margin-bottom:var(--s5)"></div>
+
       <div class="field" style="margin-bottom:var(--s5)">
         <label>Call outcome <span class="req">*</span></label>
         <div class="seg seg-wrap" id="lc-outcome">
@@ -304,14 +313,86 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   // Set by guardSaveReachable() below; every way out of the sheet calls it, so
   // the guard's resize listeners never outlive the form.
   let stopGuard = () => {};
+  // The recording box (callRecording.js), inline because it sits in this sheet.
+  let rec = recording.blankRecording();
+  let recSection = null;
+  let consentWritten = false;   // written the moment a waiting recording needed it
+  const dropRec = () => { recSection?.dispose(); recSection = null; };
   showModal({
     title: patient ? `Log a call · ${sanitize(patient.full_name)}` : 'Log a call',
-    content: el, size: 'lg', onClose: () => stopGuard(),
+    content: el, size: 'lg', onClose: () => { stopGuard(); dropRec(); },
   });
 
   const $ = (sel) => el.querySelector(sel);
   const $$ = (sel) => el.querySelectorAll(sel);
   let dateManual = false;
+
+  const chosenPatientId = () => patient?.id || $('#lc-patient')?.value || '';
+  const consentGiven = () => consentWritten || (patient
+    ? consentOnFile
+    : !!patientOptions.find((p) => p.id === chosenPatientId())?.consent_given);
+
+  // The recording fills this form like the portal's: only what is still empty,
+  // and the full call note under any notes already typed.
+  function applyRecording(result) {
+    const s = result?.suggestions || {};
+    const v = (k) => s[k]?.value;
+    const filled = [];
+    const tap = (sel) => { const b = $(sel); if (!b) return false; b.click(); return true; };
+    if (!state.dial && v('dial_status') && tap(`#lc-outcome .seg-btn[data-status="${CSS.escape(v('dial_status'))}"]`)) filled.push('Call outcome');
+    if (state.dial === 'connected' && !state.recep && v('receptiveness') && tap(`#lc-recep .recep-btn[data-recep="${CSS.escape(v('receptiveness'))}"]`)) filled.push('How they were doing');
+    if (!state.cond && v('condition') && tap(`#lc-cond .seg-btn[data-cond="${CSS.escape(v('condition'))}"]`)) filled.push('How the patient is doing');
+    const added = (s.requirements || []).map((r) => r.value)
+      .filter((k) => k && !state.reqs.includes(k) && tap(`#lc-reqs .fchip[data-req="${CSS.escape(k)}"]`));
+    if (added.length) filled.push(`What they asked for (${added.join(', ')})`);
+    const dur = $('#lc-duration');
+    if (result?.durationS && !(Number(dur.value) > 0)) { dur.value = String(Math.max(1, Math.ceil(result.durationS / 60))); filled.push('Duration (from the recording)'); }
+    const notes = $('#lc-notes');
+    const next = recording.appendNote(notes.value, result?.summary);
+    if (next !== notes.value.trim()) { notes.value = next; notes.rows = 12; filled.push('Notes (the full call note)'); }
+    const fillEmpty = (sel, text, what) => { const x = $(sel); if (x && text && !x.value.trim()) { x.value = text; filled.push(what); } };
+    fillEmpty('#lc-strategy', v('next_mentor_note'), 'Note for the next caller');
+    fillEmpty('#lc-fb-patient', v('patient_feedback'), 'Feedback from patient');
+    fillEmpty('#lc-fb-caregiver', v('caregiver_feedback'), 'Feedback from caregiver');
+    const day = recording.suggestedFollowup(s);
+    if (day && !dateManual) {
+      // The portal's rule: a connected call rests at least 7 days, anything else 3.
+      const min = recording.localDateIn(state.dial === 'connected' ? 7 : 3);
+      $('#lc-followup').value = day < min ? min : day;
+      dateManual = true; $('#lc-auto').style.display = 'none';
+      filled.push(day < min ? 'Next check-in (the agreed day was sooner; a connected call rests 7 days)' : 'Next check-in');
+    }
+    updateSubmit();
+    return filled;
+  }
+
+  function mountRec() {
+    dropRec();
+    rec = recording.blankRecording();
+    const pid = chosenPatientId();
+    const mount = $('#lc-rec-mount');
+    // No patient yet, or yesterday's callRecording.js (no inline box: its modals would close this sheet).
+    if (!pid || !recording.mountLogRecording) { if (mount) mount.innerHTML = ''; return; }
+    recSection = recording.mountRecordingSection(mount, {
+      patientId: pid, inline: true,
+      get: () => rec,
+      set: (r) => {
+        rec = r;
+        // Once the family has answered, the answer belongs to this patient: picking another would move it.
+        const pick = $('#lc-patient');
+        if (pick) {
+          pick.disabled = !!rec.consentId;
+          pick.title = rec.consentId ? 'The family answered about recording for this patient. Use "Change the answer" in the recording box to pick someone else.' : '';
+        }
+        // Consent ticked before the recording answer: write it now that a recording waits on it.
+        if (rec.decision === 'agreed' && state.consent === true && !consentGiven()) writeConsentForRecording();
+      },
+      consentOnFile: consentGiven,
+      callSeconds: () => (Number($('#lc-duration')?.value) || 0) * 60,
+      consentHint: 'tap Connected below and answer "Did they give consent on this call?" first.',
+      apply: applyRecording,
+    });
+  }
 
   function suggestFollowup() {
     if (dateManual) return;
@@ -389,6 +470,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     wrap.style.display = already ? 'none' : '';
     if (already) state.consent = null;
   });
+  $('#lc-patient')?.addEventListener('change', () => { consentWritten = false; mountRec(); });
   $$('#lc-outcome .seg-btn').forEach(btn => btn.addEventListener('click', () => {
     state.dial = btn.dataset.status;
     $$('#lc-outcome .seg-btn').forEach(b => b.className = 'seg-btn');
@@ -421,8 +503,30 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
       group.querySelectorAll('.yn').forEach(b => b.classList.remove('yes', 'no'));
       btn.classList.add(val ? 'yes' : 'no');
       if (field === 'interruption') { const r = $('#lc-interrupt-reason'); if (r) r.style.display = val ? '' : 'none'; }
+      if (field === 'consent' && val) writeConsentForRecording();
     }));
   });
+
+  // A recording the family agreed to waits on the general consent (the
+  // database refuses the upload without it). Asked here and given here: written
+  // now, the same write the save makes, so the upload can go ahead. Without a
+  // waiting recording, consent is still written with the call as before.
+  let consentWriting = false;
+  async function writeConsentForRecording() {
+    const pid = chosenPatientId();
+    if (!pid || consentWriting || consentGiven() || rec.decision !== 'agreed') return;
+    consentWriting = true;
+    try {
+      // .select(): a row RLS filters out comes back as no rows and no error.
+      const { data: done, error: cErr } = await sb.from('patients')
+        .update({ consent_given: true, consent_date: new Date().toISOString(), consent_method: 'verbal_during_call' })
+        .eq('id', pid).select('id');
+      if (cErr || !done?.length) { showToast('Consent could not be saved' + (cErr ? `: ${cErr.message}` : '. Ask your team lead.'), 'error', 8000); return; }
+      if (chosenPatientId() !== pid) return;
+      consentWritten = true;
+      recSection?.refresh();
+    } finally { consentWriting = false; }
+  }
 
   // ACTION: support levers
   $$('.lever-chip').forEach(btn => btn.addEventListener('click', () => {
@@ -457,12 +561,13 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   });
 
   $('#lc-followup').addEventListener('input', () => { dateManual = true; $('#lc-auto').style.display = 'none'; });
-  $('#lc-cancel').addEventListener('click', () => { stopGuard(); closeModal(); });
+  $('#lc-cancel').addEventListener('click', () => { stopGuard(); dropRec(); closeModal(); });
 
   // Say what is missing from the moment the form opens, not only after the
   // first tap. An empty dropdown is then visible immediately.
   updateSubmit();
   stopGuard = guardSaveReachable();
+  mountRec();
 
   // After the sheet has animated in, and again whenever the visible screen
   // changes size (keyboard, rotation, a browser toolbar showing or hiding),
@@ -515,6 +620,8 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     if (btn.disabled) return;   // a save is already in flight
     const missing = missingItems();
     if (missing.length) { explainMissing(missing); return; }
+    // A file still on its way would miss this log (as on the portal).
+    if (rec.status === 'uploading') { showToast('The recording is still uploading. Wait a moment, then save.', 'warning', 6000); return; }
     const patientId = patient?.id || $('#lc-patient')?.value;
     const connected = state.dial === 'connected';
 
@@ -529,7 +636,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
       consent_taken: state.consent,
     };
     try {
-      const { error } = await sb.from('call_logs').insert({
+      const { data: logged, error } = await sb.from('call_logs').insert({
         patient_id: patientId,
         caller_id: me.id,
         contacted_by_name: me.full_name ? me.full_name.toUpperCase() : null,
@@ -552,8 +659,13 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
         unplanned_interruption: state.interruption,
         unplanned_interruption_reason: state.interruption ? ($('#lc-interrupt-reason')?.value.trim() || null) : null,
         lead_source: 'other',
-      });
+      }).select('id').single();
       if (error) throw error;
+
+      // sql/193: the family's answer about recording, and its recording, join
+      // this call. Never blocks the log; a failure says so (attachRecordingToLog).
+      const recAttached = (logged?.id && rec.consentId) ? await recording.attachRecordingToLog(logged.id, rec) : 0;
+      dropRec();
 
       // Consent, taken on the call, written on the call. Direct update
       // rather than update_patient_from_call: that RPC needs a queue row
@@ -562,7 +674,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
       // makes, so it needs no permission the mentor did not already have.
       // Said out loud when it fails: a consent that silently did not save
       // is worse than one nobody ticked.
-      if (state.consent === true) {
+      if (state.consent === true && !consentWritten) {
         const nowIso = new Date().toISOString();
         const { error: cErr } = await sb.from('patients')
           .update({ consent_given: true, consent_date: nowIso, consent_method: 'verbal_during_call' })
@@ -609,7 +721,8 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
       closeModal();
       const savedLevers = leverRows.length - leverFailures.length;
       const extras = (savedLevers ? ` · ${savedLevers} support` : '')
-        + (assessRows.length && !scoreFailed ? ` · ${assessRows.length} scores` : '');
+        + (assessRows.length && !scoreFailed ? ` · ${assessRows.length} scores` : '')
+        + (recAttached ? ' · recording' : '');
       showToast('Call logged' + extras, 'success');
       // Never let a partial save read as a clean one.
       if (leverFailures.length) {

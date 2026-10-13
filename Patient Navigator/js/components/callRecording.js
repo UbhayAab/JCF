@@ -65,7 +65,64 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 export function blankRecording() {
   return { reminded: false, intent: null, dialedAt: null, consentId: null, decision: null,
-    recordingId: null, path: null, fileName: '', status: null, error: null, result: null, applied: null };
+    recordingId: null, path: null, fileName: '', durationS: null, status: null, error: null, result: null, applied: null };
+}
+
+// sql/193: a recording joins a call made within 7 days of the family's answer.
+export const RECORDING_WINDOW_DAYS = 7;
+
+// ---------------------------------------------------------------- the call note (prompt v3, Fixboard #36)
+// The headings match the note text call-transcribe writes (guard.ts composeNote).
+const NOTE_HEADS = [['condition', 'Condition and symptoms'], ['treatment', 'Treatment'], ['reports', 'Reports mentioned'],
+  ['needs', 'Needs and requests'], ['follow_ups', 'Follow-ups'], ['other', 'Other']];
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function noteDay(iso) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return Number.isFinite(d.getTime()) ? `${WEEKDAYS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}` : '';
+}
+
+// The note, section by section, for the box. A result from before v3 has no
+// note: its short points are shown instead.
+export function noteHTML(r) {
+  const n = r?.note;
+  const li = (l) => `<li style="margin-bottom:3px">${esc(l.text)}${l.date ? ` <span style="color:var(--ink-3)">(${esc(noteDay(l.date))})</span>` : ''}</li>`;
+  const ul = (items) => `<ul style="list-style:disc;margin:0 0 8px 18px;padding:0;color:var(--ink-2);font:var(--t-xs)">${items.map(li).join('')}</ul>`;
+  const head = (t, color = 'var(--ink)') => `<p style="font:var(--t-xs);font-weight:700;color:${color};margin:8px 0 3px">${t}</p>`;
+  if (!n) return r?.points?.length ? ul(r.points) : '';
+  return [
+    n.red_flags?.length ? `<div class="rec-flags" style="border-left:3px solid var(--danger);padding:2px 0 2px 10px;margin:6px 0">${head('Red flags', 'var(--danger)')}${ul(n.red_flags)}</div>` : '',
+    n.spoke_with ? `<p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 0"><strong>Spoke with:</strong> ${esc(n.spoke_with.value)}</p>` : '',
+    ...NOTE_HEADS.map(([k, t]) => (n[k]?.length ? head(t) + ul(n[k]) : '')),
+  ].join('');
+}
+
+// Today plus n days in the phone's own calendar, YYYY-MM-DD. (toISOString is
+// UTC: the day before between midnight and 05:30 in India.)
+export function localDateIn(n) {
+  const d = new Date(); d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// The day the family agreed for the next call, YYYY-MM-DD, or null. Prompt v3
+// names the day itself (followup_on), so a recording added the day after the
+// call does not move it; older results only carry a count of days.
+export function suggestedFollowup(s) {
+  const on = s?.followup_on?.value;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(on || ''))) return String(on);
+  const days = Number(s?.followup_in_days?.value);
+  return Number.isInteger(days) && days >= 3 ? localDateIn(days) : null;
+}
+
+// The note goes into the call log's notes, always under a line saying it came
+// from the recording, so the saved record never passes AI text off as the
+// caller's own. Notes she already typed are kept above it; added once.
+export const NOTE_FROM_RECORDING = 'From the call recording (AI note):';
+export function appendNote(existing, note) {
+  const mine = String(existing || '').trim();
+  const add = String(note || '').trim();
+  if (!add || mine.includes(add)) return mine;
+  return mine ? `${mine}\n\n${NOTE_FROM_RECORDING}\n${add}` : `${NOTE_FROM_RECORDING}\n${add}`;
 }
 
 // ---------------------------------------------------------------- pure helpers
@@ -97,15 +154,20 @@ const fmtWhen = (ms) => new Date(ms).toLocaleString('en-IN', { day: 'numeric', m
 //   lastModified  the file's time (ms), when the phone gives one
 //   durationS     its length in seconds, when the browser can read it
 //   dialedAt      when she tapped the number in the Navigator (ms), if she did
+//   loggedAt      when the call was logged (ms), for a logged call reopened with no dial:
+//                 its recording can be from a little before (the log is written after
+//                 the call) or after it (a call back), so six hours either side of it
 //   callSeconds   the call's length from the timer or the typed minutes
-export function checkRecordingFile({ lastModified, durationS, dialedAt, callSeconds, now = Date.now() }) {
+export function checkRecordingFile({ lastModified, durationS, dialedAt, loggedAt = null, callSeconds, now = Date.now() }) {
   const problems = [];
   if (Number.isFinite(lastModified) && lastModified > 0) {
-    const earliest = dialedAt ? dialedAt - 2 * MINUTE : now - 6 * 60 * MINUTE;
+    const earliest = dialedAt ? dialedAt - 2 * MINUTE : loggedAt ? loggedAt - 6 * 60 * MINUTE : now - 6 * 60 * MINUTE;
     if (lastModified < earliest) {
       problems.push(dialedAt
         ? `This recording is from ${fmtWhen(lastModified)}, before this call (you dialled at ${fmtWhen(dialedAt)}).`
-        : `This recording is from ${fmtWhen(lastModified)}, more than six hours ago.`);
+        : loggedAt
+          ? `This recording is from ${fmtWhen(lastModified)}, more than six hours before this call was logged (${fmtWhen(loggedAt)}).`
+          : `This recording is from ${fmtWhen(lastModified)}, more than six hours ago.`);
     } else if (lastModified > now + 2 * MINUTE) {
       problems.push('This recording has a time in the future. Check it is the right file.');
     }
@@ -180,25 +242,35 @@ function phoneTipHTML(k) {
     : `${esc(p.label.split(' (')[0])}: your phone records by itself once automatic recording is on.`}</p>`;
 }
 
-export function openRecordingSetupGuide(onChosen = null) {
+// The phone picker and its steps, in any container: its own modal from the
+// Calling Portal, or inside the recording box when the box itself sits in a
+// modal (Edit call, Log a call), where opening a second modal would close the form.
+function guideHTML() {
   const current = savedPhone();
-  const options = Object.entries(PHONES).map(([k, p]) => `
-    <button type="button" class="btn ${k === current ? 'btn-primary' : 'btn-secondary'} rec-phone" data-phone="${k}" style="width:100%;justify-content:flex-start;text-align:left;margin-bottom:8px">${esc(p.label)}</button>`).join('');
-  const overlay = showModal({
-    title: 'Record calls on your phone',
-    content: `<p style="margin:0 0 12px;color:var(--ink-2)">Which phone do you call from? You do this once.</p>${options}<div id="rec-steps"></div>`,
-  });
+  return `<p style="margin:0 0 12px;color:var(--ink-2)">Which phone do you call from? You do this once.</p>
+    ${Object.entries(PHONES).map(([k, p]) => `
+    <button type="button" class="btn ${k === current ? 'btn-primary' : 'btn-secondary'} rec-phone" data-phone="${k}" style="width:100%;justify-content:flex-start;text-align:left;margin-bottom:8px;white-space:normal;height:auto">${esc(p.label)}</button>`).join('')}
+    <div class="rec-steps"></div>`;
+}
+function wireGuide(box, onChosen = null) {
   const show = (k) => {
     const p = PHONES[k]; if (!p) return;
     savePhone(k);
-    overlay.querySelectorAll('.rec-phone').forEach((b) => { b.className = `btn ${b.dataset.phone === k ? 'btn-primary' : 'btn-secondary'} rec-phone`; });
-    overlay.querySelector('#rec-steps').innerHTML = `
+    box.querySelectorAll('.rec-phone').forEach((b) => { b.className = `btn ${b.dataset.phone === k ? 'btn-primary' : 'btn-secondary'} rec-phone`; });
+    const steps = box.querySelector('.rec-steps');
+    if (steps) steps.innerHTML = `
       <ol style="list-style:decimal;margin:12px 0 8px 18px;padding:0;color:var(--ink-2)">${p.steps.map((s) => `<li style="margin-bottom:6px">${esc(s)}</li>`).join('')}</ol>
       <p style="font:var(--t-xs);color:var(--ink-3);margin:0">${esc(p.after)}</p>`;
     onChosen?.(k);
   };
-  overlay.querySelectorAll('.rec-phone').forEach((b) => b.addEventListener('click', () => show(b.dataset.phone)));
+  box.querySelectorAll('.rec-phone').forEach((b) => b.addEventListener('click', () => show(b.dataset.phone)));
+  const current = savedPhone();
   if (current) show(current);
+}
+
+export function openRecordingSetupGuide(onChosen = null) {
+  const overlay = showModal({ title: 'Record calls on your phone', content: guideHTML() });
+  wireGuide(overlay, onChosen);
 }
 
 // The first tap on a number in this call opens the reminder; its two buttons
@@ -244,15 +316,29 @@ function openReminder(href, ctx) {
 
 // ---------------------------------------------------------------- after the call
 // ctx: { patientId, get(): rec, set(rec), consentOnFile(): bool,
-//        callSeconds(): number, apply(result): string[] (labels filled) }
+//        callSeconds(): number, apply(result): string[] (labels filled),
+//        callAt?(): ms of the logged call, for the right-file check when there was no dial,
+//        consentHint?: where the general consent question is on this form,
+//        inline?: true when the box sits inside a modal (Edit call, Log a call):
+//                 the setup steps, "are you sure?" and the transcript then open
+//                 inside the box, because a second modal would close the form }
 // Returns { refresh() } for when the general consent changes.
 export function mountRecordingSection(el, ctx) {
   if (!el) return { refresh() {}, dispose() {} };
   let pendingFile = null;      // picked but not uploaded yet (a check asked first)
   let pendingProblems = [];
+  let pendingConfirm = null;   // inline "are you sure?": { text, label, run }
+  let guideOpen = false;       // inline setup steps
   let busy = false;
   let disposed = false;        // the call moved on: late answers must not touch the next family's form
   const sb = getSupabase();
+  const inline = !!ctx.inline;
+  // A question before something that cannot be undone: a modal on the portal, inside the box in a modal.
+  const confirmFirst = (text, label, run, title) => {
+    if (!inline) { confirmModal(text, run, { title, confirmLabel: label }); return; }
+    pendingConfirm = { text, label, run };
+    render();
+  };
 
   const update = (patch) => { if (disposed) return; ctx.set({ ...ctx.get(), ...patch }); render(); };
 
@@ -268,7 +354,16 @@ export function mountRecordingSection(el, ctx) {
     const rec = ctx.get();
     const btn = (id, label, kind = 'btn-secondary', ico = '') => `<button type="button" class="btn ${kind} btn-sm" id="${id}" style="gap:6px">${ico ? icon(ico) : ''}${label}</button>`;
     const small = (t, color = 'var(--ink-3)') => `<p style="font:var(--t-xs);color:${color};margin:6px 0 0">${t}</p>`;
-    const howto = `<button type="button" class="btn btn-ghost btn-sm" id="rec-howto" style="gap:6px;padding-left:0">${icon('info')}How to turn on recording on your phone</button>`;
+    const howto = `<button type="button" class="btn btn-ghost btn-sm" id="rec-howto" style="gap:6px;padding-left:0;white-space:normal;height:auto;text-align:left">${icon('info')}How to turn on recording on your phone</button>`;
+
+    if (pendingConfirm) {
+      el.innerHTML = card(`
+        <p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 10px"><strong>${esc(pendingConfirm.text)}</strong></p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">${btn('rec-confirm-no', 'Keep it')}${btn('rec-confirm-yes', esc(pendingConfirm.label), 'btn-danger')}</div>`, 'warn');
+      el.querySelector('#rec-confirm-no')?.addEventListener('click', () => { pendingConfirm = null; render(); });
+      el.querySelector('#rec-confirm-yes')?.addEventListener('click', async () => { const run = pendingConfirm?.run; pendingConfirm = null; render(); await run?.(); });
+      return;
+    }
 
     if (!rec.decision) {
       el.innerHTML = card(`
@@ -282,7 +377,7 @@ export function mountRecordingSection(el, ctx) {
         ${btn('rec-change', 'Change the answer', 'btn-ghost')}`, 'warn');
     } else if (!ctx.consentOnFile()) {
       el.innerHTML = card(`
-        <p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 8px">They agreed to the recording. Before it can be saved, they must also agree to us keeping notes: ask the consent question above first.</p>
+        <p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 8px">They agreed to the recording. Before it can be saved, they must also agree to us keeping notes: ${esc(ctx.consentHint || 'ask the consent question above first.')}</p>
         ${btn('rec-change', 'Change the answer', 'btn-ghost')}`, 'warn');
     } else if (pendingFile) {
       el.innerHTML = card(`
@@ -306,10 +401,10 @@ export function mountRecordingSection(el, ctx) {
     } else if (rec.status === 'done' && rec.result) {
       const r = rec.result;
       const filled = (rec.applied || []).length ? `Filled in below: ${esc(rec.applied.join(', '))}. Check them before you save.` : 'Nothing new to fill in: the form already had your answers.';
+      const note = noteHTML(r);
       el.innerHTML = card(`
         <p style="font:var(--t-xs);color:var(--ink-3);margin:6px 0 4px">Written by AI from the recording, not checked by a person.</p>
-        ${r.points?.length ? `<ul style="list-style:disc;margin:0 0 8px 18px;padding:0;color:var(--ink-2);font:var(--t-xs)">${r.points.map((p) => `<li style="margin-bottom:3px">${esc(p.text)}</li>`).join('')}</ul>`
-          : `<p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">${r.quality === 'no_speech' ? 'No conversation was heard in this recording.' : 'No summary could be made from this recording.'}</p>`}
+        ${note || `<p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">${r.quality === 'no_speech' ? 'No conversation was heard in this recording.' : 'No call note could be made from this recording.'}</p>`}
         <p style="font:var(--t-xs);color:var(--ok);margin:0 0 8px">${filled}</p>
         ${transcripts.has(rec.recordingId)
           ? `<details><summary style="cursor:pointer;font:var(--t-xs);color:var(--ink-2)">Show the transcript (${transcripts.get(rec.recordingId).length} turns${r.language ? `, ${esc(r.language)}` : ''})</summary>
@@ -324,6 +419,14 @@ export function mountRecordingSection(el, ctx) {
       el.innerHTML = card(`
         <p style="font:var(--t-xs);color:var(--danger);margin:6px 0 8px">${esc(rec.error || 'The transcript could not be made.')}</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap">${btn('rec-retry', 'Try again', 'btn-primary', 'refresh')}${btn('rec-remove', 'Remove recording', 'btn-ghost', 'trash')}</div>`, 'warn');
+    }
+    if (inline && guideOpen && el.querySelector('#rec-howto')) {
+      const g = document.createElement('div');
+      g.className = 'rec-guide';
+      g.style.cssText = 'margin-top:10px;padding-top:10px;border-top:1px solid var(--line)';
+      g.innerHTML = guideHTML();
+      el.querySelector('.rec-card')?.appendChild(g);
+      wireGuide(g);
     }
     wire();
   }
@@ -352,9 +455,9 @@ export function mountRecordingSection(el, ctx) {
   async function changeAnswer() {
     const rec = ctx.get();
     if (rec.recordingId) {
-      confirmModal('Remove the uploaded recording and answer again?', async () => {
+      confirmFirst('Remove the uploaded recording and answer again?', 'Remove and change', async () => {
         if (await removeRecording()) update({ decision: null, consentId: null });
-      }, { title: 'Change the answer', confirmLabel: 'Remove and change' });
+      }, 'Change the answer');
       return;
     }
     update({ decision: null, consentId: null });
@@ -372,7 +475,9 @@ export function mountRecordingSection(el, ctx) {
     const durationS = await readAudioDuration(file);
     if (!sameConsent(consentId)) return;
     const rec = ctx.get();
-    const check = checkRecordingFile({ lastModified: file.lastModified, durationS, dialedAt: rec.dialedAt, callSeconds: ctx.callSeconds() });
+    // No dial in the Navigator (a logged call reopened, a call back): measured from when the call was logged.
+    const loggedAt = rec.dialedAt ? null : (ctx.callAt?.() || null);
+    const check = checkRecordingFile({ lastModified: file.lastModified, durationS, dialedAt: rec.dialedAt, loggedAt, callSeconds: ctx.callSeconds() });
     file._jcf = { type, durationS };
     if (!check.ok) { pendingFile = file; pendingProblems = check.problems; render(); return; }
     await upload(file);
@@ -390,7 +495,7 @@ export function mountRecordingSection(el, ctx) {
       if (!sameConsent(consentId)) { busy = false; return; }
       ctx.set({ ...ctx.get(), recordingId: null, path: null });
     }
-    update({ status: 'uploading', fileName: file.name, error: null });
+    update({ status: 'uploading', fileName: file.name, durationS: durationS || null, error: null });
     try {
       const { data: opened, error } = await sb.rpc('start_call_recording', {
         p_consent_id: consentId, p_file_name: file.name, p_mime_type: type, p_size_bytes: file.size,
@@ -423,8 +528,10 @@ export function mountRecordingSection(el, ctx) {
     if (!sameRecording(id)) return;   // moved on or removed meanwhile: fill nothing
     if (res?.ok) {
       transcripts.set(id, res.transcript || []);
-      const result = { summary: res.summary, points: res.points || [], turns: (res.transcript || []).length,
-        suggestions: res.suggestions || {}, dropped: res.dropped || 0, quality: res.quality, language: res.language };
+      // note: the full call note by section (prompt v3); summary: the same note as the text the log keeps.
+      const result = { summary: res.summary, note: res.note || null, points: res.points || [], turns: (res.transcript || []).length,
+        suggestions: res.suggestions || {}, dropped: res.dropped || 0, quality: res.quality, language: res.language,
+        durationS: ctx.get().durationS || null };
       let applied = [];
       try { applied = ctx.apply(result) || []; } catch (e) { console.warn('[recording] could not fill the form:', e); }
       update({ status: 'done', result, applied });
@@ -485,14 +592,23 @@ export function mountRecordingSection(el, ctx) {
     el.querySelector('#rec-yes')?.addEventListener('click', () => answer('agreed'));
     el.querySelector('#rec-no')?.addEventListener('click', () => answer('declined'));
     el.querySelector('#rec-change')?.addEventListener('click', changeAnswer);
-    el.querySelector('#rec-howto')?.addEventListener('click', () => openRecordingSetupGuide(() => render()));
+    el.querySelector('#rec-howto')?.addEventListener('click', () => {
+      if (inline) { guideOpen = !guideOpen; render(); return; }
+      openRecordingSetupGuide(() => render());
+    });
     el.querySelector('#rec-file')?.addEventListener('change', (e) => picked(e.target.files?.[0]));
     el.querySelector('#rec-anyway')?.addEventListener('click', () => { const f = pendingFile; if (f) upload(f); });
     el.querySelector('#rec-repick')?.addEventListener('click', () => { pendingFile = null; pendingProblems = []; render(); el.querySelector('#rec-file')?.click(); });
     el.querySelector('#rec-retry')?.addEventListener('click', () => transcribe());
-    el.querySelector('#rec-read')?.addEventListener('click', () => openRecordingViewer(ctx.get().recordingId));
-    el.querySelector('#rec-remove')?.addEventListener('click', () => confirmModal('Remove this recording? The transcript goes with it.', removeRecording,
-      { title: 'Remove recording', confirmLabel: 'Remove' }));
+    el.querySelector('#rec-read')?.addEventListener('click', async () => {
+      const id = ctx.get().recordingId;
+      if (!inline) { openRecordingViewer(id); return; }
+      const { data, error } = await sb.from('call_recordings').select('transcript').eq('id', id).maybeSingle();
+      if (error || !Array.isArray(data?.transcript)) { showToast('The transcript could not be opened just now.', 'warning'); return; }
+      if (sameRecording(id)) { transcripts.set(id, data.transcript); render(); }
+    });
+    el.querySelector('#rec-remove')?.addEventListener('click', () => confirmFirst('Remove this recording? The transcript goes with it.', 'Remove',
+      removeRecording, 'Remove recording'));
   }
 
   // A reload in the middle (the phone's file picker can reload the page): ask
@@ -520,7 +636,8 @@ export async function attachRecordingToLog(callLogId, rec) {
 
 // ---------------------------------------------------------------- past calls
 // Fills <span class="rec-slot" data-log="<call_log id>"> with a Recording
-// button where one exists and the reader may hear it (RLS decides).
+// button where one exists and the reader may hear it (RLS decides). A slot
+// marked data-inline plays inside itself: it sits in a modal already.
 export async function decorateRecordings(container) {
   const slots = [...(container?.querySelectorAll('.rec-slot[data-log]') || [])];
   const ids = [...new Set(slots.map((s) => s.dataset.log).filter(Boolean))];
@@ -533,46 +650,122 @@ export async function decorateRecordings(container) {
     const r = byLog.get(slot.dataset.log);
     if (!r) continue;
     slot.innerHTML = `<button type="button" class="btn btn-ghost btn-sm" style="gap:5px;padding:2px 8px">${icon('play')}Recording</button>`;
-    slot.querySelector('button').addEventListener('click', () => openRecordingViewer(r.id));
+    slot.querySelector('button').addEventListener('click', () => {
+      if (slot.dataset.inline) renderRecordingViewer(slot, r.id);
+      else openRecordingViewer(r.id);
+    });
   }
 }
 
-export async function openRecordingViewer(recordingId) {
+// ---------------------------------------------------------------- a call that is already logged
+// Edit call and "Fix that log" (Fixboard #36): the family called back after a
+// "No answer", or the recording came later. Only the person who made the call
+// adds one (the file is on her phone, and attach_call_recording refuses anyone
+// else), within RECORDING_WINDOW_DAYS of it; a call that already has a
+// recording shows it instead. The box sits inside the Edit call modal, so it
+// runs inline. Returns { attach(), uploading(), dispose() } or null.
+//   log: the call_logs row (id, patient_id, caller_id, call_date)
+export async function mountLogRecording(el, { log, meId, consentOnFile, callSeconds, apply }) {
+  if (!el || !log?.id) return null;
+  const sb = getSupabase();
+  const note = (html, tone = 'neutral') => {
+    const border = tone === 'ok' ? 'var(--ok)' : 'var(--line)';
+    el.innerHTML = `<div class="followup rec-card" style="border-color:${border};padding:12px 14px">
+      <div class="fu-head">${icon('mic')}<span>Call recording</span></div>${html}</div>`;
+  };
+  const couldNotCheck = () => note(`<p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 0">This call's recording could not be checked just now. Close this and open the call again to add one.</p>`);
+  const { data: existing, error: exErr } = await sb.from('call_recordings').select('id').eq('call_log_id', log.id).limit(1);
+  // Unknown is not "none": offering an upload could put a second recording on the call.
+  if (exErr) { couldNotCheck(); return null; }
+  if (existing?.length) {
+    note(`<p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 8px">This call already has a recording.</p>
+      <div id="rec-inline-viewer"><button type="button" class="btn btn-secondary btn-sm" id="rec-open" style="gap:6px">${icon('play')}Play it and read the note</button></div>`, 'ok');
+    el.querySelector('#rec-open')?.addEventListener('click', () => renderRecordingViewer(el.querySelector('#rec-inline-viewer'), existing[0].id));
+    return null;
+  }
+  if (log.caller_id !== meId) {
+    note(`<p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 0">Only the person who made this call can add its recording, from their phone.</p>`);
+    return null;
+  }
+  // A "No" saved with this call stands (attach_call_recording refuses a "Yes"
+  // after it). Said here, before anything is uploaded or sent to be transcribed.
+  const { data: answers, error: ansErr } = await sb.from('call_recording_consents').select('decision').eq('call_log_id', log.id);
+  if (ansErr) { couldNotCheck(); return null; }
+  if (answers?.some((a) => a.decision === 'declined')) {
+    note(`<p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 0">The family said no to recording on this call, so no recording can be added to it. If they called back and agreed, log the call back as a new call: Log a call, on their page.</p>`);
+    return null;
+  }
+  const at = Date.parse(log.call_date);
+  if (!Number.isFinite(at) || Date.now() - at > RECORDING_WINDOW_DAYS * 86_400_000) {
+    note(`<p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 0">A recording can be added within ${RECORDING_WINDOW_DAYS} days of a call. This call was on ${esc(fmtWhen(at))}.</p>`);
+    return null;
+  }
+  let consent = consentOnFile;
+  if (typeof consent !== 'function') {
+    const { data: p } = await sb.from('patients').select('consent_given').eq('id', log.patient_id).maybeSingle();
+    consent = () => !!p?.consent_given;
+  }
+  let rec = blankRecording();
+  const section = mountRecordingSection(el, {
+    patientId: log.patient_id, inline: true,
+    get: () => rec, set: (r) => { rec = r; },
+    consentOnFile: consent, callSeconds, apply,
+    callAt: () => at,
+    consentHint: "tick their consent on the family's page first (Edit, then Consent), then come back here.",
+  });
+  return {
+    attach: (callLogId) => attachRecordingToLog(callLogId, rec),
+    answered: () => !!rec.consentId,
+    uploading: () => rec.status === 'uploading',
+    dispose: () => section.dispose(),
+  };
+}
+
+// A recording's player, call note and transcript, in a modal (the portal's
+// history) or inside any container (the Edit call modal, which a second modal would close).
+async function renderRecordingViewer(container, recordingId) {
   const sb = getSupabase();
   const { data: r, error } = await sb.from('call_recordings')
-    .select('id, storage_path, status, summary, transcript, duration_seconds, audio_deleted_at, created_at, language, uploaded_by')
+    .select('id, storage_path, status, summary, suggestions, transcript, duration_seconds, audio_deleted_at, created_at, language, uploaded_by')
     .eq('id', recordingId).maybeSingle();
-  if (error || !r) { showToast('This recording is not open to you.', 'warning'); return; }
+  if (error || !r) { showToast('This recording is not open to you.', 'warning'); return null; }
   const turns = Array.isArray(r.transcript) ? r.transcript : [];
-  const overlay = showModal({
-    title: 'Call recording',
-    size: 'lg',
-    content: `
+  const n = r.suggestions?.note || null;
+  container.innerHTML = `
       ${r.audio_deleted_at ? `<p style="color:var(--ink-2);margin:0 0 10px">The audio was deleted after 90 days. The transcript stays with the call.</p>`
-        : '<audio id="rec-audio" controls preload="none" style="width:100%;margin-bottom:10px"></audio>'}
+        : '<audio id="rec-audio" class="rec-audio" controls preload="none" style="width:100%;margin-bottom:10px"></audio>'}
       <p style="font:var(--t-xs);color:var(--ink-3);margin:0 0 8px">Recorded ${esc(fmtWhen(new Date(r.created_at).getTime()))}${r.duration_seconds ? ` · ${fmtDur(r.duration_seconds)}` : ''}${r.language ? ` · ${esc(r.language)}` : ''}. Only the caller, their managers and admins can open it.</p>
-      ${r.summary ? `<p style="margin:0 0 10px;color:var(--ink-2)"><strong>Summary (AI, not checked by a person):</strong> ${esc(r.summary)}</p>` : ''}
-      ${turns.length ? `<div style="max-height:320px;overflow-y:auto;border-top:1px solid var(--line);padding-top:8px">${turns.map((t) =>
-        `<p style="margin:0 0 6px"><strong>${t.speaker === 'caller' ? 'Caller' : t.speaker === 'family' ? 'Family' : 'Someone'}:</strong> ${esc(t.text)}</p>`).join('')}</div>`
-        : `<p style="color:var(--ink-3);margin:0">${r.status === 'done' ? 'No speech was found.' : 'No transcript yet.'}</p>`}`,
+      ${n ? `<div style="margin:0 0 10px"><p style="font:var(--t-xs);color:var(--ink-3);margin:0">Call note (AI, not checked by a person):</p>${noteHTML({ note: n })}</div>`
+        : r.summary ? `<p style="margin:0 0 10px;color:var(--ink-2);white-space:pre-line"><strong>Summary (AI, not checked by a person):</strong> ${esc(r.summary)}</p>` : ''}
+      ${turns.length ? `<details ${n ? '' : 'open'}><summary style="cursor:pointer;font:var(--t-xs);color:var(--ink-2)">The transcript (${turns.length} turns)</summary>
+        <div style="max-height:320px;overflow-y:auto;border-top:1px solid var(--line);padding-top:8px;margin-top:6px">${turns.map((t) =>
+        `<p style="margin:0 0 6px"><strong>${t.speaker === 'caller' ? 'Caller' : t.speaker === 'family' ? 'Family' : 'Someone'}:</strong> ${esc(t.text)}</p>`).join('')}</div></details>`
+        : `<p style="color:var(--ink-3);margin:0">${r.status === 'done' ? 'No speech was found.' : 'No transcript yet.'}</p>`}`;
+  if (!r.audio_deleted_at) wirePlayer(container.querySelector('.rec-audio'), r.storage_path);
+  return r;
+}
+
+export async function openRecordingViewer(recordingId) {
+  const overlay = showModal({ title: 'Call recording', size: 'lg', content: '<p style="color:var(--ink-3);margin:0">Opening the recording...</p>' });
+  const r = await renderRecordingViewer(overlay.querySelector('.modal-body'), recordingId);
+  if (!r) closeModal();
+}
+
+async function wirePlayer(audio, storagePath) {
+  if (!audio) return;
+  const sb = getSupabase();
+  const sign = async () => (await sb.storage.from(BUCKET).createSignedUrl(storagePath, SIGNED_URL_SECONDS)).data?.signedUrl || null;
+  const url = await sign();
+  if (!url) { audio.outerHTML = '<p style="color:var(--danger);margin:0 0 10px">The audio could not be opened just now.</p>'; return; }
+  audio.src = url;
+  // The link lasts five minutes; a longer listen asks for a fresh one and carries on.
+  let renewals = 0;
+  audio.addEventListener('error', async () => {
+    if (renewals++ >= 6 || !document.body.contains(audio)) return;
+    const at = audio.currentTime; const playing = !audio.paused;
+    const fresh = await sign();
+    if (!fresh) return;
+    audio.src = fresh; audio.currentTime = at;
+    if (playing) audio.play().catch(() => {});
   });
-  if (!r.audio_deleted_at) {
-    const audio = overlay.querySelector('#rec-audio');
-    const sign = async () => (await sb.storage.from(BUCKET).createSignedUrl(r.storage_path, SIGNED_URL_SECONDS)).data?.signedUrl || null;
-    const url = await sign();
-    if (!url) { if (audio) audio.outerHTML = '<p style="color:var(--danger);margin:0 0 10px">The audio could not be opened just now.</p>'; }
-    else if (audio) {
-      audio.src = url;
-      // The link lasts five minutes; a longer listen asks for a fresh one and carries on.
-      let renewals = 0;
-      audio.addEventListener('error', async () => {
-        if (renewals++ >= 6 || !document.body.contains(audio)) return;
-        const at = audio.currentTime; const playing = !audio.paused;
-        const fresh = await sign();
-        if (!fresh) return;
-        audio.src = fresh; audio.currentTime = at;
-        if (playing) audio.play().catch(() => {});
-      });
-    }
-  }
 }

@@ -34,6 +34,9 @@ import { openDocumentViewer, fmtDay, daysAgo } from '../components/docViewer.js'
 // renderLogForm, mountRecording() and applyRecordingSuggestions(), the upload
 // wait and attachRecordingToLog() in submitCallLog, and .rec-slot in history.
 import { blankRecording, guardDialLinks, mountRecordingSection, attachRecordingToLog, decorateRecordings, PRIVACY_LINE } from '../components/callRecording.js';
+// Names added for Fixboard #36 come through the namespace: a phone holding yesterday's
+// callRecording.js for a few minutes then gets undefined, not an app that never boots.
+import * as recordingNext from '../components/callRecording.js';
 // sql/172: families who asked HopeBot for a call. Footprint in this file: this
 // import, the #hb-requests div in mountReady() and the one call after it.
 import { mountHopebotRequests } from '../components/hopebotFamily.js';
@@ -985,16 +988,28 @@ function applyRecordingSuggestions(result) {
     if (!elx || !text || String(form[field] || '').trim()) return;
     elx.value = text; form[field] = text; filled.push(label);
   };
-  setIfEmpty('f-notes', 'notes', result.summary, 'General notes');
+  // The full call note (prompt v3, Fixboard #36): under notes already typed, once.
+  const notesBox = document.getElementById('f-notes');
+  const withNote = recordingNext.appendNote ? recordingNext.appendNote(form.notes, result.summary)
+    : (String(form.notes || '').trim() || String(result.summary || '').trim());
+  if (notesBox && withNote !== String(form.notes || '').trim()) {
+    notesBox.value = withNote; form.notes = withNote; filled.push('General notes (the full call note)');
+  }
   setIfEmpty('f-strategy', 'strategy', val('next_mentor_note'), 'Note for the next caregiver mentor');
   setIfEmpty('f-fb-patient', 'fbPatient', val('patient_feedback'), 'Feedback from patient');
   setIfEmpty('f-fb-caregiver', 'fbCaregiver', val('caregiver_feedback'), 'Feedback from caregiver');
-  const days = Number(val('followup_in_days'));
-  if (!form.dateManual && Number.isInteger(days) && days >= 3) {
-    // The phone's own calendar day: addDays() goes through UTC, which is the
-    // previous day between midnight and 05:30 in India.
-    const d = new Date(); d.setDate(d.getDate() + days);
-    let date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  // No clock and no typed minutes (dialled from another phone): the recording's length is the call's.
+  if (!timerRunning && !timerSeconds && result.durationS > 0) {
+    timerSeconds = Math.max(1, Math.ceil(result.durationS / 60)) * 60;
+    const mins = document.getElementById('t-mins'); if (mins) mins.value = String(timerSeconds / 60);
+    const t = document.getElementById('t-time'); if (t) t.textContent = fmtTimer(timerSeconds);
+    filled.push('Minutes talked (from the recording)');
+  }
+  const agreed = recordingNext.suggestedFollowup ? recordingNext.suggestedFollowup(s) : null;
+  if (!form.dateManual && agreed) {
+    // The phone's own calendar day (suggestedFollowup): addDays() goes through
+    // UTC, which is the previous day between midnight and 05:30 in India.
+    let date = agreed;
     // The same rule as a typed date (suggestFollowup): a connected call rests
     // at least 7 days, anything else at least 3.
     const minDate = addDays(form.dialStatus === 'connected' ? 7 : 3);

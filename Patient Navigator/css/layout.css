@@ -424,7 +424,7 @@
 .hist-row:last-child { border-bottom: none; }
 .hist-row .badge { flex: none; align-self: flex-start; }
 .hist-meta { font: var(--t-mono); font-size: 11px; color: var(--ink-2); font-weight: 600; }
-.hist-note { font: var(--t-sm); color: var(--ink-2); margin-top: 2px; line-height: 1.45; }
+.hist-note { font: var(--t-sm); color: var(--ink-2); margin-top: 2px; line-height: 1.45; white-space: pre-line; }
 
 .logform { display: flex; flex-direction: column; position: sticky; top: calc(var(--header-h) + var(--s5)); animation: riseIn var(--slow) var(--ease-out) 90ms both; }
 .lf-head { display: flex; align-items: baseline; justify-content: space-between; padding: var(--s5) var(--s6); border-bottom: 1px solid var(--line); }

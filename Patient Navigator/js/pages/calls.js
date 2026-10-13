@@ -24,6 +24,14 @@ import { sanitize } from '../utils/validators.js';
 import { navigate } from '../router.js';
 import { icon } from '../components/icons.js';
 import { CONDITIONS, DIAL_STATUSES, RECEPTIVENESS } from '../utils/catalog.js';
+// A namespace import, not named ones: for a few minutes after a deploy a phone
+// can pair this file with yesterday's callRecording.js, and a named import of a
+// name that file lacks stops the whole app at boot (tools/stale_import_check.mjs).
+// Missing names are undefined here instead, and the recording box waits for the new file.
+import * as recording from '../components/callRecording.js';
+
+// Outcomes where nobody was talked to: a recording of a conversation replaces them.
+const NOT_REACHED = ['no_answer', 'busy', 'voicemail'];
 
 const PAGE_SIZE = 25;
 let currentPage = 1;
@@ -348,7 +356,8 @@ function showCallDetail(c) {
     </div>
     ${reqs.length ? `<div style="margin-bottom:var(--s4)"><div class="lever-group-title" style="margin-bottom:6px">They asked for</div>
       <div class="chip-row">${reqs.map(r => `<span class="badge badge-gold">${sanitize(r)}</span>`).join('')}</div></div>` : ''}
-    ${c.caller_notes ? `<div style="margin-bottom:var(--s3)"><div class="lever-group-title" style="margin-bottom:6px">Notes</div><p style="font:var(--t-sm);color:var(--ink-2);margin:0">${sanitize(c.caller_notes)}</p></div>` : ''}
+    ${c.caller_notes ? `<div style="margin-bottom:var(--s3)"><div class="lever-group-title" style="margin-bottom:6px">Notes</div><p style="font:var(--t-sm);color:var(--ink-2);margin:0;white-space:pre-line">${sanitize(c.caller_notes)}</p></div>` : ''}
+    <div class="rec-slot" data-log="${sanitize(c.id)}" data-inline="1" style="margin-bottom:var(--s3)"></div>
     ${c.feedback_patient ? `<p style="font:var(--t-sm);font-style:italic;color:var(--ink-2);margin:0 0 6px">“${sanitize(c.feedback_patient)}” · patient</p>` : ''}
     ${c.feedback_caregiver ? `<p style="font:var(--t-sm);font-style:italic;color:var(--ink-2);margin:0 0 6px">“${sanitize(c.feedback_caregiver)}” · caregiver</p>` : ''}
     ${c.followup_strategy_notes ? `<div class="strategy" style="margin-top:var(--s3)"><div class="strategy-title" style="margin-bottom:4px">Note for the next caller</div><div class="strategy-body">${sanitize(c.followup_strategy_notes)}</div></div>` : ''}
@@ -359,6 +368,8 @@ function showCallDetail(c) {
     </div>
   `;
   showModal({ title: `Call · ${sanitize(c.patients?.full_name || '')}`, content: el, size: 'lg' });
+  // Its recording, for those allowed to hear it (RLS decides), played inside this sheet.
+  recording.decorateRecordings(el).catch((e) => console.warn('[calls] recording unavailable:', e.message));
   el.querySelector('#cd-close').addEventListener('click', () => closeModal());
   el.querySelector('#cd-edit')?.addEventListener('click', () => openEditCall(c));
   el.querySelector('#cd-open-patient')?.addEventListener('click', () => { closeModal(); navigate('patients/' + c.patients.id); });
@@ -405,6 +416,9 @@ export function openEditCall(c) {
       logged ${formatDateTime(c.call_date)} by ${sanitize(loggedBy(c))}.
       Leave anything you don't know exactly as it is.
     </p>
+    <!-- Fixboard #36: the family called back after a "No answer", so the call
+         is corrected here. Its recording is added here too (sql/193). -->
+    <div id="ec-rec-mount" style="margin-bottom:var(--s4)"></div>
     <div class="form-row">
       <div class="form-group">
         <label class="form-label">Call duration (minutes) <span class="req">*</span></label>
@@ -486,10 +500,79 @@ export function openEditCall(c) {
       <button class="btn btn-secondary" id="ec-cancel">Cancel</button>
       <button class="btn btn-primary" id="ec-save">${icon('check')}Save correction</button>
     </div>`;
-  showModal({ title: 'Edit call', content: el, size: 'lg' });
-  el.querySelector('#ec-cancel').addEventListener('click', () => closeModal());
+  // The recording of the call fills this form as it fills the portal's. A
+  // logged "No answer" talked to nobody, so a recording of a conversation
+  // replaces its outcome, minutes and next check-in. Everything else fills
+  // only what is empty, and the call note goes under notes already written.
+  const box = (id) => el.querySelector('#' + id);
+  const labelOf = (list, k) => list.find((o) => o.key === k)?.label || k;
+  const applyFromRecording = (result) => {
+    const s = result?.suggestions || {};
+    const v = (k) => s[k]?.value;
+    const filled = [];
+    const was = box('ec-status').value;
+    const said = v('dial_status');
+    if (said && said !== was && DIAL_STATUSES.some((o) => o.key === said)
+        && (!was || (NOT_REACHED.includes(was) && said === 'connected'))) {
+      box('ec-status').value = said;
+      filled.push(`Outcome: ${labelOf(DIAL_STATUSES, said)}${was ? ` (was ${labelOf(DIAL_STATUSES, was)})` : ''}`);
+    }
+    // Decided from the STORED outcome, not the box: she may already have
+    // switched it to Connected herself before uploading (the #36 flow), and the
+    // stored attempt's minutes and next try still have to go.
+    const reached = NOT_REACHED.includes(c.dial_status) && box('ec-status').value === 'connected';
+    const mins = result?.durationS ? Math.max(1, Math.ceil(result.durationS / 60)) : null;
+    if (mins && (reached || !Number(box('ec-duration').value))) {
+      box('ec-duration').value = String(mins);
+      const hint = box('ec-duration').parentElement?.querySelector('.due-meta');
+      if (hint) hint.textContent = `From the recording (${mins} min). Change it if the call was longer.`;
+      filled.push('Call duration (from the recording)');
+    }
+    if (!box('ec-recep').value && RECEPTIVENESS.some((o) => o.key === v('receptiveness'))) { box('ec-recep').value = v('receptiveness'); filled.push('How they were doing'); }
+    if (!box('ec-condition').value && CONDITIONS.some((o) => o.key === v('condition'))) { box('ec-condition').value = v('condition'); filled.push('How the patient is doing'); }
+    const asked = box('ec-asked').value.split(',').map((x) => x.trim()).filter(Boolean);
+    const more = (s.requirements || []).map((r) => r.value).filter((x) => x && !asked.includes(x));
+    if (more.length) { box('ec-asked').value = [...asked, ...more].join(', '); filled.push(`What they asked for (${more.join(', ')})`); }
+    const notes = recording.appendNote(box('ec-notes').value, result?.summary);
+    if (notes !== box('ec-notes').value.trim()) { box('ec-notes').value = notes; box('ec-notes').rows = 12; filled.push('Notes from the conversation (the full call note)'); }
+    const fillEmpty = (id, text, what) => { if (text && !box(id).value.trim()) { box(id).value = text; filled.push(what); } };
+    fillEmpty('ec-strategy', v('next_mentor_note'), 'Note for the next caregiver mentor');
+    fillEmpty('ec-fb-patient', v('patient_feedback'), 'Feedback from the patient');
+    fillEmpty('ec-fb-caregiver', v('caregiver_feedback'), 'Feedback from the caregiver');
+    // The portal's rule: a connected call rests at least 7 days, anything else 3.
+    const min = recording.localDateIn(box('ec-status').value === 'connected' ? 7 : 3);
+    const day = recording.suggestedFollowup(s);
+    if (day && (reached || !box('ec-followup').value)) {
+      box('ec-followup').value = day < min ? min : day;
+      filled.push(day < min ? 'Next check-in (the agreed day was sooner; a connected call rests 7 days)' : 'Next check-in');
+    } else if (reached && box('ec-followup').value && box('ec-followup').value < min) {
+      // No day agreed: the No answer's quick retry becomes the connected call's 7-day rest.
+      box('ec-followup').value = min;
+      filled.push('Next check-in (a connected call rests 7 days)');
+    }
+    return filled;
+  };
+
+  let recBox = null;
+  let closed = false;   // the sheet went: a box that finishes mounting later is dropped
+  const dropRecBox = () => { closed = true; recBox?.dispose(); recBox = null; };
+  showModal({ title: 'Edit call', content: el, size: 'lg', onClose: dropRecBox });
+  (recording.mountLogRecording ? recording.mountLogRecording(box('ec-rec-mount'), {
+    log: c, meId: getCurrentProfile()?.id,
+    // The stored minutes of a No answer are the ringing, not the call back: no length check against them.
+    callSeconds: () => (NOT_REACHED.includes(c.dial_status) ? 0 : (Number(box('ec-duration').value) || 0) * 60),
+    apply: applyFromRecording,
+  }) : Promise.resolve(null)).then((b) => { if (!closed) recBox = b; else b?.dispose(); })
+    .catch((e) => {
+      console.warn('[edit call] recording box:', e.message);
+      const m = box('ec-rec-mount');
+      if (m) m.innerHTML = '<p class="due-meta" style="margin:0">The call recording box could not open just now. Close this and open the call again to add a recording.</p>';
+    });
+  el.querySelector('#ec-cancel').addEventListener('click', () => { dropRecBox(); closeModal(); });
   el.querySelector('#ec-save').addEventListener('click', async () => {
     const txt = (id) => el.querySelector('#' + id).value.trim();
+    // A file still on its way would miss this call (as on the portal).
+    if (recBox?.uploading()) { showToast('The recording is still uploading. Wait a moment, then save.', 'warning', 6000); return; }
     const raw = txt('ec-duration');
     if (raw === '') { showToast('Enter the call duration in minutes', 'warning'); return; }
     const dur = Number(raw);
@@ -528,17 +611,25 @@ export function openEditCall(c) {
         requirements: askedNow.split(',').map(s => s.trim()).filter(Boolean) };
     }
 
-    if (!Object.keys(patch).length) { showToast('Nothing was changed', 'info'); return; }
+    // An answer about recording (and its file) still joins the call when nothing else changed.
+    const hasAnswer = !!recBox?.answered();
+    if (!Object.keys(patch).length && !hasAnswer) { showToast('Nothing was changed', 'info'); return; }
 
     const btn = el.querySelector('#ec-save');
     btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>Saving…';
     try {
-      const { data: saved, error } = await getSupabase().rpc('correct_call_log', { p_call_id: c.id, p_fields: patch });
-      if (error) throw error;
-      if (!saved) throw new Error('the server did not confirm the change, so nothing was saved');
-      Object.assign(c, saved);
+      if (Object.keys(patch).length) {
+        const { data: saved, error } = await getSupabase().rpc('correct_call_log', { p_call_id: c.id, p_fields: patch });
+        if (error) throw error;
+        if (!saved) throw new Error('the server did not confirm the change, so nothing was saved');
+        Object.assign(c, saved);
+      }
+      // sql/193: the family's answer and its recording join this call. Never
+      // blocks the correction; a failure says so (attachRecordingToLog).
+      const attached = hasAnswer ? await recBox.attach(c.id) : 0;
+      dropRecBox();
       closeModal();
-      showToast('Call corrected', 'success');
+      showToast(attached ? 'Call corrected, with its recording' : 'Call corrected', 'success');
       loadCalls();
     } catch (e) {
       showToast('Could not save: ' + e.message, 'error');
