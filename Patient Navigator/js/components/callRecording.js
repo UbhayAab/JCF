@@ -86,7 +86,10 @@ function noteDay(iso) {
 // note: its short points are shown instead.
 export function noteHTML(r) {
   const n = r?.note;
-  const li = (l) => `<li style="margin-bottom:3px">${esc(l.text)}${l.date ? ` <span style="color:var(--ink-3)">(${esc(noteDay(l.date))})</span>` : ''}</li>`;
+  // A red flag whose quote was not exact stays (guard.ts safety exception), marked, with where to listen.
+  const unverified = (l) => (l.unverified
+    ? ` <span style="color:var(--danger);font-weight:600">(red flag, quote not exact: listen to the recording${l.at ? ` at ${esc(l.at)}` : ''})</span>` : '');
+  const li = (l) => `<li style="margin-bottom:3px">${esc(l.text)}${l.date ? ` <span style="color:var(--ink-3)">(${esc(noteDay(l.date))})</span>` : ''}${unverified(l)}</li>`;
   const ul = (items) => `<ul style="list-style:disc;margin:0 0 8px 18px;padding:0;color:var(--ink-2);font:var(--t-xs)">${items.map(li).join('')}</ul>`;
   const head = (t, color = 'var(--ink)') => `<p style="font:var(--t-xs);font-weight:700;color:${color};margin:8px 0 3px">${t}</p>`;
   if (!n) return r?.points?.length ? ul(r.points) : '';
@@ -402,8 +405,12 @@ export function mountRecordingSection(el, ctx) {
       const r = rec.result;
       const filled = (rec.applied || []).length ? `Filled in below: ${esc(rec.applied.join(', '))}. Check them before you save.` : 'Nothing new to fill in: the form already had your answers.';
       const note = noteHTML(r);
+      // Only when it was actually filled: a condition she had already chosen is never replaced.
+      const critical = r.suggestions?.condition?.value === 'critical' && r.suggestions.condition.unverified
+        && (rec.applied || []).includes('How the patient is doing')
+        ?`<p style="font:var(--t-xs);color:var(--danger);font-weight:600;margin:6px 0 4px">"Critical" was filled in from words the AI could not match exactly. Listen to the recording before you save: a critical call alerts a supervisor.</p>` : '';
       el.innerHTML = card(`
-        <p style="font:var(--t-xs);color:var(--ink-3);margin:6px 0 4px">Written by AI from the recording, not checked by a person.</p>
+        <p style="font:var(--t-xs);color:var(--ink-3);margin:6px 0 4px">Written by AI from the recording, not checked by a person.</p>${critical}
         ${note || `<p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">${r.quality === 'no_speech' ? 'No conversation was heard in this recording.' : 'No call note could be made from this recording.'}</p>`}
         <p style="font:var(--t-xs);color:var(--ok);margin:0 0 8px">${filled}</p>
         ${transcripts.has(rec.recordingId)
