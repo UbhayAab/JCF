@@ -25,7 +25,7 @@ import { loadRoster, rosterSelectHTML, forgetRoster } from '../components/assign
 
 let rows = [];
 let digests = new Map(); // lead_id -> what they wrote, tags, summary (sql/172)
-let filter = 'new'; // new | contacted | all | nocaller (managers)
+let filter = 'new'; // new | contacted | all | nocaller (managers) | team
 let roster = null;  // managers: who can take a family (hopebot_assignable)
 let openReqs = new Map(); // lead_id -> open HopeBot request ids this person may log
 let searchQ = '';
@@ -48,6 +48,7 @@ export async function renderLeads(container) {
         <button type="button" class="fchip" data-f="contacted">Contacted</button>
         <button type="button" class="fchip" data-f="all">All</button>
         ${isManagerOrAdmin() ? '<button type="button" class="fchip" data-f="nocaller">No caller yet</button>' : ''}
+        <button type="button" class="fchip" data-f="team" title="Team members' own numbers: not families">Team</button>
       </div>
       <div class="table-search" style="max-width:420px;flex:1 1 260px">
         ${icon('search')}
@@ -81,8 +82,14 @@ async function load(container) {
     // Newest ACTIVITY first, not newest signup: when someone asks HopeBot for a
     // volunteer call, their lead is reopened with the request in `notes`, and
     // it has to come to the top instead of staying where it first landed.
-    const { data, error } = await getSupabase().from('hopebot_leads')
-      .select('*').order('updated_at', { ascending: false }).limit(300);
+    // is_team (sql/190): a team member's own number, matched live against
+    // confirmed numbers. Not a family: kept apart from the family lists.
+    let { data, error } = await getSupabase().from('hopebot_leads')
+      .select('*, is_team').order('updated_at', { ascending: false }).limit(300);
+    if (error && /is_team/.test(error.message || '')) {
+      ({ data, error } = await getSupabase().from('hopebot_leads')
+        .select('*').order('updated_at', { ascending: false }).limit(300));
+    }
     if (error) throw error;
     rows = data || [];
     // Only the calling roles read these; for anyone else this is simply empty.
@@ -110,7 +117,8 @@ async function load(container) {
 
 function visible() {
   return rows
-    .filter(r => filter === 'all' ? true : filter === 'contacted' ? r.contacted
+    .filter(r => filter === 'team' ? r.is_team : !r.is_team)
+    .filter(r => filter === 'all' || filter === 'team' ? true : filter === 'contacted' ? r.contacted
       : filter === 'nocaller' ? !r.patient_id && !r.assigned_to : !r.contacted)
     .filter(r => !searchQ || [r.name, r.phone, r.city, r.cancer_type, r.stage, r.notes, digests.get(r.id)?.summary]
       .filter(Boolean).join(' ').toLowerCase().includes(searchQ));
@@ -122,31 +130,35 @@ function paint(container) {
   container.querySelectorAll('#wl-filter .fchip').forEach(b =>
     b.classList.toggle('on', b.dataset.f === filter));
   const list = visible();
-  const fresh = rows.filter(r => !r.contacted).length;
+  const fresh = rows.filter(r => !r.contacted && !r.is_team).length;
   if (!list.length) {
     body.innerHTML = `<div class="card" style="padding:28px;text-align:center;color:var(--ink-3)">
-      ${fresh ? 'Nothing under this filter.' : 'No WhatsApp leads yet. They appear here when someone writes to HopeBot.'}</div>`;
+      ${filter === 'team' ? 'No team member has written to HopeBot from their own number.'
+        : fresh ? 'Nothing under this filter.' : 'No WhatsApp leads yet. They appear here when someone writes to HopeBot.'}</div>`;
     return;
   }
   body.innerHTML = `
-    <div class="due-meta" style="margin-bottom:8px">${fresh} new lead${fresh === 1 ? '' : 's'}</div>
+    <div class="due-meta" style="margin-bottom:8px">${filter === 'team'
+      ? `${list.length} team member${list.length === 1 ? '' : 's'} who wrote to HopeBot from their own number. Not families: HopeBot gives them the team menu.`
+      : `${fresh} new lead${fresh === 1 ? '' : 's'}`}</div>
     <div style="display:flex;flex-direction:column;gap:8px">
     ${list.map(r => `
       <div class="card" style="padding:12px 14px;${r.contacted ? 'opacity:.65' : ''}">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span style="font-weight:700">${sanitize(r.name || 'Unknown')}</span>
           <a class="tnum" href="tel:${sanitize(String(r.phone).replace(/[^+\d]/g, ''))}">${sanitize(r.phone)}</a>
-          ${r.contacted ? '<span class="badge badge-ok">Contacted</span>' : '<span class="badge badge-info">New</span>'}
+          ${r.is_team ? '<span class="badge badge-warn" title="Own number of a team member: not a family">Team</span>'
+            : r.contacted ? '<span class="badge badge-ok">Contacted</span>' : '<span class="badge badge-info">New</span>'}
           <span style="flex:1"></span>
           ${r.patient_id ? `<a class="due-meta" href="#patients/${sanitize(r.patient_id)}">Already a PN family</a>` : ''}
           <span class="due-meta">${r.last_message_at ? 'wrote ' + formatRelativeTime(r.last_message_at) : formatRelativeTime(r.updated_at || r.created_at)}</span>
-          ${openReqs.has(r.id)
+          ${r.is_team ? '' : openReqs.has(r.id)
             ? `<button class="btn btn-primary btn-sm" data-log-call="${sanitize(r.id)}" title="They asked HopeBot for a call: say what happened, and the request closes here and in HopeBot">Log the call</button>`
             : `<button class="btn ${r.contacted ? 'btn-secondary' : 'btn-primary'} btn-sm" data-lead="${r.id}" data-to="${r.contacted ? 0 : 1}">
             ${r.contacted ? 'Reopen' : 'Mark contacted'}
           </button>`}
         </div>
-        ${callerLine(r)}
+        ${r.is_team ? '' : callerLine(r)}
         <div class="due-meta" style="margin-top:4px">${[
           r.role === 'caregiver' ? 'Caregiver' : r.role === 'patient' ? 'Patient' : null,
           r.city && r.city !== 'other' ? sanitize(r.city) : 'City not pinned',
