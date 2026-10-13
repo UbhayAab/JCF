@@ -41,6 +41,8 @@ export function formatTeamPhone(n) {
 export async function confirmMyPhone(raw) {
   const { data, error } = await getSupabase().rpc('confirm_my_phone', { p_phone: raw });
   if (error) throw new Error(error.message);
+  // sql/192: a refusal is an answer, not an error, so the database can log it.
+  if (data?.refused) throw new Error(data.message || 'This number cannot be saved here.');
   const prof = getRealProfile();
   if (prof) {
     prof.phone = data.phone;

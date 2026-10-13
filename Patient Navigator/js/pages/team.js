@@ -116,7 +116,9 @@ async function loadPhoneNumbers() {
             <td style="white-space:normal;min-width:170px"><span class="badge ${r.must_save ? 'badge-danger' : 'badge-warn'}">${r.must_save ? 'Must save next time' : 'Not yet'}</span>
               <div class="hist-meta">${sanitize(askLine(r))}</div>
               ${r.must_save || r.refused_at ? `<button class="btn btn-ghost btn-sm phone-reset-btn" data-id="${sanitize(r.profile_id)}"
-                style="margin-top:4px">Give 3 more Laters</button>` : ''}</td>
+                style="margin-top:4px">Give 3 more Laters</button>` : ''}
+              <button class="btn btn-ghost btn-sm phone-confirm-btn" data-id="${sanitize(r.profile_id)}" data-name="${sanitize(r.full_name || '')}"
+                style="margin-top:4px" title="For a number they cannot save themselves, for example one that is also on a family's record">Confirm a number for them</button></td>
           </tr>`).join('')}
       </tbody>
     </table></div>` : '<div class="hist-meta">Nobody: every active member has confirmed.</div>'}
@@ -127,6 +129,7 @@ async function loadPhoneNumbers() {
         ${confirmed.map((r) => `
           <tr>${member(r)}
             <td style="white-space:normal;min-width:150px"><span class="badge badge-ok">Confirmed</span>
+              ${r.on_family_record ? '<div class="hist-meta" style="color:var(--warn-ink, inherit)">Also on the record of a family: HopeBot treats it as family first.</div>' : ''}
               <div class="hist-meta">ends in ${sanitize(r.phone_last4 || '')}, ${formatDate(r.confirmed_at)}</div></td>
           </tr>`).join('')}
       </tbody>
@@ -138,6 +141,65 @@ async function loadPhoneNumbers() {
     showToast('Done. They can put it off 3 more times.', 'success');
     if (content.isConnected) loadPhoneNumbers();
   }));
+  content.querySelectorAll('.phone-confirm-btn').forEach((btn) => btn.addEventListener('click', () => openConfirmForMember(btn.dataset.id, btn.dataset.name, content)));
+}
+
+// sql/191: a member cannot save a number that is on a family's record (a typo
+// or a shared phone would make HopeBot treat the family as team). When it
+// really is theirs, a manager confirms it here, on purpose, with a reason.
+function openConfirmForMember(id, name, content) {
+  const overlay = showModal({
+    title: `Confirm a number for ${sanitize(name || 'this member')}`,
+    content: `
+      <p class="muted" style="margin:0 0 12px">Use this only for their own WhatsApp number that they cannot save themselves, for example
+        because it is also on a family's record (they are that family's caregiver). HopeBot will treat this number as team.</p>
+      <div class="form-group"><label class="form-label" for="cfm-phone">Their WhatsApp number</label>
+        <input class="form-input" id="cfm-phone" type="tel" inputmode="tel" maxlength="20" placeholder="98765 43210" /></div>
+      <div class="form-group" style="margin-bottom:0"><label class="form-label" for="cfm-why">Why (kept in the record)</label>
+        <input class="form-input" id="cfm-why" maxlength="300" placeholder="Her own number; she is also the caregiver of a family we support" /></div>
+      <label id="cfm-family-ok" style="display:none;gap:8px;align-items:flex-start;margin-top:10px">
+        <input type="checkbox" id="cfm-family-yes" style="margin-top:3px" />
+        <span>This number is also on a family's record. Yes, it is still their own number, and HopeBot should treat it as team.</span></label>
+      <div class="form-error" id="cfm-err" role="alert" hidden style="margin-top:8px"></div>`,
+    footer: `<button type="button" class="btn btn-ghost" id="cfm-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="cfm-save">Confirm number</button>`,
+  });
+  const err = overlay.querySelector('#cfm-err');
+  const familyBox = overlay.querySelector('#cfm-family-ok');
+  const save = overlay.querySelector('#cfm-save');
+  overlay.querySelector('#cfm-cancel').addEventListener('click', () => closeModal());
+  // A yes given for one number never carries over to another.
+  overlay.querySelector('#cfm-phone').addEventListener('input', () => {
+    familyBox.style.display = 'none';
+    overlay.querySelector('#cfm-family-yes').checked = false;
+    save.textContent = 'Confirm number';
+    err.hidden = true;
+  });
+  save.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    let res;
+    try {
+      res = await getSupabase().rpc('confirm_member_phone', {
+      p_member: id, p_phone: overlay.querySelector('#cfm-phone').value.trim(), p_reason: overlay.querySelector('#cfm-why').value.trim(),
+      p_allow_family: familyBox.style.display !== 'none' && overlay.querySelector('#cfm-family-yes').checked,
+      });
+    } catch (x) {
+      res = { error: { message: 'Could not reach the server. Check the connection and try again.' } };
+    }
+    const { data, error } = res;
+    if (error) { err.textContent = error.message; err.hidden = false; btn.disabled = false; return; }
+    // sql/192: nothing is saved until the manager says yes to a family-record number.
+    if (data?.needs_family_ok) {
+      familyBox.style.display = 'flex';
+      err.textContent = 'Tick the box to confirm it anyway, or check the number.'; err.hidden = false;
+      btn.textContent = 'Confirm anyway'; btn.disabled = false;
+      return;
+    }
+    closeModal();
+    showToast(`Confirmed, ending in ${data?.phone_last4 || ''}.${data?.on_family_record ? ' It is also on a family’s record; that is noted.' : ''}`, 'success', 6000);
+    if (content.isConnected) loadPhoneNumbers();
+  });
 }
 
 const TEAM_TAB_KEY = 'pn_team_tab';
