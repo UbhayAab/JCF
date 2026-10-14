@@ -139,7 +139,7 @@ export function mountCallMeasurements(mount, patientId, { suggestions = [], reco
   if (getUserRole() === 'content' || !recordingId || !Array.isArray(suggestions)) { mount.innerHTML = ''; return { dispose() {} }; }
   suggestions = suggestions.filter((s) => s && typeof s === 'object' && (s.weight_kg != null || s.height_cm != null)).slice(0,12);
   if (!suggestions.length) return { dispose() {} };
-  mount.innerHTML = `<div style="border-top:1px solid var(--line);margin:12px 0;padding-top:12px"><strong>Measurements mentioned</strong><p class="due-meta">Review each suggestion, then save or skip it. Only entries marked saved are added to the family record.</p>${suggestions.map((_, i) => `<div data-call-measure="${i}" style="padding:10px 0;border-top:1px solid var(--line)"></div>`).join('')}</div>`;
+  mount.innerHTML = `<div class="pn-measures" style="border-top:1px solid var(--line);margin:12px 0;padding-top:12px"><strong>Measurements mentioned</strong><p class="due-meta">Review each suggestion, then save or skip it. Only entries marked saved are added to the family record.</p>${suggestions.map((_, i) => `<div data-call-measure="${i}" style="padding:10px 0;border-top:1px solid var(--line)"></div>`).join('')}</div>`;
   const editors = suggestions.map((s, i) => {
     state[i] ||= { values: { measured_on: s.measured_on || '', weight_kg: s.weight_kg ?? '', height_cm: s.height_cm ?? '' } };
     return mountMeasurementEditor(mount.querySelector(`[data-call-measure="${i}"]`), patientId, { suggestion: s, recordingId, state: state[i], allowed, sb, onStateChanged });
@@ -168,7 +168,7 @@ export async function mountMeasurements(mount, patient, { onSaved, sb = getSupab
     }
     if (!mount.isConnected) return;
     editor?.dispose();
-    mount.innerHTML = `<div class="card"><div class="card-header"><div class="card-title">Height and weight</div></div>${error ? `<p role="alert" class="due-meta">Could not load measurements. ${esc(error.message)}</p><button type="button" class="btn btn-secondary btn-sm" data-measure-retry>Try again</button>` : measurementHistoryHTML(data || [])}<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:600">Add or correct measurements</summary><div data-measure-editor style="margin-top:10px"></div></details></div>`;
+    mount.innerHTML = `<div class="card pn-measures"><div class="card-header"><div class="card-title">Height and weight</div></div>${error ? `<p role="alert" class="due-meta">Could not load measurements. ${esc(error.message)}</p><button type="button" class="btn btn-secondary btn-sm" data-measure-retry>Try again</button>` : measurementHistoryHTML(data || [])}<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:600">Add or correct measurements</summary><div data-measure-editor style="margin-top:10px"></div></details></div>`;
     mount.querySelector('[data-measure-retry]')?.addEventListener('click', load);
     editor = mountMeasurementEditor(mount.querySelector('[data-measure-editor]'), patient.id, { sb, onSaved: () => { if (onSaved) onSaved(); else load(); } });
   };

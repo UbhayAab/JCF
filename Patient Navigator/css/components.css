@@ -1426,6 +1426,8 @@ button { -webkit-tap-highlight-color: transparent; }
 .ci-fallback .ci-copy { color: #fff; }
 /* The number check is a sentence that decides what happens to the papers: phones wrap it, never cut it. */
 #ci-phone-status .due-meta { white-space: normal; overflow: visible; }
+/* Same for measurements: the call's quote and the overwrite warning are what a reviewer confirms. */
+.pn-measures .due-meta { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 #mode-camera { scroll-margin-top: calc(var(--header-h) + 12px); }
 .ci-next { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
 .ci-next[hidden] { display: none; }
