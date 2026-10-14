@@ -23,7 +23,7 @@ export async function mountDeceasedWork(mount, patientId) {
   const current = data.filter(r => !r.restored_at).length;
   mount.innerHTML = `<div class="card" style="margin-bottom:var(--s5)">
     <div class="card-header"><div class="card-title">Work after status change</div></div>
-    <p class="due-meta" style="margin:0 0 10px">${current
+    <p class="due-meta" style="margin:0 0 10px;white-space:normal;overflow:visible;text-overflow:clip">${current
       ? `${current} item${current === 1 ? '' : 's'} closed automatically when this patient was marked deceased.`
       : 'The deceased status was corrected. Unchanged care work was restored.'}
       Later changes are kept. Old invitations stay cancelled.</p>
