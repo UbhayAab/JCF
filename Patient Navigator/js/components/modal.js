@@ -34,6 +34,12 @@ export function showModal({ title, content, size = '', footer = '', onClose = nu
 
   document.body.appendChild(overlay);
   activeModal = overlay;
+  // Owned dialogs can finish asynchronously without dismissing a newer form.
+  // Properties keep the module exports compatible with cached callers.
+  overlay.isCurrentModal = () => activeModal === overlay;
+  overlay.closeOwnedModal = (onOwnedClose = null) => {
+    if (activeModal === overlay) closeModal(onOwnedClose);
+  };
   // Lets page-level bars step out of the way while a sheet is open. The PWA
   // install bar sat on top of every modal's action row on iPhones from 22 Sep
   // (it was z-index 9998, modals are 70) and hid "Save call" completely.

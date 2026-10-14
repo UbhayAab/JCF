@@ -23,6 +23,7 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
+import { getCurrentUser } from '../auth.js';
 import { CONFIG } from '../config.js';
 import { showModal, closeModal } from './modal.js';
 import { showToast } from './toast.js';
@@ -96,15 +97,19 @@ export async function sendHopeBotInvite(patientId, patientName = '') {
 
 /** Read every page the family sent on WhatsApp. Resolves true if an upload started. */
 export async function readWhatsappDocuments(patientId) {
+  const me = getCurrentUser()?.id;
+  if (!me) return false;
   const sb = getSupabase();
   const { data: rows, error } = await sb.from('whatsapp_documents')
     .select('id, storage_path, mime_type, file_name, received_at')
     .eq('patient_id', patientId).eq('status', 'waiting').order('received_at');
+  if (getCurrentUser()?.id !== me) return false;
   if (error) { showToast('Could not load what they sent: ' + error.message, 'error'); return false; }
   if (!rows?.length) { showToast('Nothing from WhatsApp is waiting for this family.', 'info'); return false; }
 
   const { data: signed, error: sErr } = await sb.storage.from('patient-docs')
     .createSignedUrls(rows.map((r) => r.storage_path), 600);
+  if (getCurrentUser()?.id !== me) return false;
   if (sErr) { showToast('Could not open what they sent: ' + sErr.message, 'error'); return false; }
   const files = [];
   for (const [i, r] of rows.entries()) {
@@ -112,20 +117,24 @@ export async function readWhatsappDocuments(patientId) {
     if (!url) continue;
     try {
       const blob = await (await fetch(url)).blob();
+      if (getCurrentUser()?.id !== me) return false;
       const ext = (r.storage_path.split('.').pop() || 'jpg').toLowerCase();
       files.push(new File([blob], r.file_name || `whatsapp-page-${i + 1}.${ext}`, { type: r.mime_type || blob.type }));
     } catch (e) { console.warn('[whatsappDocs] could not fetch', r.storage_path, e.message); }
   }
   if (!files.length) { showToast('Their pages could not be fetched. Try again in a minute.', 'error'); return false; }
 
-  const me = (await sb.auth.getUser()).data?.user?.id || null;
   const { uploadDocumentsFor } = await import('../pages/docBatch.js');
+  if (getCurrentUser()?.id !== me) return false;
   return await uploadDocumentsFor(patientId, files, {
     consentMethod: 'digital',
-    onBatch: async (batchId) => {
-      const { error: uErr } = await sb.from('whatsapp_documents')
+    onBatch: async (batchId, { sb: ownedClient = sb, check = () => {} } = {}) => {
+      check();
+      if (getCurrentUser()?.id !== me) return;
+      const { error: uErr } = await ownedClient.from('whatsapp_documents')
         .update({ status: 'read', batch_id: batchId, handled_by: me, handled_at: new Date().toISOString() })
         .in('id', rows.map((r) => r.id));
+      check();
       if (uErr) console.warn('[whatsappDocs] could not mark read:', uErr.message);
     },
   });

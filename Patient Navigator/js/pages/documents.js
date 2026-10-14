@@ -43,6 +43,7 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
+import { getCurrentUser } from '../auth.js';
 import { CONFIG } from '../config.js';
 import { showModal, closeModal } from '../components/modal.js';
 import { showToast } from '../components/toast.js';
@@ -154,11 +155,24 @@ export async function hasDocumentConsent(patientId) {
   return data === true;
 }
 
-export async function recordConsent(patientId, granted, method = 'verbal_during_call') {
+export async function recordConsent(patientId, granted, method = 'verbal_during_call', { expectedUserId = getCurrentUser()?.id, signal = null } = {}) {
   const sb = getSupabase();
-  const { error } = await sb.from('patient_consents').insert({
+  const check = () => {
+    if (!expectedUserId || getCurrentUser()?.id !== expectedUserId || signal?.aborted) throw new Error('The signed-in account changed. Nothing more was recorded.');
+  };
+  check();
+  const { data } = await sb.auth.getSession();
+  check();
+  if (data?.session?.user?.id !== expectedUserId || !data.session.access_token) throw new Error('Please sign in again before recording consent.');
+  const client = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: { headers: { Authorization: `Bearer ${data.session.access_token}` }, fetch: (url, options = {}) => {
+      check(); return fetch(url, { ...options, ...(signal ? { signal } : {}) });
+    } },
+  });
+  const { error } = await client.from('patient_consents').insert({
     patient_id: patientId, purpose: 'medical_documents',
-    granted, method, asked_by: (await sb.auth.getUser()).data?.user?.id,
+    granted, method, asked_by: expectedUserId,
   });
   if (error) throw error;
 }
@@ -167,7 +181,20 @@ export async function recordConsent(patientId, granted, method = 'verbal_during_
 // team's intake form asks in person at the hospital, not on a call (sql/147
 // added 'in_person'; before it, the only honest choice there was "In writing").
 export function askConsent(patientId, patientName, { preferred = null } = {}) {
+  const owner = getCurrentUser()?.id;
+  if (!owner) return Promise.resolve(null);
   return new Promise((resolve) => {
+    const controller = new AbortController();
+    let settled = false, subscription = null, watch = null;
+    const sameOwner = () => getCurrentUser()?.id === owner && !controller.signal.aborted;
+    const finish = (method) => {
+      if (settled) return;
+      settled = true;
+      subscription?.unsubscribe(); watch?.disconnect();
+      if (typeof overlay.closeOwnedModal === 'function') overlay.closeOwnedModal();
+      else if (overlay.classList.contains('active')) closeModal();
+      resolve(method);
+    };
     const el = document.createElement('div');
     el.innerHTML = `
       <p style="margin-bottom:12px">Before we photograph anything, ${sanitize(patientName)} or the
@@ -193,26 +220,43 @@ export function askConsent(patientId, patientName, { preferred = null } = {}) {
       const sel = el.querySelector('#dc-method');
       if ([...sel.options].some((o) => o.value === preferred)) sel.value = preferred;
     }
-    showModal({
+    const overlay = showModal({
       title: 'Consent to read documents', content: el, size: 'md',
       footer: `<button class="btn btn-ghost" id="dc-no">They said no</button>
                <button class="btn btn-primary" id="dc-yes">They agreed</button>`,
       // Closing with the cross or Esc is not an answer: nothing is recorded,
       // and the upload that asked stops instead of waiting forever.
-      onClose: () => resolve(null),
+      onClose: () => finish(null),
     });
-    document.getElementById('dc-no').addEventListener('click', async () => {
+    subscription = getSupabase().auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT' || (session?.user?.id && session.user.id !== owner)) {
+        controller.abort(); finish(null); overlay.remove();
+      }
+    }).data?.subscription;
+    watch = new MutationObserver(() => { if (!overlay.isConnected) finish(null); });
+    watch.observe(document.body, { childList: true });
+    overlay.querySelector('#dc-no').addEventListener('click', async () => {
+      if (!sameOwner()) { finish(null); return; }
+      overlay.querySelector('#dc-no').disabled = true;
+      overlay.querySelector('#dc-yes').disabled = true;
       const method = el.querySelector('#dc-method').value;
       try {
-        await recordConsent(patientId, false, method);
+        await recordConsent(patientId, false, method, { expectedUserId: owner, signal: controller.signal });
+        if (sameOwner()) showToast('Recorded that the family did not agree. Nothing was uploaded.', 'info');
       } catch (e) {
-        showToast('Could not record the refusal: ' + e.message, 'error');
+        if (sameOwner()) {
+          showToast('Could not record the refusal: ' + e.message, 'error');
+          overlay.querySelector('#dc-no').disabled = false;
+          overlay.querySelector('#dc-yes').disabled = false;
+        }
+        return;
       }
-      closeModal(); resolve(null);
+      finish(null);
     });
-    document.getElementById('dc-yes').addEventListener('click', () => {
+    overlay.querySelector('#dc-yes').addEventListener('click', () => {
+      if (!sameOwner()) { finish(null); return; }
       const m = el.querySelector('#dc-method').value;
-      closeModal(); resolve(m);
+      finish(m);
     });
   });
 }

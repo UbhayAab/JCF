@@ -57,7 +57,8 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
-import { beginDocumentTask } from '../components/documentReadTasks.js';
+import { getCurrentUser } from '../auth.js';
+import { beginDocumentTask, DocumentTaskStopped } from '../components/documentReadTasks.js';
 import { CONFIG } from '../config.js';
 import { showModal, closeModal } from '../components/modal.js';
 import { showToast } from '../components/toast.js';
@@ -700,7 +701,7 @@ function retryable(err) {
 }
 
 async function uploadBatch(patientId, files, stage, { asker = null, onLeftOut = null,
-                                                      isCancelled = null, onDrawn = null, onBatch = null } = {}) {
+                                                      isCancelled = null, onDrawn = null, onBatch = null, task = null } = {}) {
   // ---- draw every page first; nothing is written until there are some ----
   const prep = await prepareFiles(files, { stage, asker, onLeftOut, isCancelled });
   if (!prep.pages.length) {
@@ -709,19 +710,23 @@ async function uploadBatch(patientId, files, stage, { asker = null, onLeftOut = 
       : 'Nothing readable in those files', { fatal: true });
   }
   onDrawn?.();
+  task?.check();
   const { pages } = prep;
 
-  const sb = getSupabase();
-  const uid = (await sb.auth.getUser()).data?.user?.id;
+  const sb = task ? await task.client() : getSupabase();
+  const uid = task?.uid || (await sb.auth.getUser()).data?.user?.id;
   const { data: batch, error: bErr } = await sb.from('document_batches').insert({
     patient_id: patientId, uploaded_by: uid, source_files: prep.filesUsed, status: 'uploading',
   }).select('id').single();
   if (bErr) throw new Error('Could not start the upload: ' + bErr.message);
+  task?.check();
+  task?.attachBatch(batch.id);
 
   let dupes;
   try {
-    dupes = await storePages(sb, patientId, batch.id, pages, stage);
+    dupes = await storePages(sb, patientId, batch.id, pages, stage, task);
   } catch (err) {
+    task?.check();
     // never a row that says 'still uploading' about an upload that stopped
     await setBatchState(sb, batch.id, 'failed', NOTE_UPLOAD_STOPPED);
     throw err;
@@ -729,19 +734,25 @@ async function uploadBatch(patientId, files, stage, { asker = null, onLeftOut = 
   // The pages are stored, so the batch exists whatever the read does next.
   // WhatsApp papers link themselves here (whatsappDocs.js), before the long
   // read, so a closed tab can never leave them offered as unread twice.
-  if (onBatch) { try { await onBatch(batch.id); } catch (e) { console.warn('[docBatch] onBatch failed:', e.message); } }
+  if (onBatch) {
+    task?.check();
+    try { await onBatch(batch.id, { sb, check: () => task?.check() }); }
+    catch (e) { console.warn('[docBatch] onBatch failed:', e.message); }
+    task?.check();
+  }
 
-  const read = await readBatch(sb, batch.id, stage);
+  const read = await readBatch(sb, batch.id, stage, { task });
   return { ...read, dupes, pageCount: pages.length, leftOut: prep.leftOut, notes: prep.notes };
 }
 
 /** Hash, upload and record every page, unchanged from before the drawing moved
  *  ahead of it. Returns how many pages were byte identical duplicates. */
-async function storePages(sb, patientId, batchId, pages, stage) {
+async function storePages(sb, patientId, batchId, pages, stage, task = null) {
   // ---- drop byte identical duplicates before spending anything -----------
   const seen = new Map();
   for (const p of pages) {
     p.sha256 = await sha256Hex(p.full.blob);
+    task?.check();
     p.duplicate = seen.has(p.sha256);
     if (!p.duplicate) seen.set(p.sha256, true);
   }
@@ -750,12 +761,15 @@ async function storePages(sb, patientId, batchId, pages, stage) {
   // ---- upload ------------------------------------------------------------
   const rows = [];
   for (const [i, p] of pages.entries()) {
+    task?.check();
     stage(`Uploading page ${i + 1} of ${pages.length}…`, 0.3 + (i / pages.length) * 0.25);
     const stem = `${patientId}/${batchId}/p${String(i).padStart(3, '0')}`;
     const bytes = new Uint8Array(await p.full.blob.arrayBuffer());
+    task?.check();
     const { error: e1 } = await sb.storage.from('patient-docs')
       .upload(`${stem}.jpg`, bytes, { contentType: 'image/jpeg', upsert: false });
     if (e1) throw new Error('Upload failed: ' + e1.message);
+    task?.check();
     const tbytes = new Uint8Array(await p.thumb.blob.arrayBuffer());
     await sb.storage.from('patient-docs')
       .upload(`${stem}_t.jpg`, tbytes, { contentType: 'image/jpeg', upsert: false });
@@ -769,17 +783,21 @@ async function storePages(sb, patientId, batchId, pages, stage) {
       byte_size: bytes.length, sha256: p.sha256,
     });
   }
+  task?.check();
   const { data: inserted, error: pErr } = await sb.from('document_pages')
     .insert(rows).select('id, page_index, sha256');
   if (pErr) throw new Error('Could not record the pages: ' + pErr.message);
+  task?.check();
 
   // mark the duplicates now that every page has an id
   const firstBySha = {};
   for (const r of inserted.sort((a, b) => a.page_index - b.page_index)) {
+    task?.check();
     if (firstBySha[r.sha256] === undefined) firstBySha[r.sha256] = r.id;
     else await sb.from('document_pages').update({ duplicate_of: firstBySha[r.sha256] }).eq('id', r.id);
   }
 
+  task?.check();
   await sb.from('document_batches')
     .update({ status: 'segmenting', page_count: pages.length }).eq('id', batchId);
   return dupes;
@@ -1097,16 +1115,19 @@ async function claimBatch(sb, batch, nextStatus) {
 }
 
 /** Pick a stopped batch up from wherever it stopped. */
-async function resumeBatch(sb, batch, stage) {
+async function resumeBatch(sb, batch, stage, task = null) {
+  task?.check();
   // someone may be driving it right now, in another tab or on another phone
   const { data: runs } = await sb.from('document_parse_runs')
     .select('status, started_at').eq('batch_id', batch.id);
+  task?.check();
   const live = (runs || []).some((r) => r.status === 'pending'
     && Date.now() - Date.parse(r.started_at) < STALLED_AFTER_MS);
   if (live) throw new Error('This upload is still being read somewhere else. Try again in a few minutes.');
 
   const { count } = await sb.from('document_pages')
     .select('id', { count: 'exact', head: true }).eq('batch_id', batch.id);
+  task?.check();
   if (!count && !(await typedNotes(sb, batch.id)).length) {
     await setBatchState(sb, batch.id, 'failed', NOTE_UPLOAD_STOPPED);
     throw new Error('This upload has no stored pages, so there is nothing to finish. Pick the files again.');
@@ -1117,7 +1138,8 @@ async function resumeBatch(sb, batch, stage) {
     throw new Error('Someone else is finishing this upload right now. Try again in a few minutes.');
   }
 
-  const read = await readBatch(sb, batch.id, stage, { resume: true });
+  const read = await readBatch(sb, batch.id, stage, { resume: true, task });
+  task?.check();
   // the claim is over; segment has already cleared it when it ran
   await sb.from('document_batches').update({ note: null })
     .eq('id', batch.id).like('note', `${CLAIM_PREFIX}%`);
@@ -1687,7 +1709,18 @@ export function collect(root, docs) {
 // The progress window, shared by a new upload and a resumed one.
 // Exported for tools/pdf_password_check.html, which drives it at phone width.
 // ============================================================
-export function openProgress(title, fileCount, onUserClose = null) {
+function ownsModal(overlay) {
+  return typeof overlay?.isCurrentModal === 'function'
+    ? overlay.isCurrentModal() : !!overlay?.classList.contains('active');
+}
+function closeOwnedModal(overlay) {
+  if (typeof overlay?.closeOwnedModal === 'function') overlay.closeOwnedModal();
+  else if (ownsModal(overlay)) closeModal();
+}
+
+export function openProgress(title, fileCount, onUserClose = null, { onBackground = null } = {}) {
+  let closing = false;
+  const userClosed = () => { if (!closing) onUserClose?.(); };
   const busy = document.createElement('div');
   busy.innerHTML = `
     <div class="doc-progress">
@@ -1701,19 +1734,20 @@ export function openProgress(title, fileCount, onUserClose = null) {
       <strong>${icon('info')} Left out of this upload</strong>
       <ul style="margin:6px 0 0 18px;list-style:disc;display:grid;gap:4px"></ul>
     </div>`;
-  const overlay = showModal({ title, content: busy, size: 'md', onClose: onUserClose });
+  const overlay = showModal({ title, content: busy, size: 'md', onClose: userClosed,
+    footer: onBackground ? '<button class="btn btn-primary" data-doc-background disabled>Carry on working</button>' : '' });
   if (onUserClose) {
     // Another dialog opening removes this one WITHOUT onClose. While a
     // password question may be open, losing the window has to mean stop, or
     // the upload would wait for ever for an answer nobody can give.
     const watch = new MutationObserver(() => {
-      if (!overlay.isConnected) { watch.disconnect(); onUserClose(); }
+      if (!overlay.isConnected) { watch.disconnect(); userClosed(); }
     });
     watch.observe(document.body, { childList: true });
   }
   const stage = (msg, frac) => {
-    const n = document.getElementById('dbp-stage');
-    const b = document.getElementById('dbp-bar');
+    const n = busy.querySelector('#dbp-stage');
+    const b = busy.querySelector('#dbp-bar');
     if (n) n.textContent = msg;
     if (b && frac != null) b.style.width = `${Math.round(Math.min(1, frac) * 100)}%`;
   };
@@ -1724,7 +1758,19 @@ export function openProgress(title, fileCount, onUserClose = null) {
     li.textContent = item.reason;
     box.querySelector('ul').appendChild(li);
   };
-  return { stage, leftOut, asker: makePasswordAsker(busy.querySelector('[data-pw-host]')) };
+  const background = overlay.querySelector('[data-doc-background]');
+  background?.addEventListener('click', () => onBackground?.());
+  return {
+    stage, leftOut, overlay, asker: makePasswordAsker(busy.querySelector('[data-pw-host]')),
+    isCurrent: () => ownsModal(overlay),
+    close: () => { closing = true; closeOwnedModal(overlay); },
+    stop: () => { closing = true; closeOwnedModal(overlay); overlay.remove(); },
+    allowBackground: () => {
+      if (background) background.disabled = false;
+      const hint = busy.querySelector('.form-hint');
+      if (hint) hint.textContent = 'Carry on working while we read. Keep this tab open; we will offer Review when it is ready.';
+    },
+  };
 }
 
 // ============================================================
@@ -1767,29 +1813,39 @@ function readFrom(pageCount, hasTyped) {
   return pagesText ? `${pagesText} and the notes typed at intake` : 'the notes typed at intake';
 }
 
-async function showBatchReview(sb, patient, patientId, result) {
+async function showBatchReview(sb, patient, patientId, result, { task = null, progress = null } = {}) {
+  task?.check();
+  patient = await loadPatient(sb, patientId);
+  task?.check();
+  if (!patient) throw new Error('Could not refresh the patient for review. Nothing was changed. Try Review now again.');
   // ---- load everything the review needs -------------------------------
   const { data: view, error: viewErr } = await sb.from('v_batch_documents')
     .select('*').eq('batch_id', result.batchId).order('doc_index');
+  task?.check();
   const { data: extractions, error: exErr } = await sb.from('document_extractions')
     .select('id, document_id, status, fields, summary_text, identity_check, legibility, doc_class')
     .eq('batch_id', result.batchId);
+  task?.check();
   const { data: validations, error: valErr } = await sb.from('document_validations')
     .select('extraction_id, code, severity, message, fields, detail')
     .eq('batch_id', result.batchId);
+  task?.check();
   const { data: pages, error: pageErr } = await sb.from('document_pages')
     .select('id, document_id, page_index, thumb_path, storage_path')
     .eq('batch_id', result.batchId).order('page_index');
+  task?.check();
   // notes typed at intake (sql/195) are shown as typed, where pages would be
   const { data: typedRows, error: typedErr } = await sb.from('patient_documents')
     .select('id, typed_text, uploaded_at')
     .eq('batch_id', result.batchId).eq('doc_type', 'intake_notes');
   const loadErr = viewErr || exErr || valErr || pageErr || typedErr;
   if (loadErr) throw new Error('Could not load the review. Nothing was changed. Try Review now again. ' + loadErr.message);
+  task?.check();
 
   // signed URLs for the thumbnails, so a mentor can see the field in context
   const signed = {};
   for (const p of pages || []) {
+    task?.check();
     const { data } = await sb.storage.from('patient-docs')
       .createSignedUrl(p.thumb_path || p.storage_path, 3600).catch(() => ({ data: null }));
     if (data?.signedUrl) signed[p.id] = data.signedUrl;
@@ -1818,13 +1874,22 @@ async function showBatchReview(sb, patient, patientId, result) {
     };
   }).filter((d) => d.extraction);
 
+  task?.check();
   if (!docs.length) {
-    closeModal();
+    progress?.close();
     // Left at 'ready_for_review' it would ask for a review with nothing in it
     // every time anyone opened it. As 'failed' it offers Finish reading.
     await setBatchState(sb, result.batchId, 'failed', NOTE_READ_STOPPED);
+    task?.set('failed', 'No readable result came back. The stored sources are kept.',
+      () => openExistingBatch(result.batchId), 'Finish reading');
     showToast('Nothing readable came back. The pages are still on file, and Upload documents '
       + 'on this patient can try reading them again.', 'error', 10000);
+    return;
+  }
+
+  task?.check();
+  if (task && progress && !progress.isCurrent()) {
+    taskReady(task, patient, patientId, result);
     return;
   }
 
@@ -1848,16 +1913,30 @@ async function showBatchReview(sb, patient, patientId, result) {
     ${renderConflicts(result.merged?.conflicts)}
     ${docs.map((d, i) => docCard(d, patient, d.thumbs, i, d.audit)).join('')}`;
 
-  closeModal();
+  if (progress) progress.close();
+  else closeModal();
   const overlay = showModal({
     title: 'What we read', content: el, size: 'xl',
     footer: `<button class="btn btn-ghost" id="db-discard">Discard all</button>
              <button class="btn btn-primary" id="db-save">Save what I ticked</button>`,
     // Closing this used to be the end of the read: the batch stayed 'ready for
     // review' and nothing anywhere opened it again. Two sat for 16 and 26 days.
-    onClose: () => showToast('Not saved yet. Nothing is lost: Upload documents on this patient '
-      + 'opens this review again.', 'info', 8000),
+    onClose: () => {
+      if (task?.state === 'saving') return;
+      if (task?.active()) taskReady(task, patient, patientId, result);
+      showToast('Not saved yet. Nothing is lost: Documents on this patient opens this review again.', 'info', 8000);
+    },
   });
+  if (task) {
+    task.set('reviewing', 'Review open. Tick fields, then Save what I ticked.');
+    task.onStop = () => { closeOwnedModal(overlay); overlay.remove(); };
+    const watch = new MutationObserver(() => {
+      if (overlay.isConnected) return;
+      watch.disconnect();
+      if (task.active() && task.state === 'reviewing') taskReady(task, patient, patientId, result);
+    });
+    watch.observe(document.body, { childList: true });
+  }
 
   overlay.querySelector('#db-accept-high').addEventListener('click', () => {
     let n = 0;
@@ -1883,27 +1962,44 @@ async function showBatchReview(sb, patient, patientId, result) {
   });
 
   overlay.querySelector('#db-discard').addEventListener('click', async () => {
-    await sb.from('document_batches')
+    if (task && !task.active()) return;
+    const { error } = await sb.from('document_batches')
       .update({ status: 'discarded', reviewed_at: new Date().toISOString() })
       .eq('id', result.batchId);
-    closeModal();
+    if (task && !task.active()) return;
+    if (error) { showToast('Could not discard: ' + sanitize(error.message), 'error'); return; }
+    closeOwnedModal(overlay);
+    task?.remove();
     showToast('Discarded. The pages are still on file.', 'info');
   });
 
   overlay.querySelector('#db-save').addEventListener('click', async (ev) => {
+    if (task && !task.active()) return;
     const btn = ev.currentTarget;
     btn.disabled = true;
     btn.innerHTML = '<div class="spinner"></div> Saving…';
     const accepted = collect(el, docs);
+    const conflicts = selectedPatientConflicts(accepted);
+    if (conflicts.length) {
+      btn.disabled = false; btn.textContent = 'Save what I ticked';
+      showToast(`Different values were ticked for ${conflicts.join(', ')}. Keep one value ticked for each field.`, 'warning', 10000);
+      return;
+    }
+    task?.set('saving', 'Saving the checked details...');
     const { data, error: applyErr } = await sb.rpc('apply_document_batch', {
       p_batch_id: result.batchId, p_accepted: accepted,
     });
+    if (task && !task.active()) return;
     if (applyErr) {
       btn.disabled = false; btn.textContent = 'Save what I ticked';
       showToast(sanitize(applyErr.message), 'error');
+      if (task) {
+        if (ownsModal(overlay)) task.set('reviewing', 'Not saved. Check the error and try again.');
+        else taskReady(task, patient, patientId, result);
+      }
       return;
     }
-    closeModal();
+    closeOwnedModal(overlay);
     const parts = [];
     const say = (k, one, many) => {
       const n = Number(data?.[k] || 0);
@@ -1911,6 +2007,9 @@ async function showBatchReview(sb, patient, patientId, result) {
     };
     say('patient_fields', 'field');
     say('cycles', 'cycle'); say('medications', 'medicine');
+    say('procedures', 'procedure');
+    const regimens = Object.values(accepted).filter((p) => p.regimen?.regimen_name).length;
+    if (regimens) parts.push(`${regimens} treatment plan${regimens === 1 ? '' : 's'}`);
     say('lab_results', 'lab result'); say('biomarkers', 'biomarker');
     say('anthropometry', 'measurement'); say('cost_certificates', 'cost certificate');
     say('imaging', 'imaging report'); say('pathology', 'pathology report');
@@ -1919,7 +2018,34 @@ async function showBatchReview(sb, patient, patientId, result) {
     showToast(parts.length ? `Saved ${parts.join(', ')}` : 'Nothing was ticked',
               parts.length ? 'success' : 'info');
     window.dispatchEvent(new CustomEvent('patient-updated', { detail: { patientId } }));
+    task?.set('saved', parts.length ? `Saved ${parts.join(', ')}. Open the record to see the updated details.` : 'Review saved. No values were selected.',
+      () => { window.location.hash = `patients/${patientId}`; }, 'Open patient');
   });
+}
+
+export function selectedPatientConflicts(accepted) {
+  const values = new Map(), conflicts = new Set();
+  for (const payload of Object.values(accepted)) {
+    for (const [field, value] of Object.entries(payload.patients || {})) {
+      const normalized = JSON.stringify(value);
+      if (values.has(field) && values.get(field) !== normalized) conflicts.add(field.replace(/_/g, ' '));
+      values.set(field, normalized);
+    }
+  }
+  return [...conflicts];
+}
+
+function taskReady(task, patient, patientId, result) {
+  task.set('ready', 'Read and ready for review. Nothing has been saved to the patient yet.', async () => {
+    task.check();
+    const progress = openProgress('Opening the review', 0, () => taskReady(task, patient, patientId, result));
+    task.onStop = () => progress.stop();
+    try { await showBatchReview(await task.client(), patient, patientId, result, { task, progress }); }
+    catch (e) {
+      progress.close();
+      if (task.active()) { taskReady(task, patient, patientId, result); showToast(sanitize(e.message), 'error', 10000); }
+    }
+  }, 'Review now');
 }
 
 // ============================================================
@@ -2002,11 +2128,23 @@ function unfinishedRow(b) {
 
 /** Resolves with the batch to continue, { action: 'upload' }, or null when
  *  the window was closed. Discard happens here and the list repaints. */
-function chooseUnfinished(sb, list) {
+function chooseUnfinished(sb, list, task) {
   return new Promise((resolve) => {
     let open = [...list];
     let settled = false;
-    const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
+    let watch = null;
+    let overlay = null;
+    const previousStop = task.onStop;
+    const stop = () => { finish(null); overlay?.remove(); };
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      watch?.disconnect();
+      if (task.onStop === stop) task.onStop = previousStop;
+      closeOwnedModal(overlay);
+      resolve(value);
+    };
+    const current = () => !settled && task.active() && ownsModal(overlay);
     const el = document.createElement('div');
     const paint = () => {
       el.innerHTML = `<p style="margin:0 0 12px">${open.length
@@ -2018,38 +2156,66 @@ function chooseUnfinished(sb, list) {
     el.addEventListener('click', async (ev) => {
       const btn = ev.target.closest('[data-go]');
       const batch = btn && open.find((b) => b.id === btn.dataset.batch);
-      if (!batch) return;
-      if (btn.dataset.go !== 'discard') { closeModal(); finish(batch); return; }
+      if (!batch || !current()) return;
+      if (btn.dataset.go !== 'discard') { finish(batch); return; }
       btn.disabled = true;
-      const { error } = await sb.from('document_batches')
-        .update({ status: 'discarded', reviewed_at: new Date().toISOString() }).eq('id', batch.id);
-      if (error) { btn.disabled = false; showToast(sanitize(error.message), 'error'); return; }
-      open = open.filter((b) => b.id !== batch.id);
-      showToast('Discarded. The pages are still on file.', 'info');
-      paint();
+      try {
+        task.check();
+        const { error } = await sb.from('document_batches')
+          .update({ status: 'discarded', reviewed_at: new Date().toISOString() }).eq('id', batch.id);
+        task.check();
+        if (!current()) return;
+        if (error) throw error;
+        open = open.filter((b) => b.id !== batch.id);
+        showToast('Discarded. The pages are still on file.', 'info');
+        paint();
+      } catch (e) {
+        if (!current()) return;
+        btn.disabled = false;
+        showToast(sanitize(e.message || 'Could not discard that upload'), 'error');
+      }
     });
-    showModal({
+    task.check();
+    overlay = showModal({
       title: 'Earlier uploads for this patient', content: el, size: 'md',
       footer: '<button class="btn btn-primary" id="dbu-new">Upload new documents</button>',
       onClose: () => finish(null),
     });
-    document.getElementById('dbu-new').addEventListener('click', () => {
-      closeModal();
+    task.onStop = stop;
+    watch = new MutationObserver(() => { if (!ownsModal(overlay)) finish(null); });
+    watch.observe(document.body, { childList: true });
+    overlay.querySelector('#dbu-new').addEventListener('click', () => {
+      if (!current()) return;
       finish({ action: 'upload' });
     });
   });
 }
 
 async function continueBatch(sb, patient, patientId, batch) {
-  const ui = openProgress(batch.action === 'review' ? 'Opening the review' : 'Finishing the read', 0);
+  const task = beginDocumentTask(patient.full_name || patient.patient_code, patientId, { batchId: batch.id });
+  let background = false;
+  let ui;
+  const hide = () => { background = true; ui.close(); };
+  ui = openProgress(batch.action === 'review' ? 'Opening the review' : 'Finishing the read', 0,
+    hide, { onBackground: hide });
+  ui.allowBackground();
+  task.onStop = () => ui.stop();
   try {
+    sb = await task.client();
+    const stage = (message, frac) => { task.set('running', message); ui.stage(message, frac); };
+    task.set('running', batch.action === 'review' ? 'Opening the review...' : 'Finishing the read...');
     const result = batch.action === 'review'
       ? await loadBatchState(sb, batch)
-      : await resumeBatch(sb, batch, ui.stage);
-    await showBatchReview(sb, patient, patientId, result);
+      : await resumeBatch(sb, batch, stage, task);
+    task.check();
+    if (background || !ui.isCurrent()) { ui.close(); taskReady(task, patient, patientId, result); }
+    else await showBatchReview(sb, patient, patientId, result, { task, progress: ui });
   } catch (e) {
-    closeModal();
-    showToast(sanitize(e.message || 'Could not finish reading those documents'), 'error', 12000);
+    ui.close();
+    if (!task.active()) return;
+    task.set('failed', e.message || 'Reading stopped. Your stored pages are kept.',
+      () => openExistingBatch(batch.id), 'Finish reading');
+    if (!background) showToast(sanitize(e.message || 'Could not finish reading those documents'), 'error', 12000);
   }
 }
 
@@ -2059,9 +2225,12 @@ async function continueBatch(sb, patient, patientId, batch) {
  * lists these batches but has nothing to click on them.
  */
 export async function openExistingBatch(batchId) {
+  const uid = getCurrentUser()?.id;
+  if (!uid) return;
   const sb = getSupabase();
   const { data: batch } = await sb.from('document_batches')
     .select('id, patient_id, status, page_count, note, uploaded_at').eq('id', batchId).single();
+  if (getCurrentUser()?.id !== uid) return;
   if (!batch) { showToast('Could not find that upload', 'error'); return; }
   const { data: runs } = await sb.from('document_parse_runs')
     .select('batch_id, started_at, completed_at').eq('batch_id', batchId);
@@ -2074,6 +2243,7 @@ export async function openExistingBatch(batchId) {
     return;
   }
   const patient = await loadPatient(sb, batch.patient_id);
+  if (getCurrentUser()?.id !== uid) return;
   if (!patient) { showToast('Could not load the patient', 'error'); return; }
   await continueBatch(sb, patient, batch.patient_id, item);
 }
@@ -2081,47 +2251,95 @@ export async function openExistingBatch(batchId) {
 // ============================================================
 // Entry point
 // ============================================================
-let drawingNow = false;   // an upload is drawing its files, and may be asking a question
+let drawingNow = null;   // owner of the preparation, which may be asking a question
 
 export async function openDocumentBatch(patientId) {
+  if (!getCurrentUser()?.id || !patientId) return;
   if (drawingNow) {
     showToast('An upload is still being prepared. Finish it or close it first.', 'info');
     return;
   }
-  const sb = getSupabase();
-  // In parallel: the file picker only opens while the click that asked for it
-  // still counts as recent, so every round trip in front of it is a risk on a
-  // slow phone.
-  const [patient, consented, unfinished] = await Promise.all([
-    loadPatient(sb, patientId),
-    hasDocumentConsent(patientId).catch(() => false),
-    findUnfinishedBatches(sb, patientId).catch(() => []),
-  ]);
-  if (!patient) { showToast('Could not load the patient', 'error'); return; }
+  const scope = beginDocumentTask('Patient documents', patientId, { visible: false });
+  let handedOff = false;
+  const dispose = () => {
+    scope.controller.abort();
+    const stop = scope.onStop;
+    scope.onStop = null;
+    stop?.();
+    scope.remove();
+  };
+  try {
+    const sb = await scope.client();
+    const [patient, consentResult, unfinished] = await Promise.all([
+      loadPatient(sb, patientId),
+      sb.rpc('has_document_consent', { p_patient: patientId }),
+      findUnfinishedBatches(sb, patientId),
+    ]);
+    scope.check();
+    if (!patient) { showToast('Could not load the patient', 'error'); return; }
+    if (consentResult.error) throw consentResult.error;
 
-  if (unfinished.length) {
-    const choice = await chooseUnfinished(sb, unfinished);
-    if (!choice) return;
-    if (choice.action !== 'upload') {
-      await continueBatch(sb, patient, patientId, choice);
-      return;
+    if (unfinished.length) {
+      const choice = await chooseUnfinished(sb, unfinished, scope);
+      scope.check();
+      if (!choice) return;
+      if (choice.action !== 'upload') {
+        dispose();
+        await continueBatch(sb, patient, patientId, choice);
+        return;
+      }
     }
-  }
 
-  if (!consented) {
-    const method = await askConsent(patientId, patient.full_name);
-    if (!method) { showToast('Recorded that they did not agree', 'info'); return; }
-    await recordConsent(patientId, true, method);
-  }
+    if (consentResult.data !== true) {
+      const method = await askConsent(patientId, patient.full_name);
+      scope.check();
+      if (!method) return;
+      const { error } = await sb.from('patient_consents').insert({
+        patient_id: patientId, purpose: 'medical_documents', granted: true,
+        method, asked_by: scope.uid,
+      });
+      scope.check();
+      if (error) throw error;
+    }
 
-  const picker = document.createElement('input');
-  picker.type = 'file';
-  picker.accept = 'image/*,application/pdf';
-  picker.multiple = true;
-  picker.addEventListener('change', () => {
-    uploadPicked(sb, patient, patientId, [...(picker.files || [])]);
-  });
-  picker.click();
+    scope.check();
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = 'image/*,application/pdf';
+    picker.multiple = true;
+    picker.hidden = true;
+    let settled = false;
+    const releasePicker = () => {
+      settled = true;
+      picker.remove();
+      scope.onStop = null;
+    };
+    const cancelPicker = () => {
+      if (settled) return;
+      releasePicker();
+      dispose();
+    };
+    scope.onStop = cancelPicker;
+    picker.addEventListener('cancel', cancelPicker, { once: true });
+    picker.addEventListener('change', async () => {
+      if (settled) return;
+      const files = [...(picker.files || [])];
+      if (!scope.active() || !files.length) { cancelPicker(); return; }
+      releasePicker();
+      try { await uploadPicked(sb, patient, patientId, files, { scope }); }
+      catch (e) {
+        if (scope.active()) showToast(sanitize(e.message || 'Could not start the upload'), 'error');
+        dispose();
+      }
+    }, { once: true });
+    document.body.appendChild(picker);
+    picker.click();
+    handedOff = true;
+  } catch (e) {
+    if (scope.active()) showToast(sanitize(e.message || 'Could not open document upload'), 'error');
+  } finally {
+    if (!handedOff) dispose();
+  }
 }
 
 /**
@@ -2134,31 +2352,61 @@ export async function openDocumentBatch(patientId) {
  * so the unfinished-upload chooser in openDocumentBatch is not needed here.
  */
 export async function uploadDocumentsFor(patientId, files, { consentMethod = null, onBatch = null } = {}) {
+  if (!getCurrentUser()?.id) return false;
   const list = [...(files || [])];
   if (!patientId || !list.length) return false;
   if (drawingNow) {
     showToast('An upload is still being prepared. Finish it or close it first.', 'info');
     return false;
   }
-  const sb = getSupabase();
-  const [patient, consented] = await Promise.all([
-    loadPatient(sb, patientId),
-    hasDocumentConsent(patientId).catch(() => false),
-  ]);
-  if (!patient) { showToast('Could not load the patient to attach the documents to', 'error'); return false; }
-  if (!consented) {
-    const method = await askConsent(patientId, patient.full_name, { preferred: consentMethod });
-    if (!method) { showToast('Recorded that they did not agree. Nothing was uploaded.', 'info'); return false; }
-    await recordConsent(patientId, true, method);
+  const scope = beginDocumentTask('Patient documents', patientId, { visible: false });
+  let handedOff = false;
+  try {
+    const sb = await scope.client();
+    const [patient, consentResult] = await Promise.all([
+      loadPatient(sb, patientId),
+      sb.rpc('has_document_consent', { p_patient: patientId }),
+    ]);
+    scope.check();
+    if (!patient) { showToast('Could not load the patient to attach the documents to', 'error'); return false; }
+    if (consentResult.error) throw consentResult.error;
+    if (consentResult.data !== true) {
+      const method = await askConsent(patientId, patient.full_name, { preferred: consentMethod });
+      scope.check();
+      if (!method) return false;
+      const { error } = await sb.from('patient_consents').insert({
+        patient_id: patientId, purpose: 'medical_documents', granted: true,
+        method, asked_by: scope.uid,
+      });
+      scope.check();
+      if (error) throw error;
+    }
+    scope.check();
+    handedOff = true;
+    await uploadPicked(sb, patient, patientId, list, { onBatch, scope });
+    return scope.active();
+  } catch (e) {
+    if (scope.active()) showToast(sanitize(e.message || 'Could not start document upload'), 'error');
+    scope.controller.abort();
+    scope.onStop?.();
+    scope.remove();
+    return false;
+  } finally {
+    if (!handedOff) { scope.controller.abort(); scope.remove(); }
   }
-  await uploadPicked(sb, patient, patientId, list, { onBatch });
-  return true;
 }
 
-async function uploadPicked(sb, patient, patientId, files, { onBatch = null } = {}) {
-  if (!files.length) return;
+async function uploadPicked(sb, patient, patientId, files, { onBatch = null, scope = null } = {}) {
+  const cancelScope = () => { if (scope) { scope.controller.abort(); scope.remove(); } };
+  if (!files.length) { cancelScope(); return; }
   if (files.length > MAX_FILES) {
     showToast(`That is more than ${MAX_FILES} files. Send them in two goes.`, 'error');
+    cancelScope();
+    return;
+  }
+  if (drawingNow && drawingNow !== scope) {
+    showToast('An upload is still being prepared. Finish it or close it first.', 'info');
+    cancelScope();
     return;
   }
 
@@ -2168,28 +2416,51 @@ async function uploadPicked(sb, patient, patientId, files, { onBatch = null } = 
   // drawing, it carries on in the background exactly as it always did.
   let drawing = true;
   let stopped = false;
-  const ui = openProgress('Reading the documents', files.length, () => {
-    if (!drawing) return;
-    stopped = true;
-    ui.asker.cancel();
-  });
+  let background = false;
+  const task = scope || beginDocumentTask(patient.full_name || patient.patient_code, patientId);
+  task.check();
+  task.expose(patient.full_name || patient.patient_code);
+  const clearDrawing = () => { if (drawingNow === task) drawingNow = null; };
+  let ui;
+  const hide = () => { background = true; ui.close(); };
+  ui = openProgress('Reading the documents', files.length, () => {
+    if (!drawing) { hide(); return; }
+    stopped = true; ui.asker.cancel(); task.remove();
+  }, { onBackground: hide });
+  task.onStop = () => { stopped = true; clearDrawing(); ui.asker.cancel(); ui.stop(); };
+  const stage = (message, frac) => { task.set(drawing ? 'preparing' : 'running', message); ui.stage(message, frac); };
 
   let result;
-  drawingNow = true;
+  drawingNow = task;
   try {
-    result = await uploadBatch(patientId, files, ui.stage, {
+    sb = await task.client();
+    result = await uploadBatch(patientId, files, stage, {
       asker: ui.asker, onLeftOut: ui.leftOut, onBatch,
-      isCancelled: () => stopped, onDrawn: () => { drawing = false; drawingNow = false; },
+      task, isCancelled: () => stopped || !task.active(), onDrawn: () => {
+        drawing = false; clearDrawing(); ui.allowBackground();
+      },
     });
   } catch (e) {
-    drawingNow = false;
-    if (!stopped) closeModal();
+    clearDrawing();
+    ui.close();
+    if (!task.active()) return;
     if (e instanceof FileProblem && e.kind === 'stopped') {
+      task.remove();
       showToast('Stopped. Nothing was uploaded.', 'info');
       return;
     }
-    showToast(sanitize(e.message || 'Could not read those documents'), 'error', 12000);
+    task.set('failed', e.message || 'Could not read those documents',
+      task.batchId ? () => openExistingBatch(task.batchId) : null, task.batchId ? 'Finish reading' : '');
+    if (!background) showToast(sanitize(e.message || 'Could not read those documents'), 'error', 12000);
     return;
   }
-  await showBatchReview(sb, patient, patientId, result);
+  task.check();
+  if (background || !ui.isCurrent()) { ui.close(); taskReady(task, patient, patientId, result); }
+  else {
+    try { await showBatchReview(sb, patient, patientId, result, { task, progress: ui }); }
+    catch (e) {
+      ui.close();
+      if (task.active()) { taskReady(task, patient, patientId, result); showToast(sanitize(e.message), 'error', 10000); }
+    }
+  }
 }

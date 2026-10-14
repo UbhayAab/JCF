@@ -1198,6 +1198,7 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
     </div>` : ''}
     <div id="byc-mount"></div>
     <div id="referral-mount"></div>
+    <div id="reviewed-document-details"></div>
     ${p.patient_status === 'inactive' || p.disinterest_level ? '<div id="status-history-mount" style="margin-bottom:var(--s5)"></div>' : ''}
     <div class="content-grid">
       <div class="col-span-6"><div class="card">
@@ -1287,6 +1288,13 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
   loadFolderMore(p.id);
   mountPhones(el.querySelector('#phones-mount'), p, sb);
   mountReferrals(el.querySelector('#referral-mount'), p, sb);
+  const reviewedMount = el.querySelector('#reviewed-document-details');
+  import('../components/reviewedDocumentDetails.js')
+    .then((m) => { if (reviewedMount?.isConnected) m.mountReviewedDocumentDetails(reviewedMount, { patientId: p.id, sb }); })
+    .catch((e) => {
+      if (reviewedMount?.isConnected) reviewedMount.textContent = 'Could not load details saved from documents. Refresh to try again.';
+      console.warn('[reviewed documents]', e.message);
+    });
 }
 
 // Fixboard #25: what the family sent on the GI referral form, every answer,
