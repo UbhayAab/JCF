@@ -35,9 +35,14 @@ import {
 const PAGE_SIZE = 25;
 let currentPage = 1;
 let statusFilter = '';
+let detailGeneration = 0;
+let patientUpdateHandler = null;
 
 export async function renderPatients(container, params) {
   if (params?.id) { await renderPatientDetail(container, params.id); return; }
+  detailGeneration++;
+  if (patientUpdateHandler) window.removeEventListener('patient-updated', patientUpdateHandler);
+  patientUpdateHandler = null;
   renderPatientList(container);
 }
 
@@ -602,6 +607,14 @@ function tabFromHash() {
 }
 
 async function renderPatientDetail(container, patientId, keepTab = false) {
+  const generation = ++detailGeneration;
+  const userId = getCurrentUser()?.id;
+  const stillHere = () => generation === detailGeneration && container.isConnected
+    && getCurrentUser()?.id === userId
+    && window.location.hash.slice(1).split('?')[0] === `patients/${patientId}`;
+  if (patientUpdateHandler) window.removeEventListener('patient-updated', patientUpdateHandler);
+  patientUpdateHandler = null;
+  if (!stillHere()) return;
   // Reported 2026-09-03: "while checking the call logs of interns when we hit
   // back button it automatically land into patient section column". The in-app
   // Back button was fixed by goBack() (js/router.js). This is the other half:
@@ -630,6 +643,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
         .eq('patient_id', patientId)
         .order('changed_at', { ascending: true }),
     ]);
+    if (!stillHere()) return;
     if (pRes.error) throw pRes.error;
     const patient = pRes.data;
     // NEVER `cRes.data || []`. That is what made this unreportable: a query
@@ -649,7 +663,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
     if (hRes.error) console.warn('Assignment history unavailable:', hRes.error.message);
     const pocHistory = hRes.error ? [] : (hRes.data || []);
 
-    const reload = () => renderPatientDetail(container, patientId, true);
+    const reload = () => { if (stillHere()) return renderPatientDetail(container, patientId, true); };
     const deceased = patient.patient_status === 'deceased' || !!patient.date_of_death;
 
     // The count on the Documents tab. Its own query rather than part of the
@@ -700,6 +714,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
     if (patient.age) whoBits.push(`${patient.age} yrs`);
     if (patient.gender && patient.gender !== 'prefer_not_to_say') whoBits.push(capitalize(patient.gender));
 
+    if (!stillHere()) return;
     container.innerHTML = `
       <button class="btn btn-ghost btn-sm" id="back-to-patients" style="margin-bottom:var(--s4)">${icon('arrowLeft')}All patients</button>
 
@@ -796,16 +811,16 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
     });
     container.querySelector('#edit-patient-btn').addEventListener('click', () => showPatientForm(patient, reload));
     import('../components/hopebotFamily.js')
-      .then((m) => m.mountHopebotCard(container.querySelector('#hb-family-card'), patientId))
+      .then((m) => { if (stillHere()) m.mountHopebotCard(container.querySelector('#hb-family-card'), patientId); })
       .catch((e) => console.warn('[hopebot] card:', e.message));
     // The roles the Document collection page is open to (app.js 'doccollect').
     if (container.querySelector('#doc-collect-card')
         && ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'ground_poc'].includes(getUserRole())) {
       import('../components/docCollection.js')
-        .then((m) => m.mountCollectStatus(container.querySelector('#doc-collect-card'), patientId, {
+        .then((m) => { if (stillHere()) m.mountCollectStatus(container.querySelector('#doc-collect-card'), patientId, {
           patientName: patient.full_name || patient.patient_code || '',
           preferred: ['ground_poc', 'uploader'].includes(getUserRole()) ? 'in_person' : 'verbal_during_call',
-        }))
+        }); })
         .catch((e) => console.warn('[documents] collection card:', e.message));
     }
     // The batch reader. One PDF, twenty photos or a mix, segmented into
@@ -818,11 +833,11 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       const { openEraseFiles } = await import('../components/fileErasure.js');
       openEraseFiles({ patientId: patient.id, label: patient.patient_code, onDone: (r) => { if (r) reload(); } });
     });
-    window.addEventListener('patient-updated', function once(e) {
+    patientUpdateHandler = (e) => {
       if (e.detail?.patientId !== patientId) return;
-      window.removeEventListener('patient-updated', once);
       reload();
-    });
+    };
+    window.addEventListener('patient-updated', patientUpdateHandler);
     container.querySelector('#assess-btn')?.addEventListener('click', () =>
       openAssessmentFlow({ patient: { id: patient.id, full_name: patient.full_name }, role: getUserRole(), onSaved: reload }));
     container.querySelector('#log-call-btn')?.addEventListener('click', () =>
@@ -929,6 +944,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
     renderTab();
   } catch (err) {
     console.error('Patient detail error:', err);
+    if (!stillHere()) return;
     container.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Patient not found</h4><p>${sanitize(err.message)}</p></div>`;
   }
 }
@@ -1883,7 +1899,10 @@ export async function renderDocumentsTab(el, p, sb, reload) {
           // pages, and docBatch.openExistingBatch can pick it up where it
           // stopped. Before this, the card said "could not be read" and had
           // nothing to click, so a stalled read stayed stalled for weeks.
-          const stopped = b.status === 'failed' && b.page_count > 0;
+          // notes typed at intake (sql/195) are read like a page, so a batch of
+          // notes alone can be finished too
+          const typed = mine.some((d) => d.doc_type === 'intake_notes');
+          const stopped = b.status === 'failed' && (b.page_count > 0 || typed);
           const action = b.status === 'ready_for_review' ? 'Review now'
                        : (stopped || b.status === 'segmenting' || b.status === 'extracting') ? 'Finish reading' : '';
           const cls = b.status === 'failed' && !stopped ? 'doc-callout-danger'
@@ -1893,7 +1912,9 @@ export async function renderDocumentsTab(el, p, sb, reload) {
           // place from View pages rather than only being listed by type.
           const canView = b.status !== 'discarded' && (b.page_count || 0) > 0;
           return `<div class="doc-callout ${cls}">
-            <strong>${icon('fileText')} ${b.page_count || mine.length} page(s),
+            <strong>${icon('fileText')} ${typed
+                ? (b.page_count > 0 ? `${b.page_count} page(s) and notes typed at intake` : 'Notes typed at intake')
+                : `${b.page_count || mine.length} page(s)`},
               ${stopped ? 'stopped part way' : BATCH_STATUS[b.status] || sanitize(b.status)}</strong>
             <span style="float:right;display:flex;gap:6px">
               ${canView ? `<button class="btn btn-secondary btn-sm" data-view-batch="${b.id}">${icon('eye')}View pages</button>` : ''}

@@ -9,6 +9,9 @@
 //   Camera        page after page without leaving the app
 //   Close file    filed under that patient and read by the same document reader
 //   New patient   the empty form, for the next family (Fixboard #15)
+// The "anything else" notes never go straight onto the record (sql/195): they
+// are the Ground POC's signed note for the mentor and, when the family agreed,
+// a typed document read with the photos and checked on the same review screen.
 // Photos upload one at a time as they are taken and keep trying on a weak
 // network, so Close file never waits for the hospital's signal. A browser that
 // will not lend the app its camera gets the phone's own camera or gallery
@@ -25,7 +28,7 @@
 // (tools/stale_import_check.mjs).
 // ============================================================
 import { getSupabase } from '../supabase.js';
-import { getCurrentUser } from '../auth.js';
+import { beginDocumentTask, DocumentTaskStopped } from './documentReadTasks.js';
 import { showToast } from './toast.js';
 import { icon } from './icons.js';
 import { sanitize } from '../utils/validators.js';
@@ -68,7 +71,7 @@ function waitOnline() {
 
 /** A refusal no retry can change: permissions, a family that is not ours. */
 class Blocked extends Error {}
-const isRefusal = (e) => e instanceof Blocked || e?.code === '42501'
+const isRefusal = (e) => e instanceof Blocked || e instanceof DocumentTaskStopped || e?.code === '42501'
   || /row-level security|permission denied|not allowed/i.test(e?.message || '');
 
 /** Runs fn until it works, waiting longer each time and not at all while the phone is offline. */
@@ -92,26 +95,48 @@ async function sha256Hex(blob) {
 
 // ------------------------------------------------------------------ the patient, the consent, the batch
 
-async function checkPhone(phone) {
-  const { data, error } = await getSupabase().rpc('check_phone', { p_phone: phone });
+async function checkPhone(phone, task = null) {
+  const sb = task ? await task.client() : getSupabase();
+  task?.check();
+  const { data, error } = await sb.rpc('check_phone', { p_phone: phone });
+  task?.check();
   if (error) throw error;
   return data || {};
 }
 
 /** Whether this person may file papers for the family (the same test the Upload documents tab uses). */
-async function canFile(patientId) {
-  const { loadCallContext } = await import('./callContext.js');
-  return (await loadCallContext([patientId])).has(patientId);
+async function canFile(patientId, task = null) {
+  const sb = task ? await task.client() : getSupabase();
+  task?.check();
+  const { data, error } = await sb.rpc('get_call_context', { p_patient_ids: [patientId] });
+  task?.check();
+  if (error) throw error;
+  return (data || []).some((row) => row.patient_id === patientId);
+}
+
+async function consentFor(file, granted = null) {
+  const sb = await file.task.client();
+  file.task.check();
+  const result = granted === null
+    ? await sb.rpc('has_document_consent', { p_patient: file.patientId })
+    : await sb.from('patient_consents').insert({ patient_id: file.patientId,
+      purpose: 'medical_documents', granted, method: 'in_person', asked_by: file.task.uid });
+  file.task.check();
+  if (result.error) throw result.error;
+  return result.data === true;
 }
 
 /** Saves the family as a lead (or fills in what we learnt), then finds their record. */
 async function savePatient(file) {
-  const sb = getSupabase();
+  const sb = await file.task.client();
+  file.task.check();
   const h = file.hospital || {};
-  const row = { phone: file.phone, name: file.name, notes: file.notes,
+  // The notes are not sent here: bulk_add_leads would write them straight onto
+  // the record (legacy_notes). save_intake_notes keeps them instead (sql/195).
+  const row = { phone: file.phone, name: file.name,
                 hospital: h.name || '', city: h.city || '', state: h.state || '' };
-  const before = await withRetry(() => checkPhone(file.phone), { onWait: () => setState(file, 'waiting') });
-  if (before.found && before.patient_id && !(await withRetry(() => canFile(before.patient_id)))) {
+  const before = await withRetry(() => checkPhone(file.phone, file.task), { onWait: () => setState(file, 'waiting') });
+  if (before.found && before.patient_id && !(await withRetry(() => canFile(before.patient_id, file.task)))) {
     throw new Blocked(`${before.full_name || 'This number'} was registered by someone else, so their papers go `
       + `through ${before.assigned_mentor ? before.assigned_mentor + ', their mentor' : 'their mentor'}.`);
   }
@@ -119,7 +144,7 @@ async function savePatient(file) {
     const { error } = await sb.rpc('bulk_add_leads', { p_rows: [row] });
     if (error) throw error;
   }, { onWait: () => setState(file, 'waiting') });
-  const after = await withRetry(() => checkPhone(file.phone), { onWait: () => setState(file, 'waiting') });
+  const after = await withRetry(() => checkPhone(file.phone, file.task), { onWait: () => setState(file, 'waiting') });
   if (!after.found || !after.patient_id) {
     throw new Blocked('The patient was saved, but their record could not be found again. Upload these from the Upload documents tab.');
   }
@@ -130,17 +155,49 @@ async function prepare(file) {
   try {
     setState(file, 'preparing');
     const found = await savePatient(file);
+    file.task.check();
     file.patientId = found.patient_id;
     if (!file.name && found.full_name) file.name = found.full_name;
-    const docs = await import('../pages/documents.js');
-    const agreed = await withRetry(() => docs.hasDocumentConsent(file.patientId), { onWait: () => setState(file, 'waiting') });
-    if (!agreed) await withRetry(() => docs.recordConsent(file.patientId, true, 'in_person'), { onWait: () => setState(file, 'waiting') });
-    file.batchId = await withRetry(() => batchFor(file, 0), { onWait: () => setState(file, 'waiting') });
+    const agreed = await withRetry(() => consentFor(file), { onWait: () => setState(file, 'waiting') });
+    if (!agreed) await withRetry(() => consentFor(file, true), { onWait: () => setState(file, 'waiting') });
+    const batchId = await withRetry(() => batchFor(file, 0), { onWait: () => setState(file, 'waiting') });
+    file.batchId = batchId;
+    if (file.notes) await keepNotes(file, batchId);
     setState(file, 'uploading');
     pump();
     maybeFinalize(file);
   } catch (e) {
-    setState(file, 'blocked', e.message || 'The patient could not be saved.');
+    setState(file, file.notesError ? 'notes_failed' : 'blocked', e.message || 'The patient could not be saved.');
+    pump();
+  }
+}
+
+/**
+ * The notes from "Anything else" (Fixboard #8, sql/195): the Ground POC's own
+ * signed note, which mentors read before a call, and with a batch also a typed
+ * document the reader reads with the photos, so nothing in them reaches the
+ * record until a reviewer ticks it. Safe to retry. Never stops the photos.
+ */
+async function saveNotes(patientId, text, batchId, task = null) {
+  const sb = task ? await task.client() : getSupabase();
+  task?.check();
+  const { data, error } = await sb.rpc('save_intake_notes',
+    { p_patient_id: patientId, p_text: text, p_batch_id: batchId });
+  task?.check();
+  if (error) throw error;
+  return data || {};
+}
+
+async function keepNotes(file, batchId) {
+  file.notesError = null;
+  try {
+    const saved = await withRetry(() => saveNotes(file.patientId, file.notes, batchId, file.task),
+                                  { onWait: () => setState(file, 'waiting') });
+    file.notesDoc = saved.document_id || null;
+    if (!file.notesDoc) throw new Error('The notes were not filed.');
+  } catch (e) {
+    file.notesError = e.message || 'Check the network.';
+    throw e;
   }
 }
 
@@ -151,9 +208,12 @@ async function prepare(file) {
  */
 async function batchFor(file, part) {
   if (!file.batches[part]) {
-    const { data, error } = await getSupabase().from('document_batches').insert({
-      patient_id: file.patientId, uploaded_by: getCurrentUser()?.id, source_files: 0, status: 'uploading',
+    const sb = await file.task.client();
+    file.task.check();
+    const { data, error } = await sb.from('document_batches').insert({
+      patient_id: file.patientId, uploaded_by: file.task.uid, source_files: 0, status: 'uploading',
     }).select('id').single();
+    file.task.check();
     if (error) throw error;
     file.batches[part] = data.id;
   }
@@ -163,6 +223,7 @@ async function batchFor(file, part) {
 // ------------------------------------------------------------------ photos
 
 async function addPhoto(file, blob, name) {
+  if (!file.task.active()) return;
   const n = file.next++;
   const page = { n, part: Math.floor(n / PART_PAGES), name, state: 'rendering', url: URL.createObjectURL(blob) };
   file.pages.push(page);
@@ -170,15 +231,19 @@ async function addPhoto(file, blob, name) {
   file.render = file.render.then(async () => {
     try {
       const { renderFile } = await import('../pages/docBatch.js');
+      file.task.check();
       const asFile = blob instanceof File ? blob : new File([blob], name, { type: blob.type || 'image/jpeg' });
       const [drawn] = await renderFile(asFile);
+      file.task.check();
       page.full = drawn.full;
       page.thumb = drawn.thumb;
       page.sha256 = await sha256Hex(drawn.full.blob);
+      file.task.check();
       URL.revokeObjectURL(page.url);
       page.url = URL.createObjectURL(drawn.thumb.blob);
       page.state = page.removed ? 'removed' : 'ready';
     } catch (e) {
+      if (!file.task.active()) return;
       page.state = 'unreadable';
       showToast(e.message || 'That photo could not be read. Take it again.', 'warning');
     }
@@ -192,7 +257,7 @@ function removePhoto(file, n) {
   const page = file.pages.find((p) => p.n === n);
   if (!page || page.removed) return;
   page.removed = true;
-  if (page.state === 'done') forgetStored(page);
+  if (page.state === 'done') forgetStored(file, page);
   if (page.state === 'ready' || page.state === 'failed') page.state = 'removed';
   paintStrip(file);
   renderFiles();
@@ -200,15 +265,17 @@ function removePhoto(file, n) {
 }
 
 async function uploadPage(file, page) {
-  const sb = getSupabase();
+  const sb = await file.task.client();
   const batchId = await batchFor(file, page.part);
   const stem = `${file.patientId}/${batchId}/p${String(page.n).padStart(3, '0')}`;
   for (const [path, blob] of [[`${stem}.jpg`, page.full.blob], [`${stem}_t.jpg`, page.thumb.blob]]) {
     const bytes = new Uint8Array(await blob.arrayBuffer());
+    file.task.check();
     const { error } = await sb.storage.from(BUCKET).upload(path, bytes, { contentType: 'image/jpeg', upsert: false });
     // A retry after a reply that never arrived finds its own object already there.
     if (error && !/already exists|duplicate/i.test(error.message || '')) throw error;
   }
+  file.task.check();
   page.batchId = batchId;
   page.path = `${stem}.jpg`;
   page.thumbPath = `${stem}_t.jpg`;
@@ -218,15 +285,19 @@ async function uploadPage(file, page) {
   page.thumb = null;
 }
 
-async function forgetStored(page) {
+async function forgetStored(file, page) {
   if (!page.path) return;
-  try { await getSupabase().storage.from(BUCKET).remove([page.path, page.thumbPath]); } catch { /* left for the sweep */ }
+  try {
+    const sb = await file.task.client();
+    file.task.check();
+    await sb.storage.from(BUCKET).remove([page.path, page.thumbPath]);
+  } catch { /* left for the sweep */ }
 }
 
 /** Oldest family first, its pages in the order they were taken. */
 function nextPage() {
   for (const file of [...files].reverse()) {
-    if (!file.batchId) continue;
+    if (!file.task.active() || !file.batchId) continue;
     const page = file.pages.find((p) => p.state === 'ready' && !p.removed);
     if (page) return { file, page };
   }
@@ -245,7 +316,7 @@ async function pump() {
       try {
         await withRetry(() => uploadPage(file, page), { onWait: () => { page.waiting = true; renderFiles(); } });
         page.state = 'done';
-        if (page.removed) forgetStored(page);
+        if (page.removed) forgetStored(file, page);
       } catch (e) {
         page.state = 'failed';
         page.error = e.message;
@@ -264,11 +335,16 @@ async function pump() {
 
 function busy(file) {
   return file.pages.some((p) => !p.removed && ['rendering', 'ready', 'uploading'].includes(p.state))
-    || ['preparing', 'waiting', 'filing'].includes(file.state);
+    || ['preparing', 'waiting', 'filing', 'notes_failed'].includes(file.state);
 }
 
 function maybeFinalize(file) {
+  if (file.task && !file.task.active()) return;
   if (!file.closed || !file.batchId || file.finalizing || file.filed) return;
+  if (file.notes && !file.notesDoc) {
+    if (file.notesError) setState(file, 'notes_failed');
+    return;
+  }
   const kept = file.pages.filter((p) => !p.removed && p.state !== 'unreadable');
   if (kept.some((p) => ['rendering', 'ready', 'uploading'].includes(p.state))) return;
   if (kept.some((p) => p.state === 'failed')) { setState(file, 'stuck'); return; }
@@ -276,12 +352,12 @@ function maybeFinalize(file) {
   finalize(file, kept).finally(() => { file.finalizing = false; });
 }
 
-/** One batch's pages, in the order they were taken, handed over for reading. Safe to run twice. */
-async function fileBatch(file, batchId, pages) {
-  const sb = getSupabase();
+/** One batch's pages (and the typed notes, if it holds them), handed over for reading. Safe to run twice. */
+async function fileBatch(file, batchId, pages, typed = false) {
+  const sb = await file.task.client();
   // One insert, all or nothing: a retry after a lost reply finds the rows there.
   const { data: already } = await sb.from('document_pages').select('id').eq('batch_id', batchId).limit(1);
-  if (!already?.length) {
+  if (pages.length && !already?.length) {
     const rows = pages.map((p, i) => ({
       batch_id: batchId, patient_id: file.patientId, page_index: i,
       source_name: p.name, source_kind: 'image', source_page_no: null,
@@ -303,14 +379,17 @@ async function fileBatch(file, batchId, pages) {
   }
   await withRetry(async () => {
     const { error } = await sb.from('document_batches')
-      .update({ status: 'segmenting', page_count: pages.length, source_files: pages.length }).eq('id', batchId);
+      .update({ status: 'segmenting', page_count: pages.length, source_files: pages.length + (typed ? 1 : 0) })
+      .eq('id', batchId);
     if (error) throw error;
   });
 }
 
-async function discardBatch(batchId) {
+async function discardBatch(file, batchId) {
+  const sb = await file.task.client();
   await withRetry(async () => {
-    const { error } = await getSupabase().from('document_batches')
+    file.task.check();
+    const { error } = await sb.from('document_batches')
       .update({ status: 'discarded', note: 'Closed on the camera without photos.' }).eq('id', batchId);
     if (error) throw error;
   });
@@ -320,16 +399,19 @@ async function finalize(file, kept) {
   try {
     setState(file, 'filing');
     const filed = [];
-    // Every batch the file opened; one whose photos were all taken back is discarded.
+    // Every batch the file opened; one whose photos were all taken back is
+    // discarded, unless it holds the typed notes, which are read on their own.
     for (const batchId of file.batches.filter(Boolean)) {
       const pages = kept.filter((p) => p.batchId === batchId);
-      if (pages.length) {
-        await fileBatch(file, batchId, pages);
+      const typed = batchId === file.batchId && !!file.notesDoc;
+      if (pages.length || typed) {
+        await fileBatch(file, batchId, pages, typed);
         filed.push(batchId);
       } else {
-        await discardBatch(batchId);
+        await discardBatch(file, batchId);
       }
     }
+    file.task.check();
     file.filed = true;
     if (!filed.length) { setState(file, 'empty'); return; }
     file.pages.forEach((p) => { if (p.url) URL.revokeObjectURL(p.url); p.full = null; });
@@ -343,12 +425,14 @@ async function finalize(file, kept) {
 function queueRead(file, batchIds) {
   setState(file, 'queued');
   reading = reading.then(async () => {
+    if (!file.task.active()) return;
     setState(file, 'reading');
     let ok = true;
     for (const batchId of batchIds) {
       try {
         const mod = await import('../pages/docBatch.js');
-        const read = typeof mod.readStoredBatch === 'function' ? await mod.readStoredBatch(batchId) : false;
+        file.task.check();
+        const read = typeof mod.readStoredBatch === 'function' ? await mod.readStoredBatch(batchId, { task: file.task }) : false;
         ok = ok && !!read;
       } catch { ok = false; }
     }
@@ -358,16 +442,22 @@ function queueRead(file, batchIds) {
 
 // ------------------------------------------------------------------ the camera
 
-async function startLiveCamera(cam) {
+async function startLiveCamera(cam, task) {
   if (!navigator.mediaDevices?.getUserMedia) return false;
   try {
-    cam.stream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
     });
+    if (!task.active() || !cam.overlay?.isConnected) {
+      stream.getTracks().forEach((track) => track.stop());
+      return false;
+    }
+    cam.stream = stream;
     cam.track = cam.stream.getVideoTracks()[0];
     cam.video.srcObject = cam.stream;
     await cam.video.play().catch(() => {});
+    if (!task.active() || !cam.overlay?.isConnected) { stopCamera(cam); return false; }
     if ('ImageCapture' in window && cam.track) {
       try { cam.still = new window.ImageCapture(cam.track); } catch { cam.still = null; }
     }
@@ -478,6 +568,7 @@ function openCamera(file) {
     setTimeout(() => flash.classList.remove('on'), 90);
     try {
       const blob = await grab(cam);
+      if (!file.task.active()) return;
       if (blob) await addPhoto(file, blob, `Camera photo ${file.next + 1}`);
       else showToast('The camera was not ready. Try again.', 'warning');
     } finally {
@@ -502,7 +593,7 @@ function openCamera(file) {
   cam.onPop = () => closeFile(file, { fromBack: true });
   window.addEventListener('popstate', cam.onPop);
 
-  startLiveCamera(cam).then(async (live) => {
+  startLiveCamera(cam, file.task).then(async (live) => {
     if (!overlay.isConnected) { stopCamera(cam); return; }
     if (!live) {
       overlay.classList.add('ci-nolive');
@@ -510,7 +601,11 @@ function openCamera(file) {
       shutter.hidden = true;
       return;
     }
-    try { cam.lock = await navigator.wakeLock?.request('screen'); } catch { cam.lock = null; }
+    try {
+      const lock = await navigator.wakeLock?.request('screen');
+      if (!file.task.active() || !overlay.isConnected) { await lock?.release(); return; }
+      cam.lock = lock;
+    } catch { cam.lock = null; }
   });
 }
 
@@ -527,8 +622,11 @@ function closeFile(file, { fromBack }) {
   const n = file.pages.filter((p) => !p.removed).length;
   const who = file.name || `the number ending ${file.phone.slice(-4)}`;
   resetForm();
-  showNext(n ? `Saved: ${n} photo${n === 1 ? '' : 's'} for ${who}. They keep uploading on their own.`
-             : `Closed without photos for ${who}.`);
+  const notes = file.notes ? ' and your notes' : '';
+  showNext(file.notes && !file.notesDoc
+    ? `File closed for ${who}. Your notes are not saved yet. Keep the app open and check Files from this visit below.`
+    : n ? `Saved: ${n} photo${n === 1 ? '' : 's'}${notes} for ${who}. They keep uploading on their own.`
+             : (notes ? `Saved your notes for ${who}, without photos.` : `Closed without photos for ${who}.`));
   renderFiles();
   maybeFinalize(file);
 }
@@ -550,6 +648,7 @@ function showForm() {
 // ------------------------------------------------------------------ the form and the list
 
 function setState(file, state, detail = '') {
+  if (file.task && !file.task.active()) return;
   file.state = state;
   if (detail) file.detail = detail;
   renderFiles();
@@ -561,6 +660,7 @@ function statusText(f) {
   const waiting = kept.some((p) => p.waiting);
   switch (f.state) {
     case 'blocked': return f.detail || 'This file could not be saved.';
+    case 'notes_failed': return `Notes not saved. ${f.notesError || 'Check the network.'} Keep the app open and tap Try again. Photos are kept.`;
     case 'preparing': return 'Saving the patient…';
     case 'waiting': return 'Waiting for the network to save the patient…';
     case 'stuck': return `${kept.filter((p) => p.state === 'failed').length || 'Some'} photo(s) could not upload. Check the network and tap Try again.`;
@@ -587,14 +687,19 @@ function renderFiles() {
       return `<div class="due-row" style="flex-wrap:wrap">
         <div style="flex:1;min-width:200px">
           <div class="due-name">${sanitize(f.name || 'New patient')} <span class="due-meta">number ending ${sanitize(f.phone.slice(-4))}</span></div>
-          <div class="due-meta">${kept} photo${kept === 1 ? '' : 's'} · ${sanitize(statusText(f))}</div>
+          <div class="due-meta">${kept} photo${kept === 1 ? '' : 's'}${f.notesDoc ? ' and the notes' : ''} · ${sanitize(statusText(f))}</div>
         </div>
-        ${f.state === 'stuck' ? `<div class="row-actions"><button type="button" class="btn btn-primary btn-sm" data-ci-retry="${f.id}">Try again</button></div>` : ''}
+        ${['stuck', 'notes_failed'].includes(f.state) ? `<div class="row-actions"><button type="button" class="btn btn-primary btn-sm" data-ci-retry="${f.id}">Try again</button></div>` : ''}
       </div>`;
     }).join('')}</div>`;
-  el.querySelectorAll('[data-ci-retry]').forEach((b) => b.addEventListener('click', () => {
+  el.querySelectorAll('[data-ci-retry]').forEach((b) => b.addEventListener('click', async () => {
     const f = files.find((x) => x.id === Number(b.dataset.ciRetry));
     if (!f) return;
+    if (f.notes && !f.notesDoc) {
+      b.disabled = true;
+      try { await keepNotes(f, f.batchId); }
+      catch { setState(f, 'notes_failed'); return; }
+    }
     f.pages.forEach((p) => { if (p.state === 'failed' && !p.removed) p.state = 'ready'; });
     setState(f, 'uploading');
     pump();
@@ -625,7 +730,26 @@ function readForm() {
 
 function newFile(form) {
   const file = { id: ++seq, phone: form.phone, name: form.name, notes: form.notes, hospital: hospitalOf(),
-                 pages: [], batches: [], next: 0, render: Promise.resolve(), state: 'preparing', closed: false };
+                 pages: [], batches: [], next: 0, render: Promise.resolve(), state: 'preparing', closed: false,
+                 task: beginDocumentTask('Intake documents', null, { visible: false }) };
+  file.task.onStop = () => {
+    const cam = file.cam;
+    if (cam) {
+      stopCamera(cam);
+      window.removeEventListener('popstate', cam.onPop);
+      cam.overlay?.remove(); cam.overlay = null;
+      document.body.classList.remove('modal-open');
+    }
+    file.pages.forEach((page) => {
+      if (page.url) URL.revokeObjectURL(page.url);
+      page.url = null; page.full = null; page.thumb = null;
+    });
+    file.pages.length = 0;
+    file.notes = ''; file.name = ''; file.phone = ''; file.hospital = null;
+    const index = files.indexOf(file);
+    if (index >= 0) files.splice(index, 1);
+    renderFiles();
+  };
   files.unshift(file);
   return file;
 }
@@ -673,6 +797,18 @@ export function mountCameraIntake(el, { hospital } = {}) {
 
   const status = el.querySelector('#ci-phone-status');
   const open = el.querySelector('#ci-open');
+  const formTask = beginDocumentTask('Intake form', null, { visible: false });
+  formTask.onStop = () => {
+    clearTimeout(timer);
+    if (el.isConnected) {
+      ['#ci-phone', '#ci-name', '#ci-notes'].forEach((selector) => { const input = el.querySelector(selector); if (input) input.value = ''; });
+      el.querySelector('#ci-consent').checked = false;
+      el.querySelector('#ci-next-text').textContent = '';
+      el.querySelector('#ci-next').hidden = true;
+      el.querySelector('#ci-form').hidden = false;
+      status.replaceChildren();
+    }
+  };
   let timer = null;
   let checkFor = '';
   el.querySelector('#ci-phone').addEventListener('input', (e) => {
@@ -682,12 +818,13 @@ export function mountCameraIntake(el, { hospital } = {}) {
     checkFor = phone || '';
     if (!phone) { status.innerHTML = ''; return; }
     timer = setTimeout(async () => {
+      if (!formTask.active()) return;
       status.innerHTML = '<div class="due-meta" style="margin:-4px 0 10px">Checking the number…</div>';
       try {
-        const st = await checkPhone(phone);
+        const st = await checkPhone(phone, formTask);
         if (checkFor !== phone) return;
         if (!st.found) { status.innerHTML = '<div class="due-meta" style="margin:-4px 0 10px">New patient.</div>'; return; }
-        const mine = await canFile(st.patient_id);
+        const mine = await canFile(st.patient_id, formTask);
         if (checkFor !== phone) return;
         const who = sanitize(st.full_name || st.patient_code || 'A patient');
         if (mine) {
@@ -704,6 +841,7 @@ export function mountCameraIntake(el, { hospital } = {}) {
   });
 
   open.addEventListener('click', () => {
+    if (!formTask.active()) return;
     const form = readForm();
     if (!form.phone) { showToast('Type the 10 digits of the patient\'s number.', 'warning'); el.querySelector('#ci-phone').focus(); return; }
     if (!form.agreed) { showToast('Ask the family first, then tick that they agreed.', 'warning'); return; }
@@ -714,28 +852,39 @@ export function mountCameraIntake(el, { hospital } = {}) {
   });
 
   el.querySelector('#ci-refused').addEventListener('click', async () => {
+    if (!formTask.active()) return;
+    const initiatingForm = el.querySelector('#ci-form');
+    const sameForm = () => host === el && el.isConnected && el.querySelector('#ci-form') === initiatingForm;
     const form = readForm();
+    const sameDraft = () => sameForm() && Object.entries(form).every(([key, value]) => readForm()[key] === value);
     if (!form.phone) { showToast('Type the 10 digits of the patient\'s number first.', 'warning'); return; }
     const btn = el.querySelector('#ci-refused');
     btn.disabled = true;
+    const file = { ...form, hospital: hospitalOf() || {}, task: formTask };
     try {
-      const sb = getSupabase();
-      const h = hospitalOf() || {};
-      const { error } = await sb.rpc('bulk_add_leads', { p_rows: [{ phone: form.phone, name: form.name, notes: form.notes,
-        hospital: h.name || '', city: h.city || '', state: h.state || '' }] });
-      if (error) throw error;
-      const st = await checkPhone(form.phone);
-      if (st.found && st.patient_id && await canFile(st.patient_id)) {
-        const { recordConsent } = await import('../pages/documents.js');
-        await recordConsent(st.patient_id, false, 'in_person');
-      }
+      const st = await savePatient(file);
+      formTask.check();
+      file.patientId = st.patient_id;
+      let notesKept = false;
+      if (st.found && st.patient_id && await canFile(st.patient_id, formTask)) {
+        await consentFor(file, false);
+        // They said no to their papers being read, so the notes are not read
+        // either: they stay the Ground POC's signed note for the mentor.
+        if (form.notes) {
+          await saveNotes(st.patient_id, form.notes, null, formTask);
+          notesKept = true;
+        }
+      } else throw new Blocked('The family could not be reached to record their answer. Your notes are still in the form.');
+      formTask.check();
       const who = form.name || `the number ending ${form.phone.slice(-4)}`;
-      resetForm();
-      showNext(`Saved ${who} without photos, and recorded that the family did not agree.`);
+      if (sameDraft()) {
+        resetForm();
+        showNext(`Saved ${who} without photos${notesKept ? ', kept your notes for their mentor,' : ''} and recorded that the family did not agree.`);
+      } else if (sameForm()) showToast('The earlier family\'s answer was saved. Your current draft is kept.', 'success');
     } catch (e) {
-      showToast('Could not save: ' + (e.message || 'check the network and try again'), 'error');
+      if (formTask.active() && sameForm()) showToast('Could not save the family\'s answer: ' + (e.message || 'check the network and try again'), 'error');
     } finally {
-      btn.disabled = false;
+      if (sameForm()) btn.disabled = false;
     }
   });
 

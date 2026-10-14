@@ -27,6 +27,7 @@ export const DOC_CLASS_LABELS = {
   ngo_sanction_letter: 'NGO sanction letter', transfusion_record: 'Transfusion record',
   bill_receipt: 'Bill / receipt', not_a_medical_document: 'Not a medical document',
   other: 'Other document', unknown: 'Unidentified page',
+  intake_notes: 'Notes typed at intake',
 };
 
 /** A class this file has not heard of shows as itself, readably. */

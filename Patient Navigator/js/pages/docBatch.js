@@ -57,6 +57,7 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
+import { beginDocumentTask } from '../components/documentReadTasks.js';
 import { CONFIG } from '../config.js';
 import { showModal, closeModal } from '../components/modal.js';
 import { showToast } from '../components/toast.js';
@@ -190,7 +191,7 @@ const CLASS_LABEL = {
   ration_card: 'Ration card', insurance_document: 'Insurance document',
   ngo_sanction_letter: 'NGO sanction letter', transfusion_record: 'Transfusion record',
   bill_receipt: 'Bill / receipt', not_a_medical_document: 'Not a medical document',
-  other: 'Other', unknown: 'Unidentified',
+  other: 'Other', unknown: 'Unidentified', intake_notes: 'Notes typed at intake',
 };
 
 const isBlank = (v) =>
@@ -634,13 +635,18 @@ export function makePasswordAsker(host) {
 // ============================================================
 // Talking to the Edge Function
 // ============================================================
-async function callParser(payload) {
+async function callParser(payload, task = null) {
+  task?.check();
   const sb = getSupabase();
-  const { data: sess } = await sb.auth.getSession();
-  const token = sess?.session?.access_token;
+  const { data: sess } = task ? { data: null } : await sb.auth.getSession();
+  task?.check();
+  const token = task ? await task.refreshToken() : sess?.session?.access_token;
+  task?.check();
   if (!token) throw new Error('Your session has expired, please sign in again');
 
   const ctrl = new AbortController();
+  const stop = () => ctrl.abort();
+  task?.controller.signal.addEventListener('abort', stop, { once: true });
   const timer = setTimeout(() => ctrl.abort(), STEP_TIMEOUT_MS);
   let res;
   try {
@@ -660,8 +666,10 @@ async function callParser(payload) {
       : 'Could not reach the reader. Check your connection.');
   } finally {
     clearTimeout(timer);
+    task?.controller.signal.removeEventListener('abort', stop);
   }
   const out = await res.json().catch(() => ({}));
+  task?.check();
   // A 404 here is not "something went wrong", it is "the reader has never been
   // switched on for this project": the doc-parse Edge Function needs a Supabase
   // Management API token to deploy and this project has never had one. A mentor
@@ -788,7 +796,8 @@ async function storePages(sb, patientId, batchId, pages, stage) {
  * document that already has a parsed reading is not read again, so finishing a
  * batch spends only what the stopped run did not.
  */
-async function readBatch(sb, batchId, stage, { resume = false } = {}) {
+async function readBatch(sb, batchId, stage, { resume = false, task = null } = {}) {
+  task?.check();
   // Whether the second reading runs at all is a row in parser_config, not a
   // constant here: it roughly doubles the token cost of a batch, so it is a
   // decision about money that an admin makes without a deploy. Read once, and
@@ -796,20 +805,34 @@ async function readBatch(sb, batchId, stage, { resume = false } = {}) {
   // a database that has had sql/95 but not sql/98.
   const { data: cfgRow } = await sb.from('parser_config')
     .select('audit_enabled').eq('is_active', true).maybeSingle();
+  task?.check();
   const auditOn = cfgRow?.audit_enabled === true;
 
   // ---- segment -----------------------------------------------------------
-  let docs = resume ? await existingDocuments(sb, batchId) : [];
-  if (!docs.length) {
+  // Notes typed at intake (sql/195, Fixboard #8) are a document with no
+  // pages. The segmenter never sees them, they are read like any other
+  // document, and the second reading skips them: it has no page to look at.
+  const typed = await typedNotes(sb, batchId);
+  task?.check();
+  const pagesStored = await hasPages(sb, batchId);
+  task?.check();
+  const typedIds = new Set(typed.map((d) => d.document_id));
+  let docs = resume
+    ? (await existingDocuments(sb, batchId)).filter((d) => !typedIds.has(d.document_id)) : [];
+  if (!docs.length && (!typed.length || pagesStored)) {
     stage('Working out which pages belong to which document…', 0.6);
     try {
-      const seg = await callParser({ action: 'segment', batch_id: batchId });
+      const seg = await callParser({ action: 'segment', batch_id: batchId }, task);
       docs = seg.documents ?? [];
+      if (pagesStored && !docs.length) throw new Error('No readable document was found in the stored photos.');
     } catch (err) {
+      task?.check();
       await setBatchState(sb, batchId, 'failed', NOTE_SEGMENT_STOPPED);
       throw retryable(err);
     }
   }
+  docs = [...typed, ...docs];
+  task?.check();
   if (!docs.length) {
     // segment has already moved the batch to 'extracting', where it would
     // otherwise say "being read" for ever (PAT-2026-01462, since 12 Sep)
@@ -822,6 +845,7 @@ async function readBatch(sb, batchId, stage, { resume = false } = {}) {
   const readAlready = resume ? await parsedReadings(sb, batchId) : {};
   const failures = [];
   for (const [i, d] of docs.entries()) {
+    task?.check();
     if (readAlready[d.document_id]) { d.extraction_id = readAlready[d.document_id]; continue; }
     stage(`Reading ${label(d.doc_class)} (${i + 1} of ${docs.length})…`,
           0.65 + (i / docs.length) * 0.3);
@@ -829,9 +853,10 @@ async function readBatch(sb, batchId, stage, { resume = false } = {}) {
       // keep the extraction id: phase 3 is addressed by extraction, not by
       // document, because a document can be read more than once and a check
       // belongs to the reading it checked
-      const ex = await callParser({ action: 'extract', document_id: d.document_id });
+      const ex = await callParser({ action: 'extract', document_id: d.document_id }, task);
       d.extraction_id = ex.extraction_id ?? null;
     } catch (e) {
+      task?.check();
       failures.push(`${label(d.doc_class)}: ${e.message}`);
     }
   }
@@ -858,20 +883,26 @@ async function readBatch(sb, batchId, stage, { resume = false } = {}) {
     throw retryable(new Error(`None of the documents could be read. ${why}`.trim()));
   }
 
+  if (typed.length && failures.length) {
+    await setBatchState(sb, batchId, 'failed', NOTE_READ_STOPPED);
+    throw retryable(new Error(`Some documents were not read. ${[...new Set(failures)].slice(0, 3).join('. ')}`));
+  }
+
   const audits = {};
   if (auditOn) {
     const checked = resume ? await finishedAudits(sb, batchId) : {};
     for (const [i, d] of docs.entries()) {
       // a document that was not read has nothing to check; asking anyway only
       // added a second, more confusing failure line for the same document
-      if (!d.extraction_id) continue;
+      if (!d.extraction_id || typedIds.has(d.document_id)) continue;
       if (checked[d.extraction_id]) { audits[d.document_id] = checked[d.extraction_id]; continue; }
       stage(`Checking what we read off ${label(d.doc_class)} (${i + 1} of ${docs.length})…`,
             0.9 + (i / docs.length) * 0.06);
       try {
-        const a = await callParser({ action: 'audit', extraction_id: d.extraction_id });
+        const a = await callParser({ action: 'audit', extraction_id: d.extraction_id }, task);
         audits[d.document_id] = a;
       } catch (e) {
+        task?.check();
         failures.push(`checking ${label(d.doc_class)}: ${e.message}`);
       }
     }
@@ -881,8 +912,9 @@ async function readBatch(sb, batchId, stage, { resume = false } = {}) {
   stage('Checking the documents against each other…', 0.97);
   let merged;
   try {
-    merged = await callParser({ action: 'merge', batch_id: batchId });
+    merged = await callParser({ action: 'merge', batch_id: batchId }, task);
   } catch (err) {
+    task?.check();
     await setBatchState(sb, batchId, 'failed', NOTE_MERGE_STOPPED);
     throw retryable(err);
   }
@@ -896,19 +928,50 @@ async function readBatch(sb, batchId, stage, { resume = false } = {}) {
  * a mentor to check, or stays resumable at the step it reached, exactly like a
  * tab closed mid-read. Never throws; answers whether the read finished.
  */
-export async function readStoredBatch(batchId) {
+export async function readStoredBatch(batchId, { task = null } = {}) {
+  const owner = task || beginDocumentTask('Stored intake documents', null, { visible: false });
   try {
-    await readBatch(getSupabase(), batchId, () => {});
+    const sb = await owner.client();
+    owner.check();
+    await readBatch(sb, batchId, () => {}, { task: owner });
+    owner.check();
     return true;
   } catch (e) {
     console.warn('[docBatch] background read stopped, resumable:', e.message);
     return false;
+  } finally {
+    if (!task) owner.remove();
   }
 }
 
 // ============================================================
 // What an earlier run already left in the database
 // ============================================================
+
+/** The notes typed at intake filed in a batch (sql/195), in the shape segment returns. */
+async function typedNotes(sb, batchId) {
+  const { data, error } = await sb.from('patient_documents')
+    .select('id, doc_type')
+    .eq('batch_id', batchId).eq('doc_type', 'intake_notes').is('deleted_at', null);
+  // Unread notes are invisible once the batch says ready, so a failed look
+  // stops the read here, where it can be finished later, rather than skip them.
+  if (error) throw retryable(error);
+  return (data || []).map((d) => ({ document_id: d.id, doc_class: d.doc_type, pages: 0 }));
+}
+
+async function hasPages(sb, batchId) {
+  const { data, error } = await sb.from('document_pages').select('id').eq('batch_id', batchId).limit(1);
+  if (error) throw retryable(error);
+  return !!data?.length;
+}
+
+/** Which of these batches carry typed notes, so a batch of notes alone is not "nothing stored". */
+async function batchesWithNotes(sb, batchIds) {
+  if (!batchIds.length) return new Set();
+  const { data } = await sb.from('patient_documents')
+    .select('batch_id').in('batch_id', batchIds).eq('doc_type', 'intake_notes').is('deleted_at', null);
+  return new Set((data || []).map((d) => d.batch_id));
+}
 
 /** The documents a batch was already cut into, in the shape segment returns. */
 async function existingDocuments(sb, batchId) {
@@ -987,6 +1050,16 @@ async function loadBatchState(sb, batch) {
   };
 }
 
+/** When notes were typed, in IST, e.g. "13 Oct, 21:40". */
+export function fmtTypedAt(iso) {
+  const ms = Date.parse(iso);
+  if (!ms) return '';
+  const t = new Date(ms + IST_MS);
+  const hh = String(t.getUTCHours()).padStart(2, '0');
+  const mm = String(t.getUTCMinutes()).padStart(2, '0');
+  return `${t.getUTCDate()} ${MONTHS[t.getUTCMonth()]}, ${hh}:${mm}`;
+}
+
 /** The claim note for `now`, in IST to the minute, e.g.
  *  "Being finished now, started 25 Sep 2026 17:42 IST." */
 export function claimNote(now = Date.now()) {
@@ -1034,7 +1107,7 @@ async function resumeBatch(sb, batch, stage) {
 
   const { count } = await sb.from('document_pages')
     .select('id', { count: 'exact', head: true }).eq('batch_id', batch.id);
-  if (!count) {
+  if (!count && !(await typedNotes(sb, batch.id)).length) {
     await setBatchState(sb, batch.id, 'failed', NOTE_UPLOAD_STOPPED);
     throw new Error('This upload has no stored pages, so there is nothing to finish. Pick the files again.');
   }
@@ -1303,7 +1376,7 @@ export function renderConflicts(conflicts) {
     </details>` : ''}`;
 }
 
-function renderIdentityBanner(check, fields, patient) {
+function renderIdentityBanner(check, fields, patient, typed = false) {
   if (check === 'mismatch') {
     return `<div class="doc-callout doc-callout-danger">
       <strong>${icon('alertTriangle')} This may be a different patient.</strong>
@@ -1313,6 +1386,10 @@ function renderIdentityBanner(check, fields, patient) {
       Nothing from it can be saved until that is resolved.</p></div>`;
   }
   if (check === 'unverifiable') {
+    if (typed) return `<div class="doc-callout doc-callout-warn">
+      <strong>${icon('alertTriangle')} Check these notes belong to this patient.</strong>
+      <p>Typed intake notes have no hospital case number to match. Check the original text below
+      and confirm it belongs to ${sanitize(patient.full_name)} before accepting details.</p></div>`;
     return `<div class="doc-callout doc-callout-warn">
       <strong>${icon('alertTriangle')} We could not confirm this is the right patient.</strong>
       <p>No case number we can match${fields.full_name
@@ -1413,7 +1490,8 @@ export function docCard(d, patient, thumbs, index = 0, audit = null) {
         <div>
           <h4>${sanitize(label(cls))}</h4>
           <div class="doc-field-where">
-            ${d.pages} page${d.pages > 1 ? 's' : ''}
+            ${d.typed ? `Typed at the hospital${d.typed.uploaded_at ? ', ' + sanitize(fmtTypedAt(d.typed.uploaded_at)) : ''}`
+                      : `${d.pages} page${d.pages > 1 ? 's' : ''}`}
             ${fields.document_date ? ' · ' + sanitize(fields.document_date) : ''}
             ${fields.hospital_case_no ? ' · ' + sanitize(fields.hospital_case_no) : ''}
             ${summary ? ' · ' + sanitize(summary) : ''}
@@ -1423,13 +1501,17 @@ export function docCard(d, patient, thumbs, index = 0, audit = null) {
           <input type="checkbox" data-section="${d.document_id}"
                  ${blocked || hasErrors || !summary ? '' : 'checked'}
                  ${blocked ? 'disabled' : ''} />
-          <span>Save the clinical details from this document</span>
+          <span>${d.typed ? 'Save the details from these notes' : 'Save the clinical details from this document'}</span>
         </label>
       </header>
 
-      ${renderIdentityBanner(d.extraction?.identity_check, fields, patient)}
+      ${renderIdentityBanner(d.extraction?.identity_check, fields, patient, !!d.typed)}
       ${renderValidations(d.validations)}
       ${renderAuditOther(audit, shownKeys)}
+
+      ${d.typed ? `<div class="doc-callout">
+        <strong>What was typed at the hospital</strong>
+        <p style="white-space:pre-wrap;overflow-wrap:anywhere">${sanitize(d.typed.typed_text || '')}</p></div>` : ''}
 
       ${d.extraction?.summary_text ? `<div class="doc-callout">
         <strong>What this document says</strong>
@@ -1678,19 +1760,32 @@ function renderLeftOut(result) {
   </div>`;
 }
 
+/** "12 pages", "the notes typed at intake", or "3 pages and the notes typed at intake". */
+function readFrom(pageCount, hasTyped) {
+  const pagesText = pageCount > 0 ? `${pageCount} page${pageCount > 1 ? 's' : ''}` : '';
+  if (!hasTyped) return pagesText || '0 pages';
+  return pagesText ? `${pagesText} and the notes typed at intake` : 'the notes typed at intake';
+}
+
 async function showBatchReview(sb, patient, patientId, result) {
   // ---- load everything the review needs -------------------------------
-  const { data: view } = await sb.from('v_batch_documents')
+  const { data: view, error: viewErr } = await sb.from('v_batch_documents')
     .select('*').eq('batch_id', result.batchId).order('doc_index');
-  const { data: extractions } = await sb.from('document_extractions')
+  const { data: extractions, error: exErr } = await sb.from('document_extractions')
     .select('id, document_id, status, fields, summary_text, identity_check, legibility, doc_class')
     .eq('batch_id', result.batchId);
-  const { data: validations } = await sb.from('document_validations')
+  const { data: validations, error: valErr } = await sb.from('document_validations')
     .select('extraction_id, code, severity, message, fields, detail')
     .eq('batch_id', result.batchId);
-  const { data: pages } = await sb.from('document_pages')
+  const { data: pages, error: pageErr } = await sb.from('document_pages')
     .select('id, document_id, page_index, thumb_path, storage_path')
     .eq('batch_id', result.batchId).order('page_index');
+  // notes typed at intake (sql/195) are shown as typed, where pages would be
+  const { data: typedRows, error: typedErr } = await sb.from('patient_documents')
+    .select('id, typed_text, uploaded_at')
+    .eq('batch_id', result.batchId).eq('doc_type', 'intake_notes');
+  const loadErr = viewErr || exErr || valErr || pageErr || typedErr;
+  if (loadErr) throw new Error('Could not load the review. Nothing was changed. Try Review now again. ' + loadErr.message);
 
   // signed URLs for the thumbnails, so a mentor can see the field in context
   const signed = {};
@@ -1719,6 +1814,7 @@ async function showBatchReview(sb, patient, patientId, result) {
       // exactly as it did before phase 3 existed.
       audit: result.audits?.[v.document_id] || null,
       thumbs,
+      typed: (typedRows || []).find((t) => t.id === v.document_id) || null,
     };
   }).filter((d) => d.extraction);
 
@@ -1738,7 +1834,7 @@ async function showBatchReview(sb, patient, patientId, result) {
     <div class="doc-batch-head">
       <div>
         <strong>${docs.length} document${docs.length > 1 ? 's' : ''}</strong>
-        from ${result.pageCount} page${result.pageCount > 1 ? 's' : ''}
+        from ${readFrom(result.pageCount, docs.some((d) => d.typed))}
         ${result.dupes ? ` · ${result.dupes} duplicate page(s) skipped` : ''}
       </div>
       <button class="btn btn-ghost btn-sm" id="db-accept-high">
@@ -1753,7 +1849,7 @@ async function showBatchReview(sb, patient, patientId, result) {
     ${docs.map((d, i) => docCard(d, patient, d.thumbs, i, d.audit)).join('')}`;
 
   closeModal();
-  showModal({
+  const overlay = showModal({
     title: 'What we read', content: el, size: 'xl',
     footer: `<button class="btn btn-ghost" id="db-discard">Discard all</button>
              <button class="btn btn-primary" id="db-save">Save what I ticked</button>`,
@@ -1763,7 +1859,7 @@ async function showBatchReview(sb, patient, patientId, result) {
       + 'opens this review again.', 'info', 8000),
   });
 
-  document.getElementById('db-accept-high').addEventListener('click', () => {
+  overlay.querySelector('#db-accept-high').addEventListener('click', () => {
     let n = 0;
     let skipped = 0;
     el.querySelectorAll('input[data-field]').forEach((cb) => {
@@ -1786,7 +1882,7 @@ async function showBatchReview(sb, patient, patientId, result) {
                 : 'Nothing left that is safe to tick automatically', n ? 'success' : 'info');
   });
 
-  document.getElementById('db-discard').addEventListener('click', async () => {
+  overlay.querySelector('#db-discard').addEventListener('click', async () => {
     await sb.from('document_batches')
       .update({ status: 'discarded', reviewed_at: new Date().toISOString() })
       .eq('id', result.batchId);
@@ -1794,7 +1890,7 @@ async function showBatchReview(sb, patient, patientId, result) {
     showToast('Discarded. The pages are still on file.', 'info');
   });
 
-  document.getElementById('db-save').addEventListener('click', async (ev) => {
+  overlay.querySelector('#db-save').addEventListener('click', async (ev) => {
     const btn = ev.currentTarget;
     btn.disabled = true;
     btn.innerHTML = '<div class="spinner"></div> Saving…';
@@ -1851,8 +1947,10 @@ export async function findUnfinishedBatches(sb, patientId, now = Date.now()) {
   if (error || !batches?.length) return [];
   const { data: runs } = await sb.from('document_parse_runs')
     .select('batch_id, started_at, completed_at').in('batch_id', batches.map((b) => b.id));
+  const withNotes = await batchesWithNotes(sb, batches.map((b) => b.id));
   return batches
-    .map((b) => classifyBatch(b, (runs || []).filter((r) => r.batch_id === b.id), now))
+    .map((b) => classifyBatch({ ...b, has_notes: withNotes.has(b.id) },
+                              (runs || []).filter((r) => r.batch_id === b.id), now))
     .filter(Boolean);
 }
 
@@ -1861,7 +1959,8 @@ export async function findUnfinishedBatches(sb, patientId, now = Date.now()) {
 export function classifyBatch(batch, runs = [], now = Date.now()) {
   if (batch.status === 'ready_for_review') return { ...batch, action: 'review' };
   // no page was ever stored, so there is nothing to finish: pick the files again
-  if (!(batch.page_count > 0)) return null;
+  // (unless the batch holds notes typed at intake, which are read like a page)
+  if (!(batch.page_count > 0) && !batch.has_notes) return null;
   if (batch.status === 'failed') return { ...batch, action: 'resume' };
   if (!['uploading', 'segmenting', 'extracting'].includes(batch.status)) return null;
   // a claim is activity: someone pressed Finish reading and is on it
@@ -1966,7 +2065,8 @@ export async function openExistingBatch(batchId) {
   if (!batch) { showToast('Could not find that upload', 'error'); return; }
   const { data: runs } = await sb.from('document_parse_runs')
     .select('batch_id, started_at, completed_at').eq('batch_id', batchId);
-  const item = classifyBatch(batch, runs || [], Date.now());
+  const withNotes = await batchesWithNotes(sb, [batchId]);
+  const item = classifyBatch({ ...batch, has_notes: withNotes.has(batchId) }, runs || [], Date.now());
   if (!item) {
     showToast(batch.status === 'reviewed' || batch.status === 'discarded'
       ? 'This upload is already closed.'

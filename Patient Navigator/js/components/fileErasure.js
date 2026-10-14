@@ -71,7 +71,7 @@ export async function openEraseFiles({ patientId, batchId = null, label = 'this 
     showToast('Could not count the stored files: ' + sanitize(e.message), 'error', 8000);
     return;
   }
-  if (!preview.files) {
+  if (!preview.files && !preview.typed_notes) {
     // An earlier erasure whose files went but whose finish never ran (a closed
     // tab, a dropped connection): finish it now, so its uploads stop showing.
     if (preview.unfinished) {
@@ -92,7 +92,7 @@ export async function openEraseFiles({ patientId, batchId = null, label = 'this 
   const what = batchId ? 'this upload' : 'this family';
   const body = document.createElement('div');
   body.innerHTML = `
-    <p style="margin:0 0 10px">${plural(preview.files, 'file is', 'files are')} stored for
+    <p style="margin:0 0 10px">${plural(preview.files, 'file', 'files')}${preview.typed_notes ? ` and ${plural(preview.typed_notes, 'set of typed intake notes', 'sets of typed intake notes')}` : ''} stored for
       <strong>${sanitize(label)}</strong> (${fmtBytes(preview.bytes)}): every page and thumbnail${batchId ? '' : ', WhatsApp file and call recording'} of ${what}.
       Erasing deletes them for good. It cannot be undone.</p>
     <p class="text-muted" style="margin:0 0 14px;font-size:13px">The record keeps who erased them, when and why, and a
@@ -116,7 +116,7 @@ export async function openEraseFiles({ patientId, batchId = null, label = 'this 
     content: body,
     footer: `
       <button class="btn btn-secondary" data-ef-cancel>Cancel</button>
-      <button class="btn btn-danger" data-ef-go disabled>Erase ${plural(preview.files, 'file', 'files')}</button>`,
+      <button class="btn btn-danger" data-ef-go disabled>Erase files${preview.typed_notes ? ' and typed notes' : ''}</button>`,
   });
   const $ = (sel) => overlay.querySelector(sel);
   const reasonText = () => ($('#ef-reason').value || $('#ef-other').value).trim();
@@ -154,13 +154,16 @@ export async function openEraseFiles({ patientId, batchId = null, label = 'this 
     }
     closeModal();
     if (result.status === 'done') {
-      showToast(`Erased ${plural(result.files_removed, 'file', 'files')}. The record keeps who, when and why.`, 'success', 6000);
+      showToast(`Erased ${plural(result.files_removed, 'file', 'files')}${result.typed_notes_cleared ? ` and ${plural(result.typed_notes_cleared, 'set of typed notes', 'sets of typed notes')}` : ''}. The record keeps who, when and why.`, 'success', 6000);
     } else {
       const why = result.problems?.length ? ` (${sanitize(result.problems[0])})` : '';
       showToast(`Erased ${result.files_removed} of ${result.files_found}; ${plural(result.files_left, 'file is', 'files are')} still stored${why}. Run it again.`, 'warning', 10000);
     }
     if (result.new_since_start) {
       showToast(`${plural(result.new_since_start, 'file was', 'files were')} added while this ran and ${result.new_since_start === 1 ? 'is' : 'are'} still stored.`, 'warning', 10000);
+    }
+    if (result.typed_notes_new_since_start) {
+      showToast(`${plural(result.typed_notes_new_since_start, 'set of typed intake notes was', 'sets of typed intake notes were')} added while this ran and kept. Run erasure again to include them.`, 'warning', 10000);
     }
     if (typeof onDone === 'function') onDone(result);
   });
