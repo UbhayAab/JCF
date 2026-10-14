@@ -504,7 +504,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261013b';  // bumped on every breaking deploy
+const APP_BUILD = '20261013c';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -577,6 +577,9 @@ async function init() {
   // WhatsApp leads: HopeBot families. The calling roles call them, managers
   // triage. Not content staff: sql/173 keeps HopeBot families from them.
   registerRoute('leads', (c) => renderLeads(c), { requiresAuth: true, roles: CARE_ROLES.filter((r) => r !== 'content') });
+  // Fixboard #25: every GI referral form with every answer. Loaded on demand.
+  registerRoute('referrals', (c) => import('./pages/referrals.js').then((m) => m.renderReferrals(c)),
+    { requiresAuth: true, roles: CARE_ROLES.filter((r) => r !== 'content') });
   // Fixboard #32 (sql/183): families who agreed to share their papers, and
   // who follows up. The ground team marks families too. Loaded on demand.
   registerRoute('doccollect', (c) => import('./pages/docCollection.js').then((m) => m.renderDocCollection(c)),

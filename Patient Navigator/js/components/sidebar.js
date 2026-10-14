@@ -43,6 +43,8 @@ const NAV_ITEMS = [
       // cases". Zero reassignment requests have ever been made.
       { id: 'concerns',  label: 'Flags & concerns', icon: 'alertTriangle', route: 'concerns', roles: CARE_ROLES },
       { id: 'leads',     label: 'WhatsApp leads', icon: 'inbox', route: 'leads', roles: CARE_ROLES.filter((r) => r !== 'content') },
+      // Fixboard #25: every GI referral form (jarurat-care.pages.dev/gi) with every answer.
+      { id: 'referrals', label: 'Form referrals', icon: 'list', route: 'referrals', roles: CARE_ROLES.filter((r) => r !== 'content') },
       // Fixboard #32 (sql/183): families ready to share their papers, and who follows up.
       { id: 'doccollect', label: 'Document collection', icon: 'fileText', route: 'doccollect', roles: [...CARE_ROLES.filter((r) => r !== 'content'), 'ground_poc'] },
       // Fixboard #24: write one message, pick who and when; HopeBot sends it (sql/168).
@@ -115,6 +117,7 @@ export function renderSidebar() {
             <span>${item.label}</span>
             ${item.id === 'concerns' ? '<span class="nav-badge" id="navcount-concerns" style="display:none"></span>' : ''}
             ${item.id === 'leads' ? '<span class="nav-badge" id="navcount-leads" style="display:none" title="Families waiting for the call HopeBot promised"></span>' : ''}
+            ${item.id === 'referrals' ? '<span class="nav-badge" id="navcount-referrals" style="display:none" title="Referral forms whose family no call has reached yet"></span>' : ''}
             ${item.id === 'doccollect' ? '<span class="nav-badge" id="navcount-doccollect" style="display:none" title="Families whose document collection call is overdue"></span>' : ''}
           </button>
         `).join('')}
@@ -188,6 +191,7 @@ export function renderSidebar() {
   refreshConcernCount();
   refreshHopebotCount();
   refreshDocCollectCount();
+  refreshReferralCount();
 
   // On probation: count the calls (at most once a minute), redraw when a step
   // opens, and say once what each new tab is for.
@@ -274,6 +278,25 @@ async function refreshDocCollectCount() {
   }
   const el = document.getElementById('navcount-doccollect');
   if (el) { el.textContent = docCollectCache.n; el.style.display = docCollectCache.n ? '' : 'none'; }
+}
+
+// Form referrals (Fixboard #25): families from the GI referral form that no
+// caregiver call has reached yet. Row security counts a mentor's own families
+// and every family for a manager. Same one-minute cache.
+let referralCache = { n: 0, at: 0 };
+async function refreshReferralCount() {
+  if (!HOPEBOT_COUNT_ROLES.includes(getUserRole())) return;
+  if (Date.now() - referralCache.at > 60000) {
+    try {
+      const { count, error } = await getSupabase().from('referral_forms')
+        .select('id, patients!inner(first_contact_at, patient_status)', { count: 'exact', head: true })
+        .is('patients.first_contact_at', null)
+        .not('patients.patient_status', 'in', '(inactive,deceased)');
+      if (!error) referralCache = { n: count || 0, at: Date.now() };
+    } catch { /* leave the pill hidden on failure */ }
+  }
+  const el = document.getElementById('navcount-referrals');
+  if (el) { el.textContent = referralCache.n; el.style.display = referralCache.n ? '' : 'none'; }
 }
 
 // Mobile bottom-nav: 5 priority destinations.

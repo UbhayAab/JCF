@@ -22,6 +22,7 @@ import { renderNotesPanel } from '../components/patientNotes.js';
 import { openEscalateModal, openDisinterestModal, clearDisinterest, openBlacklistModal } from '../components/escalate.js';
 import { formatDate, formatRelativeTime, capitalize, getDialStatusBadge, exportToCSV, renderSkeleton } from '../utils/formatters.js';
 import { sanitize } from '../utils/validators.js';
+import { REFERRAL_COLUMNS, referralFieldsHTML, consentHTML, outcomeBadge } from '../utils/referralForm.js';
 import { navigate, goBack } from '../router.js';
 import { icon } from '../components/icons.js';
 import {
@@ -1180,6 +1181,7 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
       </div>
     </div>` : ''}
     <div id="byc-mount"></div>
+    <div id="referral-mount"></div>
     ${p.patient_status === 'inactive' || p.disinterest_level ? '<div id="status-history-mount" style="margin-bottom:var(--s5)"></div>' : ''}
     <div class="content-grid">
       <div class="col-span-6"><div class="card">
@@ -1268,6 +1270,55 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
     .catch((e) => console.warn('[status history]', e.message));
   loadFolderMore(p.id);
   mountPhones(el.querySelector('#phones-mount'), p, sb);
+  mountReferrals(el.querySelector('#referral-mount'), p, sb);
+}
+
+// Fixboard #25: what the family sent on the GI referral form, every answer,
+// newest first (referral_forms, sql/164 and 194; row security is the
+// family's own). Nothing at all for a family that never sent one.
+async function mountReferrals(mount, p, sb) {
+  if (!mount) return;
+  let forms = [];
+  let hasMore = false;
+  async function loadEarlier() {
+    const button = mount.querySelector('[data-load-referrals]');
+    if (button) { button.disabled = true; button.textContent = 'Loading…'; }
+    try {
+      let query = sb.from('referral_forms').select(REFERRAL_COLUMNS)
+        .eq('patient_id', p.id).order('created_at', { ascending: false }).order('id', { ascending: false }).limit(11);
+      const last = forms.at(-1);
+      if (last) query = query.or(`created_at.lt.${last.created_at},and(created_at.eq.${last.created_at},id.lt.${last.id})`);
+      const { data, error } = await query;
+      if (!mount.isConnected) return;
+      if (error) throw error;
+      const expanded = mount.querySelector('[data-earlier-referrals]')?.open || forms.length > 0;
+      hasMore = (data || []).length > 10;
+      forms.push(...(data || []).slice(0, 10));
+      const [latest, ...older] = forms;
+      if (!latest) { mount.innerHTML = ''; return; }
+      mount.innerHTML = `
+    <div class="card" style="margin-bottom:var(--s5);border-left:3px solid var(--primary)">
+      <div class="card-header" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <div class="card-title">From the GI referral form</div>${outcomeBadge(latest.outcome)}
+        <span class="due-meta wraps">${older.length ? `${forms.length}${hasMore ? '+' : ''} forms loaded, the newest here` : 'every answer, as they sent it'}</span>
+      </div>
+      ${referralFieldsHTML(latest)}
+      ${consentHTML(latest)}
+      ${older.length ? `<details data-earlier-referrals ${expanded ? 'open' : ''} style="margin-top:10px"><summary class="due-meta wraps" style="cursor:pointer">${older.length} earlier form${older.length === 1 ? '' : 's'}</summary>
+        ${older.map((r) => `<div style="margin-top:10px">${referralFieldsHTML(r)}${consentHTML(r)}</div>`).join('')}</details>` : ''}
+      ${hasMore ? '<button class="btn btn-secondary btn-sm" data-load-referrals style="margin-top:10px">Load earlier forms</button>' : ''}
+      <p data-referral-error role="status" class="due-meta wraps"></p>
+    </div>`;
+      mount.querySelector('[data-load-referrals]')?.addEventListener('click', loadEarlier);
+    } catch (error) {
+      if (!mount.isConnected) return;
+      if (!forms.length) mount.innerHTML = '<p data-referral-error class="due-meta wraps" style="margin-bottom:var(--s5)"></p>';
+      const message = mount.querySelector('[data-referral-error]');
+      if (message) message.textContent = `Could not load this family's referral forms: ${error.message}`;
+      if (button) { button.disabled = false; button.textContent = 'Load earlier forms'; }
+    }
+  }
+  await loadEarlier();
 }
 
 // The family's numbers from patient_phones, which is where bulk_add_leads

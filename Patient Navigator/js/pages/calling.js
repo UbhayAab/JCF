@@ -13,6 +13,7 @@ import { formatRelativeTime, capitalize } from '../utils/formatters.js';
 // uploads. Every value from a record goes through sanitize() before innerHTML.
 import { sanitize } from '../utils/validators.js';
 import { icon } from '../components/icons.js';
+import { REFERRAL_COLUMNS, referralBriefHTML } from '../utils/referralForm.js';
 import { DIAL_STATUSES, RECEPTIVENESS, REQUIREMENTS, CONDITIONS, giLabel, statusBadge, vulnerabilityBadge, stageGuide, GI_SUBTYPES, dataGaps, CONCERN_REASONS, CALLER_CONCERNS, CONCERN_SEVERITIES, sessionKind, sessionStatus, LEVER_GROUPS } from '../utils/catalog.js';
 import { showModal, closeModal } from '../components/modal.js';
 import { navigate } from '../router.js';
@@ -794,6 +795,17 @@ function wireUndoBar() {
   });
 }
 
+// Fixboard #25: the family's newest GI referral form, every answer. Taken by
+// element: a fast move to the next family disconnects this mount, and a late
+// answer must not paint one family's form into another family's card.
+async function mountReferralBrief(mount, p) {
+  if (!mount || !p?.patient_id) return;
+  const { data, error } = await getSupabase().from('referral_forms').select(REFERRAL_COLUMNS)
+    .eq('patient_id', p.patient_id).order('created_at', { ascending: false }).limit(1);
+  if (error || !data?.length || !mount.isConnected) return;
+  mount.innerHTML = referralBriefHTML(data[0], { open: p.patient_status === 'new_lead' });
+}
+
 // ============================================================ Active view
 function mountActive(p, history) {
   currentHistory = history || [];
@@ -862,10 +874,10 @@ function mountActive(p, history) {
           </div>` : ''}
           ${renderSessionBanner()}
           <div class="info-grid">${info.map(i => `<div class="info-cell"><div class="info-label">${i.label}</div><div class="info-value">${sanitize(i.value)}</div></div>`).join('')}</div>
-          ${p.caregiver_name ? `
+          ${p.caregiver_name || (p.caregiver_phone_full && !(Array.isArray(p.phones) && p.phones.length > 1)) ? `
           <div class="caregiver">
             <div class="row gap2" style="display:flex;align-items:center;gap:8px"><span class="cg-ico">${icon('users')}</span>
-              <div><div class="info-label">Caregiver</div><div class="info-value">${sanitize(p.caregiver_name)}${p.caregiver_relationship ? ' · ' + sanitize(p.caregiver_relationship) : ''}</div></div></div>
+              <div><div class="info-label">Caregiver</div><div class="info-value">${p.caregiver_name ? sanitize(p.caregiver_name) : '<span style="color:var(--ink-3);font-weight:500">Name not known yet</span>'}${p.caregiver_relationship ? ' · ' + sanitize(p.caregiver_relationship) : ''}</div></div></div>
             ${p.caregiver_phone_full && !(Array.isArray(p.phones) && p.phones.length > 1) ? `<a class="cg-call" href="tel:${sanitize(String(p.caregiver_phone_full).replace(/\s/g, ''))}">${icon('phone')}<span class="tnum">${sanitize(p.caregiver_phone_full)}</span></a>` : ''}
           </div>` : ''}
           <div class="timer">
@@ -884,6 +896,7 @@ function mountActive(p, history) {
               <span class="info-label" style="color:var(--ink-3)">minutes talked</span>
             </label>
           </div>
+          <div id="referral-mount"></div>
           ${p.legacy_notes ? `
           <details class="history" style="border-top:1px solid var(--line);padding-top:var(--s4)">
             <summary class="info-label" style="cursor:pointer;margin-bottom:6px">Notes from intake</summary>
@@ -907,6 +920,7 @@ function mountActive(p, history) {
     .then((m) => m.mountCollectStatus(docCollectMount, p.patient_id,
       { patientName: p.full_name || p.patient_code || '', preferred: 'verbal_during_call' }))
     .catch((e) => console.warn('[documents] collection status:', e.message));
+  mountReferralBrief(document.getElementById('referral-mount'), p);
   wireActive(p);
   wireGapsPanel(p);
   wireLeversPanel(p);
