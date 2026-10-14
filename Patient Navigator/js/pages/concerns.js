@@ -247,7 +247,8 @@ function paint() {
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                 <strong style="font-size:13.5px">${patientName(r)}</strong>
                 <span class="badge badge-neutral">${concernReason(r.reason).label}</span>
-                <span class="hist-meta">resolved by ${sanitizeText(r.resolver?.full_name || 'N/A')} · ${formatRelativeTime(r.resolved_at)}</span>
+                <span class="hist-meta">${r.resolved_by ? `resolved by ${sanitizeText(r.resolver?.full_name || 'a teammate')}`
+                  : String(r.resolution_note || '').startsWith('Closed automatically') ? 'closed automatically' : 'resolved by a former teammate'} · ${formatRelativeTime(r.resolved_at)}</span>
               </div>
               ${r.resolution_note ? `<div style="font:var(--t-xs);color:var(--ink-2);margin-top:4px">${sanitizeText(r.resolution_note)}</div>` : ''}
             </div>`).join('')}
