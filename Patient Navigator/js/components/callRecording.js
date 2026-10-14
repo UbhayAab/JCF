@@ -18,6 +18,7 @@ import { getSupabase } from '../supabase.js';
 import { showToast } from './toast.js';
 import { showModal, closeModal, confirmModal } from './modal.js';
 import { icon } from './icons.js';
+import { mountCallMeasurements } from './measurements.js';
 
 // The consent line, exactly as agreed for Ubhay (chat #533). A change of words
 // is a new version: the version is saved with every answer.
@@ -334,6 +335,8 @@ export function mountRecordingSection(el, ctx) {
   let guideOpen = false;       // inline setup steps
   let busy = false;
   let disposed = false;        // the call moved on: late answers must not touch the next family's form
+  let measurementBox = null;
+  const measurementStates = new Map(); // private to this mounted call, never an automatic write
   const sb = getSupabase();
   const inline = !!ctx.inline;
   // A question before something that cannot be undone: a modal on the portal, inside the box in a modal.
@@ -354,6 +357,7 @@ export function mountRecordingSection(el, ctx) {
 
   function render() {
     if (disposed) return;
+    measurementBox?.dispose(); measurementBox = null;
     const rec = ctx.get();
     const btn = (id, label, kind = 'btn-secondary', ico = '') => `<button type="button" class="btn ${kind} btn-sm" id="${id}" style="gap:6px">${ico ? icon(ico) : ''}${label}</button>`;
     const small = (t, color = 'var(--ink-3)') => `<p style="font:var(--t-xs);color:${color};margin:6px 0 0">${t}</p>`;
@@ -417,6 +421,7 @@ export function mountRecordingSection(el, ctx) {
           ? `<details><summary style="cursor:pointer;font:var(--t-xs);color:var(--ink-2)">Show the transcript (${transcripts.get(rec.recordingId).length} turns${r.language ? `, ${esc(r.language)}` : ''})</summary>
           <div style="max-height:260px;overflow-y:auto;margin-top:6px">${transcripts.get(rec.recordingId).map((t) => `<p style="font:var(--t-xs);margin:0 0 4px"><strong>${t.speaker === 'caller' ? 'You' : t.speaker === 'family' ? 'Family' : 'Someone'}:</strong> ${esc(t.text)}</p>`).join('')}</div></details>`
           : btn('rec-read', 'Read the transcript', 'btn-ghost', 'fileText')}
+        <div id="rec-measurements"></div>
         ${btn('rec-remove', 'Remove recording', 'btn-ghost', 'trash')}`, 'ok');
     } else if (rec.status === 'saved') {
       el.innerHTML = card(`
@@ -436,6 +441,16 @@ export function mountRecordingSection(el, ctx) {
       wireGuide(g);
     }
     wire();
+    const measurements = rec.result?.suggestions?.measurements;
+    if (rec.status === 'done' && rec.decision === 'agreed' && ctx.consentOnFile()
+        && rec.recordingId && Array.isArray(measurements) && measurements.length) {
+      if (!measurementStates.has(rec.recordingId)) measurementStates.set(rec.recordingId, {});
+      measurementBox = mountCallMeasurements(el.querySelector('#rec-measurements'), ctx.patientId, {
+        suggestions: measurements, recordingId: rec.recordingId, state: measurementStates.get(rec.recordingId), sb,
+        allowed: () => sameRecording(rec.recordingId) && ctx.get().decision === 'agreed' && ctx.consentOnFile(),
+        onStateChanged: () => { if (sameRecording(rec.recordingId)) render(); },
+      });
+    }
   }
 
   async function answer(decision) {
@@ -625,7 +640,7 @@ export function mountRecordingSection(el, ctx) {
   render();
   if (start.recordingId && (start.status === 'uploading' || start.status === 'transcribing')) transcribe();
   else if (start.status === 'uploading') update({ status: 'interrupted' });
-  return { refresh: render, dispose() { disposed = true; } };
+  return { refresh: render, dispose() { disposed = true; measurementBox?.dispose(); } };
 }
 
 // After the call log is saved: the answer and its recording join it. Never
@@ -733,7 +748,7 @@ export async function mountLogRecording(el, { log, meId, consentOnFile, callSeco
 async function renderRecordingViewer(container, recordingId) {
   const sb = getSupabase();
   const { data: r, error } = await sb.from('call_recordings')
-    .select('id, storage_path, status, summary, suggestions, transcript, duration_seconds, audio_deleted_at, created_at, language, uploaded_by')
+    .select('id, patient_id, storage_path, status, summary, suggestions, transcript, duration_seconds, audio_deleted_at, created_at, language, uploaded_by')
     .eq('id', recordingId).maybeSingle();
   if (error || !r) { showToast('This recording is not open to you.', 'warning'); return null; }
   const turns = Array.isArray(r.transcript) ? r.transcript : [];
@@ -747,7 +762,15 @@ async function renderRecordingViewer(container, recordingId) {
       ${turns.length ? `<details ${n ? '' : 'open'}><summary style="cursor:pointer;font:var(--t-xs);color:var(--ink-2)">The transcript (${turns.length} turns)</summary>
         <div style="max-height:320px;overflow-y:auto;border-top:1px solid var(--line);padding-top:8px;margin-top:6px">${turns.map((t) =>
         `<p style="margin:0 0 6px"><strong>${t.speaker === 'caller' ? 'Caller' : t.speaker === 'family' ? 'Family' : 'Someone'}:</strong> ${esc(t.text)}</p>`).join('')}</div></details>`
-        : `<p style="color:var(--ink-3);margin:0">${r.status === 'done' ? 'No speech was found.' : 'No transcript yet.'}</p>`}`;
+        : `<p style="color:var(--ink-3);margin:0">${r.status === 'done' ? 'No speech was found.' : 'No transcript yet.'}</p>`}
+      <div id="rec-past-measurements"></div>`;
+  if (r.status === 'done' && Array.isArray(r.suggestions?.measurements) && r.suggestions.measurements.length) {
+    const { data: patient } = await sb.from('patients').select('consent_given').eq('id', r.patient_id).maybeSingle();
+    if (container.isConnected && patient?.consent_given) mountCallMeasurements(container.querySelector('#rec-past-measurements'), r.patient_id, {
+      suggestions: r.suggestions.measurements, recordingId, sb,
+      allowed: () => container.isConnected && (!container.closest('.modal-overlay') || container.closest('.modal-overlay').classList.contains('active')),
+    });
+  }
   if (!r.audio_deleted_at) wirePlayer(container.querySelector('.rec-audio'), r.storage_path);
   return r;
 }

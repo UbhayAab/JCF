@@ -208,7 +208,7 @@ function showUnlockNews() {
   const content = news === 'all'
     ? `<p style="margin:0 0 10px">You have finished training: every tab of your role is in the menu now.</p>
        <p class="due-meta" style="margin:0">Not sure what a tab is for? The ${learn} explains each one.</p>`
-    : `<p style="margin:0 0 10px">After your first conversations, three more tabs are in the menu:</p>
+    : `<p style="margin:0 0 10px">After your first conversations, ${news.length} more tabs are in the menu:</p>
        <ul style="margin:0 0 10px;padding-left:18px">${news.map(n => `<li><strong>${n.label}</strong>: ${n.what}.</li>`).join('')}</ul>
        <p class="due-meta" style="margin:0">The ${learn} has a page on each.</p>`;
   showModal({

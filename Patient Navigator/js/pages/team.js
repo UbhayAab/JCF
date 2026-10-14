@@ -467,11 +467,11 @@ async function openProbationSteps() {
   const byRole = Object.fromEntries((data || []).map(r => [r.role, r]));
   const field = (role, k, v) => `<input class="form-input" type="number" inputmode="numeric" min="0" max="500" step="1" data-role="${role}" data-k="${k}" value="${v}">`;
   el.innerHTML = `
-    <p class="muted" style="margin-bottom:var(--s4);color:var(--ink-2)">Someone on probation sees only the Calling Portal (Nutrition for the Nutrition team), the Learning Hub and their profile. The rest opens in two steps, counted in answered calls since probation began.</p>
+    <p class="muted" style="margin-bottom:var(--s4);color:var(--ink-2)">CGMP interns on probation see the Calling Portal and Patients (only families assigned to them). Nutrition interns start with Nutrition. Both teams see the Learning Hub and their profile. The remaining tabs open in two steps, counted in answered calls since probation began.</p>
     ${PROBATION_TEAMS.map(([role, label]) => `
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--s3);align-items:end;margin-bottom:var(--s4)">
         <div style="grid-column:1/-1;font:var(--t-body-strong)">${label}</div>
-        <label class="form-label">Patients, Call Logs and Resources after${field(role, 'some', byRole[role]?.unlock_some ?? 10)}</label>
+        <label class="form-label">${role === 'caregiver_mentor' ? 'Call Logs and Resources' : 'Patients, Call Logs and Resources'} after${field(role, 'some', byRole[role]?.unlock_some ?? 10)}</label>
         <label class="form-label">Everything after${field(role, 'all', byRole[role]?.unlock_all ?? 20)}</label>
       </div>`).join('')}
     <div style="display:flex;justify-content:flex-end;gap:var(--s2)">

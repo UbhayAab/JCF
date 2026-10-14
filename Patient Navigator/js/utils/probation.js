@@ -11,7 +11,7 @@ import { getSupabase } from '../supabase.js';
 import { getCurrentProfile } from '../auth.js';
 
 const CORE = {
-  caregiver: ['calling', 'learn', 'profile'],
+  caregiver: ['calling', 'patients', 'learn', 'profile'],
   nutrition: ['nutrition', 'learn', 'profile'],
 };
 const STEP_ONE = ['patients', 'calls', 'resources'];
@@ -42,6 +42,7 @@ export function probationLevel() {
 }
 
 const teamOf = (role) => (role === 'nutritionist' ? 'nutrition' : 'caregiver');
+const stepOneFor = (role) => STEP_ONE.filter(r => !CORE[teamOf(role)].includes(r));
 
 /** Whether a route is open now. A family's own record ('patients/<id>') stays open: RLS limits it to hers. */
 export function routeOpen(route, role) {
@@ -63,8 +64,9 @@ export function progressLine() {
   if (level === 'all') return '';
   if (!state) return 'Training: counting your calls...';
   const n = Number(state.answered) || 0;
+  const next = stepOneFor(getCurrentProfile()?.role).map(r => LABEL[r]).join(' and ');
   return level === 'core'
-    ? `Training: ${n} of ${state.unlock_some} calls done. Next to unlock: Patients, Call Logs and Resources.`
+    ? `Training: ${n} of ${state.unlock_some} calls done. Next to unlock: ${next}.`
     : `Training: ${n} of ${state.unlock_all} calls done. Next to unlock: every tab of your role.`;
 }
 
@@ -115,5 +117,5 @@ export function unlockNews() {
   if (ORDER[level] === ORDER[seen]) return null;
   remember();
   if (level === 'all') return 'all';
-  return STEP_ONE.map((r) => ({ route: r, label: LABEL[r], what: WHAT[r] }));
+  return stepOneFor(profile.role).map((r) => ({ route: r, label: LABEL[r], what: WHAT[r] }));
 }

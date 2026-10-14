@@ -51,16 +51,17 @@ export async function renderPatients(container, params) {
 // ============================================================
 async function renderPatientList(container) {
   const canExport = isManagerOrAdmin();
+  const onProbation = !!getCurrentProfile()?.on_probation;
 
   container.innerHTML = `
     <div class="page-header">
       <div>
         <h1>Patients</h1>
-        <p class="header-subtitle" style="margin:4px 0 0">Everyone in the care program</p>
+        <p class="header-subtitle" style="margin:4px 0 0">${onProbation ? 'Only the families assigned to you' : 'Everyone in the care program'}</p>
       </div>
       <div class="flex gap-2" style="display:flex;gap:9px">
         ${canExport ? `<button class="btn btn-secondary" id="export-patients-btn">${icon('download')}Export CSV</button>` : ''}
-        <button class="btn btn-primary" id="add-patient-btn">${icon('plus')}Register patient</button>
+        ${!onProbation ? `<button class="btn btn-primary" id="add-patient-btn">${icon('plus')}Register patient</button>` : ''}
       </div>
     </div>
 
@@ -1182,6 +1183,8 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
     ${deceased ? `<div id="bereave-mount" style="margin-bottom:var(--s5)"></div>` : ''}
     ${nutriBanner}
     ${renderCareFolderCard(p, services, assessments)}
+    <div id="measurements-mount" style="margin-bottom:var(--s5)"></div>
+    <div id="deceased-work-mount"></div>
     ${gaps.length ? `
     <div class="card wrap-meta" style="margin-bottom:var(--s5);border-left:3px solid var(--warn)">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
@@ -1282,6 +1285,12 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
   // Not awaited: the record must not sit behind two more round trips, and
   // this card renders nothing at all when there is nothing to say.
   mountBeforeYouCall(el.querySelector('#byc-mount'), p);
+  import('../components/measurements.js')
+    .then(m => m.mountMeasurements(el.querySelector('#measurements-mount'), p, { onSaved: reload }))
+    .catch(e => console.warn('[measurements]', e.message));
+  import('../components/deceasedWork.js')
+    .then(m => m.mountDeceasedWork(el.querySelector('#deceased-work-mount'), p.id))
+    .catch(e => console.warn('[status work]', e.message));
   import('../components/statusHistory.js')
     .then((m) => m.mountStatusHistory(el.querySelector('#status-history-mount'), p, { onChange: reload }))
     .catch((e) => console.warn('[status history]', e.message));
