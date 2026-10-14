@@ -619,14 +619,19 @@ function closeFile(file, { fromBack }) {
   document.body.classList.remove('modal-open');
   if (!fromBack && history.state?.pnCamera) history.back();
   file.closed = true;
-  const n = file.pages.filter((p) => !p.removed).length;
+  const n = file.pages.filter((p) => !p.removed && p.state !== 'unreadable').length;
+  const unreadable = file.pages.filter((p) => !p.removed && p.state === 'unreadable').length;
   const who = file.name || `the number ending ${file.phone.slice(-4)}`;
   resetForm();
   const notes = file.notes ? ' and your notes' : '';
-  showNext(file.notes && !file.notesDoc
+  const message = file.notes && !file.notesDoc
     ? `File closed for ${who}. Your notes are not saved yet. Keep the app open and check Files from this visit below.`
     : n ? `Saved: ${n} photo${n === 1 ? '' : 's'}${notes} for ${who}. They keep uploading on their own.`
-             : (notes ? `Saved your notes for ${who}, without photos.` : `Closed without photos for ${who}.`));
+             : (notes ? `Saved your notes for ${who}, without photos.` : `Closed without photos for ${who}.`);
+  const warning = unreadable
+    ? ` ${unreadable} photo${unreadable === 1 ? '' : 's'} could not be prepared and ${unreadable === 1 ? 'was' : 'were'} not saved. Open Upload documents, choose this family, then Camera to retake ${unreadable === 1 ? 'it' : 'them'}.`
+    : '';
+  showNext(message + warning);
   renderFiles();
   maybeFinalize(file);
 }
