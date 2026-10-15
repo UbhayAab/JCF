@@ -50,7 +50,7 @@ async function callInvite(patientId, dryRun) {
   }
 }
 
-/** Resolves true once an invite went out, false otherwise. */
+/** Resolves true once WhatsApp accepted an invite. Delivery is reported separately. */
 export async function sendHopeBotInvite(patientId, patientName = '') {
   const preview = await callInvite(patientId, true);
   if (!preview.ok) {
@@ -60,7 +60,7 @@ export async function sendHopeBotInvite(patientId, patientName = '') {
   return await new Promise((resolve) => {
     const el = document.createElement('div');
     el.innerHTML = `
-      <p style="margin:0 0 12px">${esc(patientName || 'The family')} will get one WhatsApp message from
+      <p style="margin:0 0 12px">Request one WhatsApp message for ${esc(patientName || 'the family')} from
       <strong>Jarurat Care Foundation (+91 93895 29263)</strong> on <strong class="tnum">${esc(preview.to)}</strong>,
       in ${preview.lang === 'hi' ? 'Hindi' : 'English'}.</p>
       <div class="doc-callout" style="margin-bottom:12px">
@@ -85,7 +85,7 @@ export async function sendHopeBotInvite(patientId, patientName = '') {
       const out = await callInvite(patientId, false);
       closeModal();
       if (out.ok) {
-        showToast(`HopeBot sent to ${out.to}. Their papers will show here when they send them.`, 'success', 8000);
+        showToast(`WhatsApp accepted the message to ${out.to}; delivery pending. Refresh delivery status on the family card.`, 'info', 10000);
         resolve(true);
       } else {
         showToast(out.error || 'HopeBot was not sent.', 'error', 10000);

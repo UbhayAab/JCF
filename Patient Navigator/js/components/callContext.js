@@ -159,7 +159,7 @@ export function docStripHTML(documents, { canUpload = true, canInvite = false } 
     d.still_reading ? `${d.still_reading} still being read` : '',
   ].filter(Boolean).join(' · ');
   const sent = d.hopebot_invited_at
-    ? `HopeBot sent ${fmtDay(d.hopebot_invited_at)} (${daysAgo(d.hopebot_invited_at)})${d.hopebot_invited_by ? ' by ' + d.hopebot_invited_by : ''}`
+    ? `HopeBot requested ${fmtDay(d.hopebot_invited_at)} (${daysAgo(d.hopebot_invited_at)})${d.hopebot_invited_by ? ' by ' + d.hopebot_invited_by : ''}. Check delivery status below.`
     : '';
   return `<div class="docstrip" data-docstrip>
     <span class="stat-ico ${d.uploads || wa ? 'info' : 'neutral'}" style="width:32px;height:32px;border-radius:9px">${icon('fileText')}</span>

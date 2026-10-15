@@ -780,6 +780,8 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       </div>
       <!-- sql/172: what this family asked HopeBot on WhatsApp, if they wrote. -->
       <div id="hb-family-card" hidden></div>
+      <div id="family-whatsapp-card"></div>
+      <div id="hopebot-intro-patient-card"></div>
       <!-- Fixboard #32 (sql/183): "Ready to share documents (consent given)",
            or who is collecting them and when the next call is due. -->
       ${!deceased ? '<div id="doc-collect-card" hidden></div>' : ''}
@@ -917,6 +919,13 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
     });
 
     const tabContent = container.querySelector('#tab-content');
+    import('../components/familyWhatsapp.js').then((m) =>
+      m.mountFamilyWhatsapp(container.querySelector('#family-whatsapp-card'), patient))
+      .catch((e) => console.warn('[WhatsApp]', e.message));
+    const introMount = container.querySelector('#hopebot-intro-patient-card');
+    import('../components/hopebotIntro.js')
+      .then((m) => m.mountHopebotIntro(introMount, patient.id, { isCurrent: stillHere }))
+      .catch(() => { if (introMount?.isConnected && stillHere()) introMount.textContent = 'HopeBot intro is unavailable. Refresh before trying again.'; });
     const renderTab = () => {
       if (activeTab === 'overview') renderOverviewTab(tabContent, patient, services, assessments, sb, reload, deceased, pocHistory);
       else if (activeTab === 'support') renderSupportTab(tabContent, patient, services, sb, reload);
@@ -1908,7 +1917,8 @@ export async function renderDocumentsTab(el, p, sb, reload) {
       <p class="form-hint">Photos, screenshots or a PDF, in any order. We read them,
       check every answer back against the page, and show you what to confirm before
       anything is saved. Nothing goes onto the record until you tick it.${summary.hopebot_invited_at
-        ? ` HopeBot was sent ${sanitize(fmtDayTime(summary.hopebot_invited_at))}${summary.hopebot_invited_by ? ' by ' + sanitize(summary.hopebot_invited_by) : ''}.` : ''}</p>
+        ? ` HopeBot was requested ${sanitize(fmtDayTime(summary.hopebot_invited_at))}${summary.hopebot_invited_by ? ' by ' + sanitize(summary.hopebot_invited_by) : ''}. Check delivery status below.` : ''}</p>
+      <div id="hopebot-originals"></div>
       ${waWaiting ? `<div class="doc-callout doc-callout-ok" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <strong style="flex:1;min-width:200px">${icon('message')} ${waWaiting} ${waWaiting === 1 ? 'page' : 'pages'} sent on WhatsApp, not read yet</strong>
           <button class="btn btn-primary btn-sm" id="doc-read-wa">Read them now</button>
@@ -1957,6 +1967,8 @@ export async function renderDocumentsTab(el, p, sb, reload) {
         }).join('')}</div>`}
     </div>`;
 
+  const { mountWhatsappOriginals } = await import('../components/hopebotFiles.js');
+  await mountWhatsappOriginals(el.querySelector('#hopebot-originals'), p.id);
   el.querySelector('#doc-upload-btn')?.addEventListener('click', async () => {
     const { openDocumentBatch } = await import('./docBatch.js');
     await openDocumentBatch(p.id);

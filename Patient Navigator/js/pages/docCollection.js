@@ -9,6 +9,7 @@
 import { icon } from '../components/icons.js';
 import { isManagerOrAdmin } from '../auth.js';
 import { mountCollectionList } from '../components/docCollection.js';
+import { mountHopebotFiles } from '../components/hopebotFiles.js';
 
 let scope = 'all';
 
@@ -32,7 +33,8 @@ export async function renderDocCollection(container) {
     </div>
     <div class="due-meta wraps" style="margin:-4px 0 12px">To add a family: open their record (or the call) and tap <strong>Ready to share documents (consent given)</strong>.
       When papers arrive, by upload or on WhatsApp, the family moves to Done by itself.</div>
-    <div id="dc-list"><div class="card" style="padding:28px;text-align:center;color:var(--ink-3)">Loading…</div></div>`;
+    ${mgr ? '<div id="hopebot-file-queue"></div>' : ''}
+    <div id="dc-list"><div class="card" style="padding:28px;text-align:center;color:var(--ink-3)">Loading...</div></div>`;
   const list = () => mountCollectionList(container.querySelector('#dc-list'), { scope });
   container.querySelector('#dc-refresh')?.addEventListener('click', list);
   container.querySelectorAll('#dc-scope [data-scope]').forEach((b) => b.addEventListener('click', () => {
@@ -41,4 +43,5 @@ export async function renderDocCollection(container) {
     list();
   }));
   await list();
+  if (mgr) await mountHopebotFiles(container.querySelector('#hopebot-file-queue'));
 }

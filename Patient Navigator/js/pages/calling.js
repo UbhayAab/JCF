@@ -176,6 +176,7 @@ function applySavedForm(saved) {
   }
   // The recording box comes back as left (a transcript in flight is asked for again).
   if (saved.recording) { form.recording = saved.recording; if (currentPatient) mountRecording(currentPatient); }
+  form.hopebotIntro = saved.hopebotIntro === true;
   updateSubmit();
   saveActive();
 }
@@ -186,7 +187,7 @@ function blankForm() {
     fbPatient: '', fbCaregiver: '', consent: null, dateManual: false,
     // The recording's state (callRecording.js): reminder shown, the family's
     // answer, the upload and its transcript. Here so a new call clears it.
-    recording: null,
+    recording: null, hopebotIntro: false,
     // Set by recordConsentNow(). MUST live here: Object.assign(form,
     // blankForm()) is how a new call resets the form, and a key that is
     // absent from blankForm is never cleared - so a leftover true would
@@ -882,6 +883,7 @@ function mountActive(p, history) {
           <div id="doc-strip-mount">${currentContext ? docStripHTML(currentContext.documents, { canInvite: true }) : ''}</div>
           <!-- Fixboard #32 (sql/183): they agree on this call to share their papers. -->
           <div id="doc-collect-mount" hidden style="margin-top:8px"></div>
+          <div id="hopebot-intro-call-mount" style="margin-top:8px"></div>
           ${renderPriorityBanner()}
           ${renderStageGuide(p)}
           ${p.followup_strategy_notes ? `
@@ -940,6 +942,14 @@ function mountActive(p, history) {
     .then((m) => m.mountCollectStatus(docCollectMount, p.patient_id,
       { patientName: p.full_name || p.patient_code || '', preferred: 'verbal_during_call' }))
     .catch((e) => console.warn('[documents] collection status:', e.message));
+  const introMount = document.getElementById('hopebot-intro-call-mount');
+  import('../components/hopebotIntro.js')
+    .then((m) => m.mountHopebotIntro(introMount, p.patient_id, {
+      stageForCall: true, isCurrent: () => currentPatient?.patient_id === p.patient_id,
+      getStaged: () => form.hopebotIntro === true,
+      onStageChange: (selected) => { form.hopebotIntro = selected; saveActive(); },
+    }))
+    .catch(() => { if (introMount?.isConnected) introMount.textContent = 'HopeBot intro is unavailable. Refresh before trying again.'; });
   mountReferralBrief(document.getElementById('referral-mount'), p);
   wireActive(p);
   wireGapsPanel(p);
@@ -2149,6 +2159,18 @@ async function submitCallLog() {
   const sb = getSupabase();
   const btn = document.getElementById('f-submit');
   const connected = form.dialStatus === 'connected';
+  const introWanted = form.hopebotIntro === true;
+  const introPatientId = currentPatient.patient_id;
+  const requestIntro = async (callId) => {
+    if (!introWanted) return null;
+    if (!connected) return { ok: false, error: 'Not sent: a connected call is required for the HopeBot intro.' };
+    try {
+      const m = await import('../components/hopebotIntro.js');
+      return await m.requestHopebotIntro(introPatientId, callId);
+    } catch {
+      return { ok: false, error: 'The HopeBot request was not confirmed. Refresh the family card before trying again.' };
+    }
+  };
   if (!form.dialStatus) { showToast('Please choose how the call went', 'warning'); return; }
   if (connected && !form.receptiveness) { showToast('Please note how they were doing', 'warning'); return; }
   // A connected call with no minutes on it used to save as a blank duration and
@@ -2179,7 +2201,10 @@ async function submitCallLog() {
         .eq('patient_id', currentPatient.patient_id).eq('caller_id', me.id)
         .gte('call_date', since).limit(1);
       if (dup && dup.length) {
-        showToast('Already logged for this person a moment ago, not duplicating', 'info');
+        const intro = await requestIntro(dup[0].id);
+        showToast(intro ? intro.ok ? 'Call already saved. HopeBot intro is queued; delivery is not confirmed.'
+          : `Call already saved. ${intro.error}` : 'Already logged for this person a moment ago, not duplicating',
+        intro && !intro.ok ? 'warning' : 'info', intro ? 12000 : 4000);
         // The recording joins the log that was saved, rather than waiting for the sweep.
         if (form.recording?.consentId) await attachRecordingToLog(dup[0].id, form.recording);
         recordingSection?.dispose(); recordingSection = null;
@@ -2232,6 +2257,7 @@ async function submitCallLog() {
     // sql/166: the family's answer about recording, and its recording, join this
     // log. Never blocks it; the old silent upload that saved nothing is gone.
     if (callLog && form.recording?.consentId) await attachRecordingToLog(callLog.id, form.recording);
+    const intro = callLog?.id ? await requestIntro(callLog.id) : null;
     recordingSection?.dispose(); recordingSection = null;
 
     const queueStatus = (form.dialStatus === 'callback_requested') ? 'callback' : 'completed';
@@ -2245,7 +2271,10 @@ async function submitCallLog() {
     }
     const fName = (currentPatient.full_name || '').split(' ')[0];
     const niceDate = followUp ? new Date(followUp).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }) : null;
-    showToast(niceDate ? `Logged. ${fName}'s next check-in is set for ${niceDate}` : `Logged for ${fName}`, 'success');
+    const callMessage = niceDate ? `Logged. ${fName}'s next check-in is set for ${niceDate}` : `Logged for ${fName}`;
+    showToast(intro ? intro.ok ? `${callMessage}. HopeBot intro is queued; delivery is not confirmed.`
+      : `${callMessage}. ${intro.error} Open the family card to check or retry.` : callMessage,
+    intro && !intro.ok ? 'warning' : 'success', intro ? 12000 : 4000);
     setTimeout(() => getNextCall(), 400);
   } catch (err) {
     showToast('Could not save: ' + err.message, 'error');

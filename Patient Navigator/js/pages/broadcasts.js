@@ -15,6 +15,7 @@ import { sanitize } from '../utils/validators.js';
 import { formatRelativeTime } from '../utils/formatters.js';
 import { showModal, closeModal, confirmModal } from '../components/modal.js';
 import { CIRCLE_FIELDS, indiaInput, indiaISO } from '../utils/circleMessage.js';
+import { mountPosterControl } from '../components/whatsappPoster.js';
 
 const AUDIENCES = [
   { k: 'connected_week', label: 'Families we spoke to this week' },
@@ -146,18 +147,21 @@ function rowHTML(b) {
 
 export async function openBroadcastComposer(container, existing = null, preset = {}) {
   const sb = getSupabase();
+  let poster;
   const el = document.createElement('div');
   el.innerHTML = '<div class="sk skeleton-row"></div>';
-  showModal({ title: existing ? 'Edit WhatsApp message' : 'New WhatsApp message', content: el, size: 'lg' });
-  const [tplR, recR, circleR] = await Promise.all([
-    sb.from('wa_templates').select('name, language, category, body, variables_count').eq('approved', true),
+  showModal({ title: existing ? 'Edit WhatsApp message' : 'New WhatsApp message', content: el, size: 'lg', onClose: () => poster?.dispose() });
+  const [tplR, recR, circleR, posterR] = await Promise.all([
+    sb.from('wa_templates').select('name, language, category, body, variables_count').eq('approved', true).is('poster_base', null),
     existing
       ? readAll(() => sb.from('wa_broadcast_recipients').select('recipient_id').eq('broadcast_id', existing.id).order('recipient_id'))
       : Promise.resolve({ data: [] }),
     sb.from('wa_circle_templates').select('template_name,label,language,body,parameter_keys,status').in('status',['requested','submitting','pending','approved']),
+    existing ? sb.from('wa_broadcasts').select('poster:wa_posters(id,storage_path,file_name,mime,byte_size)').eq('id',existing.id).maybeSingle() : Promise.resolve({data:null}),
   ]);
   if (tplR.error) { el.innerHTML = `<p style="margin:0">Could not read the message formats: ${sanitize(tplR.error.message)}</p>`; return; }
   if(circleR.error){el.innerHTML=`<p>Could not read custom wording: ${sanitize(circleR.error.message)}</p>`;return;}
+  if(posterR.error){el.textContent='Could not read the attached poster. Reload before editing.';return;}
   const custom = (circleR.data||[]).map(t=>({...t,name:t.template_name,variables_count:t.parameter_keys.length,custom:true,
     approved:(tplR.data||[]).some(a=>a.name===t.template_name&&a.language===t.language&&a.body===t.body)}));
   const tpls = [...(tplR.data || []).filter(t => t.language === 'en'&&!custom.some(c=>c.name===t.name)),...custom];
@@ -192,10 +196,13 @@ export async function openBroadcastComposer(container, existing = null, preset =
       <input class="form-input" id="wb-when" type="datetime-local" value="${defaultWhen(existing)}"><p class="form-hint">Delivery between 9 AM and before 9 PM IST, at least 2 minutes ahead and within 60 days. HopeBot checks every minute; consent, quiet hours and sending limits can hold delivery.</p></div>
     <div class="form-label" style="margin-bottom:6px">What they will see</div>
     <div class="card" id="wb-preview" style="padding:12px 14px;background:var(--surface-2);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)"></div>
+    <div id="wb-poster" style="margin-top:16px"></div>
+    <p>Family campaigns remain switched off. A poster saved on a group draft does not enable sending. Use the family page to schedule a permitted individual message.</p>
     <div style="display:flex;justify-content:flex-end;gap:var(--s2);margin-top:var(--s4);flex-wrap:wrap">
       <button class="btn btn-secondary" id="wb-close" type="button">Close</button>
       <button class="btn btn-secondary" id="wb-draft" type="button">Save as draft</button>
-      <button class="btn btn-primary" id="wb-schedule" type="button">${icon('clock')}Schedule</button>
+      <p>Schedule each message from the family page under Scheduled WhatsApp. Group campaigns are not enabled.</p>
+      <button class="btn btn-primary" id="wb-schedule" type="button" disabled>${icon('clock')}Schedule from a family page</button>
     </div>`;
 
   const tplNow = () => tpls.find(t => t.name === state.tpl);
@@ -210,6 +217,7 @@ export async function openBroadcastComposer(container, existing = null, preset =
       return v ? v.split(NAME_TOKEN).join(firstName()) : `[blank ${n}]`;
     });
     el.querySelector('#wb-preview').textContent = text || 'No text for this format yet.';
+    poster?.estimate(t, indiaISO(el.querySelector('#wb-when').value), [...state.picked]);
   };
   const paintBlanks = () => {
     const t = tplNow();
@@ -322,14 +330,16 @@ export async function openBroadcastComposer(container, existing = null, preset =
     if (!when || Number.isNaN(when.getTime())) { showToast('Pick a date and time.', 'error'); return; }
     if(schedule && (Number(whenStr.slice(11,13))<9||Number(whenStr.slice(11,13))>=21)){showToast('Choose delivery from 9 AM to before 9 PM India time.','error');return;}
     if (schedule && state.kind !== HOPEBOT_LIST && !state.picked.size) { showToast('Tick at least one person.', 'error'); return; }
+    let posterId;
+    try { posterId = poster.id(); } catch (e) { showToast(e.message, 'error'); return; }
     const buttons = el.querySelectorAll('#wb-draft, #wb-schedule');
     buttons.forEach(b => { b.disabled = true; });
     const { data, error } = await sb.rpc('broadcast_save', { p: {
       id: state.id, title, template_name: state.tpl, variables: state.vars, audience_kind: state.kind,
-      scheduled_for: when.toISOString(), recipient_ids: [...state.picked], schedule } });
-    buttons.forEach(b => { b.disabled = false; });
+      scheduled_for: when.toISOString(), recipient_ids: [...state.picked], schedule, poster_id: posterId } });
+    buttons.forEach(b => { b.disabled = b.id === 'wb-schedule'; });
     if (error) { showToast(error.message, 'error'); return; }
-    closeModal();
+    poster.dispose(); closeModal();
     const who = state.kind === HOPEBOT_LIST ? "HopeBot's list" : `${data.kept} ${data.kept === 1 ? 'person' : 'people'}`;
     const left = data.left_out ? ` ${data.left_out} left out: they cannot get WhatsApp messages now.` : '';
     showToast(schedule ? `${data.status==='awaiting_approval'?'Waiting for approval. Planned':'Scheduled'} for ${fmtWhen(when.toISOString())}, to ${who}.${left}` : `Saved as a draft.${left}`, 'success');
@@ -348,7 +358,9 @@ export async function openBroadcastComposer(container, existing = null, preset =
     preview();
   });
   el.querySelector('#wb-aud').addEventListener('change', (e) => { state.kind = e.target.value; state.picked.clear(); state.autoTick = false; loadPeople(); });
-  el.querySelector('#wb-close').addEventListener('click', () => closeModal());
+  el.querySelector('#wb-close').addEventListener('click', () => { poster.dispose(); closeModal(); });
+  poster = mountPosterControl(el.querySelector('#wb-poster'), { existing: posterR.data?.poster, onChange: preview });
+  el.querySelector('#wb-when').addEventListener('change', preview);
   el.querySelector('#wb-draft').addEventListener('click', () => save(false));
   el.querySelector('#wb-schedule').addEventListener('click', () => save(true));
   paintBlanks();
