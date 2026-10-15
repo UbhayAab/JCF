@@ -31,6 +31,7 @@ const NAV_ITEMS = [
       { id: 'dashboard', label: 'Dashboard',      icon: 'grid',      route: 'dashboard', roles: ALL_ROLES },
       { id: 'calling',   label: 'Calling Portal', icon: 'phoneCall', route: 'calling',   roles: ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'content'] },
       { id: 'nutrition', label: 'Nutrition',      icon: 'leaf',      route: 'nutrition', roles: ['nutritionist', 'manager', 'admin'] },
+      { id: 'nutrition-tracker', label: 'Nutrition tracker', icon: 'list', route: 'nutrition-tracker', roles: ALL_ROLES },
       { id: 'sessions',  label: '1:1 Sessions',   icon: 'calendar',  route: 'sessions',  roles: ['therapist', 'nutritionist', 'manager', 'admin', 'caller', 'caregiver_mentor'] },
       { id: 'patients',  label: 'Patients',       icon: 'users',     route: 'patients',  roles: ALL_ROLES },
       { id: 'calls',     label: 'Call Logs',      icon: 'phone',     route: 'calls',     roles: CARE_ROLES },
@@ -50,7 +51,7 @@ const NAV_ITEMS = [
       // Fixboard #24: write one message, pick who and when; HopeBot sends it (sql/168).
       { id: 'broadcasts', label: 'WhatsApp messages', icon: 'message', route: 'broadcasts', roles: ['admin', 'manager'] },
       { id: 'circles', label: 'Saturday circles', icon: 'users', route: 'circles', roles: ['admin','manager'] },
-      { id: 'updates', label: "What's new", icon: 'bell', route: 'updates', roles: ['admin','manager'] },
+      { id: 'updates', label: "What's new", icon: 'bell', route: 'updates', roles: ['admin','manager','caller','caregiver_mentor','therapist','nutritionist'] },
       { id: 'docreads',  label: 'Document reads', icon: 'fileText', route: 'docreads', roles: ['admin', 'manager'] },
       { id: 'resources', label: 'Resources',      icon: 'mapPin',    route: 'resources', roles: ALL_ROLES },
       { id: 'upload',    label: 'Upload leads & docs', icon: 'upload', route: 'upload',  roles: UPLOAD_ROLES },

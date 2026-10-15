@@ -8,7 +8,7 @@ import { navigate } from '../router.js';
 const safeRoute = r => /^[a-z][a-z0-9_-]*$/.test(r || '');
 
 export async function maybeShowFeatureUpdate() {
-  if (!isManagerOrAdmin() || isImpersonating()) return;
+  if (isImpersonating()) return;
   const uid = getCurrentUser()?.id;
   if (!uid) return;
   const { data, error } = await getSupabase().rpc('feature_updates', { p_unread: true });
@@ -50,7 +50,7 @@ function showUpdate(update) {
 }
 
 export async function renderFeatureUpdates(container) {
-  container.innerHTML = `<div class="page-header"><div><h1>What's new</h1><p>Feature updates for managers. Read them again here anytime.</p></div>
+  container.innerHTML = `<div class="page-header"><div><h1>What's new</h1><p>Updates for your team. Read them again here anytime.</p></div>
     ${isAdmin() && !isImpersonating() ? '<button class="btn btn-primary" id="fu-publish">Publish an update</button>' : ''}</div><div id="fu-list">Loading updates...</div>`;
   const { data, error } = await getSupabase().rpc('feature_updates', { p_unread: false });
   if (!container.isConnected) return;

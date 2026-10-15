@@ -89,6 +89,8 @@ function statusCell(r) {
 }
 const greetingWord = () => { const h = new Date().getHours(); return h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening'; };
 
+import { mountCareNotifications } from '../components/careNotifications.js';
+
 export async function renderAdminDashboard(container, { firstName, subtitle, today, role }) {
   container.innerHTML = `
     <div class="dash dash-v11">
@@ -108,6 +110,7 @@ export async function renderAdminDashboard(container, { firstName, subtitle, tod
         <a class="qa" id="qa-analytics"><span class="qa-ico blue">${icon('chart')}</span><div><div class="qa-title">See how we're doing</div><div class="qa-sub">Open analytics</div></div></a>
       </div>
 
+      <div id="care-notifications"></div>
       <div class="dash-cols">
         <div class="dash-main">
           <section class="card dq-queue" id="dq-queue">
@@ -176,6 +179,7 @@ export async function renderAdminDashboard(container, { firstName, subtitle, tod
   // wait for it, so a slow day never queues them in front of the to-dos.
   const stats = loadKpis();
   await Promise.all([
+    mountCareNotifications(container.querySelector('#care-notifications')),
     stats, loadQueueSections(), loadUrgentFlags(), loadConversations(), loadRestores(), loadCareGaps(),
     loadSaturdayCard(role, { side: true }), loadBlockedCard(), loadDocsWaitingCard(),
     loadIntakeSummary(), loadResourceReplies(),

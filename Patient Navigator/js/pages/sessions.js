@@ -16,17 +16,22 @@ import { formatRelativeTime } from '../utils/formatters.js';
 // Family text comes from outside (referral form, WhatsApp, uploads); staff names are typed by people.
 import { sanitize } from '../utils/validators.js';
 import { SESSION_KINDS, sessionKind, sessionStatus } from '../utils/catalog.js';
+import { routeOpen } from '../utils/probation.js';
 
 let rows = [];
 let kindFilter = 'all';
 let containerEl = null;
 let assignables = null;   // cached profiles for the schedule modal (managers)
+let focusedSession = null; // Precise dashboard notification target, still RLS-scoped.
+let sessionLoadGeneration = 0;
 
 export async function renderSessions(container) {
   containerEl = container;
+  focusedSession = new URLSearchParams(window.location.hash.split('?')[1] || '').get('session') || null;
   // Specialists land on their own lane by default.
   const role = getUserRole();
   if (kindFilter === 'all' && role === 'nutritionist') kindFilter = 'nutrition';
+  if (focusedSession) kindFilter = 'all';
 
   container.innerHTML = `
     <div class="page-header">
@@ -40,6 +45,7 @@ export async function renderSessions(container) {
       <button class="fchip ${kindFilter === 'all' ? 'on' : ''}" data-kind="all">All</button>
       ${SESSION_KINDS.map(k => `<button class="fchip ${kindFilter === k.key ? 'on' : ''}" data-kind="${k.key}">${k.label}</button>`).join('')}
     </div>
+    <div id="ss-notification-focus"></div>
     <div id="ss-def" class="due-meta wraps" style="margin-bottom:var(--s5);max-width:720px"></div>
     <div id="ss-body"><div class="card" style="padding:28px;text-align:center;color:var(--ink-3)">Loading sessions…</div></div>`;
 
@@ -75,18 +81,29 @@ async function load() {
   const sb = getSupabase();
   const body = containerEl?.querySelector('#ss-body');
   if (!body) return;
+  const generation = ++sessionLoadGeneration;
   try {
-    const { data, error } = await sb.from('care_sessions').select(`*,
+    let query = sb.from('care_sessions').select(`*,
         patient:patients(id, full_name, patient_code, city, state, phone_full, primary_language),
         inviter:profiles!care_sessions_invited_by_fkey(full_name),
         assignee:profiles!care_sessions_assigned_to_fkey(full_name)`)
       .order('created_at', { ascending: false })
       .limit(400);
+    if (focusedSession) query = query.eq('id', focusedSession);
+    const { data, error } = await query;
+    if (!body.isConnected || generation !== sessionLoadGeneration) return;
     if (error) throw error;
     rows = data || [];
+    if (focusedSession && rows.length) {
+      const access = await sb.rpc('can_care_for_patient', { p_id: rows[0].patient_id });
+      if (!body.isConnected || generation !== sessionLoadGeneration) return;
+      if (access.error) throw access.error;
+      if (access.data !== true) rows = [];
+    }
     paint();
   } catch (e) {
-    body.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Could not load sessions</h4><p>${e.message}</p></div>`;
+    if (!body.isConnected || generation !== sessionLoadGeneration) return;
+    body.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Could not load sessions</h4><p>${sanitize(e.message)}</p></div>`;
   }
 }
 
@@ -95,6 +112,15 @@ const inKind = (r) => kindFilter === 'all' || r.kind === kindFilter;
 function paint() {
   const body = containerEl?.querySelector('#ss-body');
   if (!body) return;
+  const focusMount = containerEl.querySelector('#ss-notification-focus');
+  if (focusMount) {
+    focusMount.innerHTML = focusedSession ? `<div class="card nw-session-focus"><p role="status">${rows.length ? 'Showing the session from your notification.' : 'This session is no longer available to your account.'}</p>${routeOpen('sessions', getUserRole()) ? '<button type="button" class="btn btn-secondary btn-sm" data-session-show-all>Show all sessions</button>' : ''}</div>` : '';
+    focusMount.querySelector('[data-session-show-all]')?.addEventListener('click', () => {
+      focusedSession = null;
+      try { history.replaceState(null, '', '#sessions'); } catch { /* Local preview. */ }
+      load();
+    });
+  }
   paintKindStrip();
   const f = rows.filter(inKind);
   const agreed = f.filter(r => r.status === 'agreed').sort((a, b) => new Date(a.agreed_at || a.created_at) - new Date(b.agreed_at || b.created_at));
@@ -111,7 +137,7 @@ function paint() {
       ${statCard('Sessions held', heldCount, 'ok', 'checkCircle')}
     </div>
 
-    ${!agreed.length && !scheduled.length && !invited.length ? `
+    ${!focusedSession && !agreed.length && !scheduled.length && !invited.length ? `
       <div class="empty" style="margin-bottom:var(--s5)">
         <div class="ico-wrap">${icon('calendar')}</div>
         <h4>Nothing in the pipeline${kindFilter === 'all' ? '' : ` for ${sessionKind(kindFilter).label.toLowerCase()}`}</h4>
@@ -122,7 +148,7 @@ function paint() {
     ${section('Invited: thinking it over', 'No pressure. The next call will ask again, gently.', invited, 'invited')}
 
     ${past.length ? `
-      <details class="card" style="margin-top:var(--s5);padding:16px 18px">
+      <details class="card" ${focusedSession ? 'open' : ''} style="margin-top:var(--s5);padding:16px 18px">
         <summary style="cursor:pointer;font:var(--t-body-strong);display:flex;align-items:center;gap:8px">
           <span style="width:17px;height:17px;display:inline-flex;color:var(--ok)">${icon('checkCircle')}</span>
           History · ${past.length}
@@ -137,7 +163,7 @@ function paint() {
                 <span class="badge badge-neutral">${sessionKind(r.kind).label}</span>
                 <span class="hist-meta">${r.status === 'held' ? `${sanitize(r.assignee?.full_name) || 'N/A'} · ${r.duration_mins ? r.duration_mins + ' min · ' : ''}${formatRelativeTime(r.held_at)}` : formatRelativeTime(r.updated_at || r.created_at)}</span>
               </div>
-              ${r.session_notes ? `<div style="font:var(--t-xs);color:var(--ink-2);margin-top:4px">${r.session_notes}</div>` : ''}
+              ${r.session_notes ? `<div style="font:var(--t-xs);color:var(--ink-2);margin-top:4px">${sanitize(r.session_notes)}</div>` : ''}
             </div>`;
           }).join('')}
         </div>
@@ -188,7 +214,7 @@ function sessionRow(r, stage) {
   const overdue = stage === 'scheduled' && when && when < new Date();
   const place = sanitize([r.patient?.city, r.patient?.state].filter(Boolean).join(', '));
   return `
-    <div class="lever-row" style="align-items:flex-start">
+    <div class="lever-row" data-session-id="${sanitize(r.id)}" style="align-items:flex-start">
       <span class="stat-ico ${r.kind === 'nutrition' ? 'ok' : r.kind === 'caregiver' ? 'info' : 'warn'}" style="width:34px;height:34px;border-radius:9px">${icon(k.icon)}</span>
       <div style="flex:1;min-width:200px">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">

@@ -11,8 +11,8 @@ import { getSupabase } from '../supabase.js';
 import { getCurrentProfile } from '../auth.js';
 
 const CORE = {
-  caregiver: ['calling', 'patients', 'learn', 'profile'],
-  nutrition: ['nutrition', 'learn', 'profile'],
+  caregiver: ['calling', 'patients', 'dashboard', 'nutrition-tracker', 'updates', 'learn', 'profile'],
+  nutrition: ['nutrition', 'dashboard', 'nutrition-tracker', 'updates', 'learn', 'profile'],
 };
 const STEP_ONE = ['patients', 'calls', 'resources'];
 const LABEL = { patients: 'Patients', calls: 'Call Logs', resources: 'Resources' };
@@ -48,8 +48,12 @@ const stepOneFor = (role) => STEP_ONE.filter(r => !CORE[teamOf(role)].includes(r
 export function routeOpen(route, role) {
   const level = probationLevel();
   if (level === 'all') return true;
-  const path = String(route || '').replace(/^#/, '').split('?')[0];
+  const full = String(route || '').replace(/^#/, '');
+  const path = full.split('?')[0];
   if (path.startsWith('patients/')) return true;
+  // A notification can open its exact session during training. The session
+  // page checks care access and keeps the full worklist behind its usual gate.
+  if (path === 'sessions' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(new URLSearchParams(full.split('?')[1] || '').get('session') || '')) return true;
   const top = path.split('/')[0];
   if (CORE[teamOf(role)].includes(top)) return true;
   return level === 'some' && STEP_ONE.includes(top);

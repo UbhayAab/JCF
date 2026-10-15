@@ -11,7 +11,7 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
-import { getCurrentProfile, getUserRole, isManagerOrAdmin } from '../auth.js';
+import { getCurrentProfile, getUserRole, isManagerOrAdmin, getCurrentUser, isImpersonating } from '../auth.js';
 import { showToast } from '../components/toast.js';
 import { icon } from '../components/icons.js';
 import { navigate } from '../router.js';
@@ -22,6 +22,7 @@ import { giLabel, leverLabel } from '../utils/catalog.js';
 import { AVATAR_COLORS, avatarColor, initials } from '../utils/avatar.js';
 // Family text comes from outside (referral form, WhatsApp, uploads); staff names are typed by people.
 import { sanitize } from '../utils/validators.js';
+import { showModal } from '../components/modal.js';
 
 
 let tab = 'care';   // 'care' | 'outreach'
@@ -38,7 +39,7 @@ export async function renderNutrition(container) {
         <h1>Nutrition</h1>
         <p class="header-subtitle" id="nut-sub" style="margin:4px 0 0"></p>
       </div>
-      <span class="badge badge-primary" id="nut-count">…</span>
+      <div class="nw-actions"><a class="btn btn-secondary btn-sm" href="#nutrition-tracker">Nutrition tracker</a><span class="badge badge-primary" id="nut-count">…</span></div>
     </div>
     <div class="chip-row" id="nut-tabs" style="margin:0 0 var(--s4)"></div>
     <div id="nut-panel"></div>`;
@@ -104,7 +105,7 @@ async function openTab(container) {
         <button class="btn btn-secondary btn-sm" id="nut-claim-batch" style="display:none">${icon('handHeart')}Claim next 5</button>
         <div style="flex:1 1 220px;min-width:200px;position:relative">
           <input class="form-input" id="nut-search" type="search" autocomplete="off"
-            placeholder="Search name, patient code, phone or city" value="${query.replace(/"/g, '&quot;')}" />
+            placeholder="Search name, patient code, phone or city" value="${sanitize(query)}" />
         </div>
       </div>
       <div id="nut-list">${skeleton}</div>`;
@@ -116,7 +117,7 @@ async function openTab(container) {
         <div class="chip-row" id="out-scopes" style="margin:0"></div>
         <div style="flex:1 1 220px;min-width:200px;position:relative">
           <input class="form-input" id="out-search" type="search" autocomplete="off"
-            placeholder="Search name, patient code, phone or city" value="${outQuery.replace(/"/g, '&quot;')}" />
+            placeholder="Search name, patient code, phone or city" value="${sanitize(outQuery)}" />
         </div>
       </div>
       <div id="out-list">${skeleton}</div>`;
@@ -149,7 +150,7 @@ async function load(container) {
     counts.care = careRows.length; paintTabs(container);
     paint(container);
   } catch (e) {
-    list.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Couldn't load the worklist</h4><p>${e.message}</p></div>`;
+    list.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Couldn't load the worklist</h4><p>${sanitize(e.message)}</p></div>`;
   }
 }
 
@@ -211,7 +212,7 @@ function paint(container) {
   if (!shown.length) {
     list.innerHTML = searched
       ? `<div class="empty"><div class="ico-wrap">${icon('search')}</div>
-          <h4>No one matches “${query.trim()}”</h4>
+          <h4>No one matches “${sanitize(query.trim())}”</h4>
           <p>Searching all ${rows.length} people in the nutrition worklist.</p></div>`
       : scope === 'mine'
       ? `<div class="empty"><div class="ico-wrap">${icon('leaf')}</div>
@@ -312,6 +313,60 @@ function refreshOwnerCounts(container) {
   paintTabs(container);
 }
 
+// Assignment from Unclaimed locks the row in its RPC before calling the
+// existing owner setter, so a concurrent Claim is never silently overwritten.
+async function assignNutritionIntern(container, patient) {
+  if (!isManagerOrAdmin() || isImpersonating() || patient.continuity_id) return;
+  const userId = getCurrentUser()?.id;
+  const modal = showModal({
+    title: 'Assign to intern',
+    content: `<p>Assign <strong>${sanitize(patient.full_name || 'this patient')}</strong> to an eligible nutrition intern.</p><p class="nw-muted">Active interns who are available today are listed with their current patient load.</p><div data-nutrition-assignees role="status">Loading interns...</div><p class="nw-error" data-assignment-error role="alert" hidden></p>`,
+    footer: '<button type="button" class="btn btn-secondary" data-assignment-cancel>Cancel</button><button type="button" class="btn btn-primary" data-assignment-save disabled>Assign patient</button>',
+  });
+  const list = modal.querySelector('[data-nutrition-assignees]');
+  const submit = modal.querySelector('[data-assignment-save]');
+  const errorEl = modal.querySelector('[data-assignment-error]');
+  let assignees = [];
+  const current = () => modal.isCurrentModal() && getCurrentUser()?.id === userId && isManagerOrAdmin() && !isImpersonating();
+  modal.querySelector('[data-assignment-cancel]').addEventListener('click', () => modal.closeOwnedModal());
+  try {
+    const { data, error } = await getSupabase().rpc('get_nutrition_assignees');
+    if (!current()) return;
+    if (error) throw error;
+    assignees = Array.isArray(data) ? data : [];
+    list.innerHTML = assignees.length ? `<div class="nw-assignee-list">${assignees.map((intern, index) => `<label class="nw-assignee-option"><input type="radio" name="nutrition-assignee" data-nutrition-assignee value="${index}"><span><strong>${sanitize(intern.full_name || 'Nutrition intern')}</strong><br><span class="nw-muted">${Number(intern.current_load) || 0} patients in care</span></span></label>`).join('')}</div>` : '<p class="nw-muted">No eligible nutrition interns are available today. Check team availability, then try again.</p>';
+    list.querySelectorAll('[data-nutrition-assignee]').forEach(input => input.addEventListener('change', () => { submit.disabled = false; errorEl.hidden = true; }));
+  } catch (error) {
+    if (!current()) return;
+    list.textContent = 'Could not load eligible interns. Close this picker and try again.';
+    errorEl.textContent = error?.message || 'Please try again.';
+    errorEl.hidden = false;
+  }
+  submit.addEventListener('click', async () => {
+    const selected = list.querySelector('[data-nutrition-assignee]:checked');
+    const intern = selected ? assignees[Number(selected.value)] : null;
+    if (!intern || submit.disabled) return;
+    submit.disabled = true;
+    submit.textContent = 'Assigning...';
+    errorEl.hidden = true;
+    try {
+      if (!current()) throw new Error('Your session changed. Close this picker and try again.');
+      const { data, error } = await getSupabase().rpc('assign_unclaimed_nutrition', { p_patient: patient.patient_id, p_to: intern.id });
+      if (error) throw error;
+      if (!data?.ok || Number(data.claimed) !== 1) throw new Error('No assignment was made. The patient may already be claimed or the intern may no longer be eligible. Refresh and try again.');
+      modal.closeOwnedModal();
+      showToast(`Patient assigned to ${intern.full_name || 'the nutrition intern'}.`, 'success');
+      if (container.querySelector('#nut-list')?.isConnected && getCurrentUser()?.id === userId) await load(container);
+    } catch (error) {
+      if (!current()) return;
+      errorEl.textContent = 'Could not assign: ' + (error?.message || 'Please try again.');
+      errorEl.hidden = false;
+      submit.disabled = false;
+      submit.textContent = 'Assign patient';
+    }
+  });
+}
+
 // Held for 60+ days with no nutrition work on file is not care, it is a
 // name sitting in a list. Say so on the card, or the pool quietly moves
 // into three people's names and nobody notices for a month.
@@ -340,7 +395,7 @@ function cardHTML(r) {
     : `<span class="badge badge-warn" style="font-size:11px">No plan logged yet</span>`)
     + (heldStale(r) ? `<span class="badge badge-warn" style="font-size:11px" title="Held for two months with no nutrition work logged">Held ${STALE_DAYS}+ days, no work logged</span>` : '');
   const must = r.must_score != null
-    ? `<span class="badge badge-${Number(r.must_score) >= 2 ? 'danger' : Number(r.must_score) === 1 ? 'warn' : 'ok'}">MUST ${r.must_score}</span>`
+    ? `<span class="badge badge-${Number(r.must_score) >= 2 ? 'danger' : Number(r.must_score) === 1 ? 'warn' : 'ok'}">MUST ${sanitize(String(r.must_score))}</span>`
     : `<span class="faint" style="font-size:12px;color:var(--ink-3)">No MUST score yet</span>`;
   const phone = r.phone_full ? r.phone_full.replace(/\s/g, '') : '';
 
@@ -361,7 +416,7 @@ function cardHTML(r) {
   const why = r.why_label
     ? `<div style="display:flex;gap:7px;align-items:flex-start;padding:8px 10px;border-radius:8px;background:var(--surface-2, rgba(127,127,127,.08));font-size:12px;color:var(--ink-2)">
         <span style="width:14px;height:14px;flex:none;color:var(--ink-3);margin-top:1px">${icon('info')}</span>
-        <span><strong>${isTheirs ? 'On their list because' : 'On your list because'}</strong> ${r.why_label}${r.why_by && r.why_code !== 'claimed' ? ` · ${r.why_by}` : ''}${r.why_at ? ` · ${formatDate(r.why_at)}` : ''}</span>
+        <span><strong>${isTheirs ? 'On their list because' : 'On your list because'}</strong> ${sanitize(r.why_label)}${r.why_by && r.why_code !== 'claimed' ? ` · ${sanitize(r.why_by)}` : ''}${r.why_at ? ` · ${formatDate(r.why_at)}` : ''}</span>
       </div>`
     : '';
 
@@ -371,6 +426,7 @@ function cardHTML(r) {
   const PRIMARY = 'style="flex:1 1 110px"';
   const actions = !r.continuity_id
     ? `${canClaim ? `<button class="btn btn-primary btn-sm" data-act="claim" ${PRIMARY} title="You become the one who calls them. They stay yours until you hand them back or a lead moves them.">${icon('handHeart')}Claim</button>` : ''}
+       ${canReassign && !isImpersonating() ? `<button class="btn btn-primary btn-sm" data-act="assign" ${PRIMARY}>${icon('userPlus')}Assign to intern</button>` : ''}
        <button class="btn ${canClaim ? 'btn-secondary' : 'btn-primary'} btn-sm" data-act="log"${canClaim ? '' : ' ' + PRIMARY}>${icon('phone')}Log call</button>
        <button class="btn btn-secondary btn-sm" data-act="open" title="Open the full record">${icon('user')}Profile</button>`
     : isMine
@@ -425,7 +481,7 @@ async function loadOutreach(container) {
     counts.outreach = (data || []).length; paintTabs(container);
     paintOutreach(container, data || []);
   } catch (e) {
-    list.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Couldn't load the outreach list</h4><p>${e.message}</p></div>`;
+    list.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Couldn't load the outreach list</h4><p>${sanitize(e.message)}</p></div>`;
   }
 }
 
@@ -465,7 +521,7 @@ function paintOutreach(container, rows) {
   if (!shown.length) {
     list.innerHTML = searched
       ? `<div class="empty"><div class="ico-wrap">${icon('search')}</div>
-          <h4>No one matches “${outQuery.trim()}”</h4>
+          <h4>No one matches “${sanitize(outQuery.trim())}”</h4>
           <p>Searching all ${rows.length} people on the outreach board.</p></div>`
       : outScope === 'mine'
         ? `<div class="empty"><div class="ico-wrap" style="background:var(--ok-soft);color:var(--ok)">${icon('checkCircle')}</div>
@@ -564,6 +620,7 @@ function wire(container, listEl, rows) {
     const on = (act, fn) => cardEl.querySelector(`[data-act="${act}"]`)?.addEventListener('click', (e) => { e.stopPropagation(); fn(e.currentTarget); });
     on('open',    () => navigate('patients/' + r.patient_id));
     on('claim',   (btn) => claimPatients(container, [r], btn));
+    on('assign',  () => assignNutritionIntern(container, r));
     on('release', (btn) => releasePatient(container, r, btn));
     on('assess',  () => openAssessmentFlow({ patient: { id: r.patient_id, full_name: r.full_name }, role: 'nutritionist', onSaved: reload }));
     // Logging a call from the In-care tab has never existed, which is the

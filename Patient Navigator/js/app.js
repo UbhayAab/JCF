@@ -21,6 +21,7 @@ import { renderLearn } from './pages/learn.js';
 import { renderUpload } from './pages/upload.js';
 import { renderIntake } from './pages/intake.js';
 import { renderNutrition } from './pages/nutrition.js';
+import { renderNutritionTracker } from './pages/nutritionTracker.js';
 import { renderLeaderboard } from './pages/leaderboard.js';
 import { renderConcerns } from './pages/concerns.js';
 import { renderLeads } from './pages/leads.js';
@@ -504,7 +505,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261016a';  // bumped on every breaking deploy
+const APP_BUILD = '20261016b';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -565,12 +566,13 @@ async function init() {
     c.innerHTML='<div class="page-header"><div><h1>Saturday circles</h1><p>Custom invitations, meeting links and scheduled delivery.</p></div><a class="btn btn-secondary" href="#team">Team and session history</a></div><div id="circles-workspace"></div>';
     return m.renderCircleMessages(c.querySelector('#circles-workspace'));
   }), { requiresAuth:true, roles:['admin','manager'] });
-  registerRoute('updates', renderFeatureUpdates, { requiresAuth:true, roles:['admin','manager'] });
+  registerRoute('updates', renderFeatureUpdates, { requiresAuth:true, roles:['admin','manager','caller','caregiver_mentor','therapist','nutritionist'] });
   registerRoute('profile', (c) => renderProfile(c), { requiresAuth: true });
   registerRoute('learn', (c) => renderLearn(c), { requiresAuth: true, roles: CARE_ROLES });
   registerRoute('upload', (c) => renderUpload(c), { requiresAuth: true, roles: UPLOAD_ROLES });
   registerRoute('intake', (c) => renderIntake(c), { requiresAuth: true, roles: UPLOAD_ROLES });
   registerRoute('nutrition', (c) => renderNutrition(c), { requiresAuth: true, roles: ['nutritionist', 'manager', 'admin'] });
+  registerRoute('nutrition-tracker', renderNutritionTracker, { requiresAuth: true });
   registerRoute('leaderboard', (c) => renderLeaderboard(c), { requiresAuth: true, roles: ['admin', 'manager'] });
   // Concerns: managers triage; calling roles can follow the flags they raised.
   registerRoute('concerns', (c) => renderConcerns(c), { requiresAuth: true, roles: CARE_ROLES });

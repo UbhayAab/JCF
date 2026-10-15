@@ -1,0 +1,59 @@
+.nw-tracker { min-width: 0; }
+.nw-muted { color: var(--ink-3); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.nw-error { color: var(--danger); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.nw-actions, .nw-section-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.nw-section-head h3 { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0; }
+.nw-form p { line-height: 1.55; overflow-wrap: anywhere; }
+.nw-form .nw-actions { justify-content: flex-end; margin-top: 20px; }
+.nw-form select, .nw-form textarea { max-width: 100%; }
+.nw-request-prompt { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: var(--s5); }
+.nw-request-prompt > div { flex: 1 1 280px; min-width: 0; }
+.nw-request-prompt h3 { margin: 0 0 6px; }
+.nw-request-prompt p { margin: 0; }
+.nw-tracker-controls { margin-bottom: 18px; }
+.nw-tracker-controls .chip-row { margin: 0; flex-wrap: wrap; }
+.nw-closed-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; white-space: nowrap; }
+.nw-filter-inputs { display: grid; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); gap: 14px; margin-top: 18px; }
+.nw-filter-inputs > div { min-width: 0; }
+.nw-request-head, .nw-request-row { display: grid; grid-template-columns: minmax(150px, 1.6fr) repeat(4, minmax(88px, 1fr)) minmax(110px, 1.1fr) minmax(106px, 1fr); gap: 14px; }
+.nw-request-head { padding: 10px 18px; color: var(--ink-3); font-size: 12px; font-weight: 650; }
+.nw-request-list { display: flex; flex-direction: column; gap: 12px; }
+.nw-request-row { padding: 18px; align-items: start; }
+.nw-request-row > div { min-width: 0; display: flex; flex-direction: column; gap: 7px; overflow-wrap: anywhere; }
+.nw-request-row time { font-size: 12px; line-height: 1.5; color: var(--ink-2); }
+.nw-request-row .badge { align-self: flex-start; max-width: 100%; white-space: normal; }
+.nw-request-patient > a { font-weight: 700; color: var(--primary); }
+.nw-request-patient > strong { font-size: 13px; }
+.nw-request-patient p { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+.nw-request-row.is-highlighted { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
+.nw-row-actions .btn { white-space: normal; width: 100%; }
+.nw-notifications { margin-bottom: var(--s5); }
+.nw-notifications .chip-row { margin: 14px 0 8px; }
+.nw-notification-list { padding: 0; margin: 0; list-style: none; }
+.nw-notification { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
+.nw-notification-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.nw-notification-title { display: block; color: var(--ink); font-weight: 600; font-size: 14px; line-height: 1.5; margin-bottom: 4px; }
+.nw-notification.is-unread .nw-notification-title { color: var(--primary); }
+.nw-notification > .btn { flex-shrink: 0; }
+.nw-assignee-list { display: flex; flex-direction: column; gap: 10px; }
+.nw-assignee-option { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 12px; overflow-wrap: anywhere; }
+.nw-assignee-option input { flex: none; margin-top: 4px; }
+.nw-session-focus { margin-bottom: var(--s5); display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.nw-session-focus p { margin: 0; }
+@media (max-width: 1100px) {
+  .nw-request-head { display: none; }
+  .nw-request-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nw-request-row > [data-step]::before { content: attr(data-step); font-weight: 650; font-size: 12px; color: var(--ink-3); }
+  .nw-request-patient { grid-column: 1 / -1; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+  .nw-row-actions { flex-direction: row !important; flex-wrap: wrap; grid-column: 1 / -1; }
+  .nw-row-actions .btn { width: auto; flex: 1 1 120px; }
+}
+@media (max-width: 520px) {
+  .nw-filter-inputs { grid-template-columns: minmax(0, 1fr); }
+  .nw-tracker .page-header { align-items: flex-start; gap: 14px; }
+  .nw-tracker .page-header > div { min-width: 0; }
+  .nw-tracker-controls, .nw-request-row, .nw-notifications { padding: 16px; }
+  .nw-notification { align-items: flex-start; flex-wrap: wrap; gap: 8px; }
+  .nw-notification-copy { flex-basis: 100%; }
+  .nw-request-prompt > .btn { flex: 1 1 150px; white-space: normal; }
+}

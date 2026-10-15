@@ -1181,6 +1181,7 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
 
   el.innerHTML = `
     ${deceased ? `<div id="bereave-mount" style="margin-bottom:var(--s5)"></div>` : ''}
+    <div id="nutrition-request-mount"></div>
     ${nutriBanner}
     ${renderCareFolderCard(p, services, assessments)}
     <div id="measurements-mount" style="margin-bottom:var(--s5)"></div>
@@ -1260,6 +1261,13 @@ function renderOverviewTab(el, p, services, assessments, sb, reload, deceased, p
     ${p.patient_status === 'inactive' || p.disinterest_level ? '' : '<div id="status-history-mount" style="margin-top:var(--s5)"></div>'}
   `;
   el.querySelector('#gaps-edit-btn')?.addEventListener('click', () => showPatientForm(p, reload));
+  const nutritionRequestMount = el.querySelector('#nutrition-request-mount');
+  import('../components/nutritionRequest.js')
+    .then(module => module.mountNutritionRequest(nutritionRequestMount, p, { onSaved: reload }))
+    .catch(error => {
+      if (nutritionRequestMount?.isConnected) nutritionRequestMount.textContent = 'Could not load nutrition requests. Refresh to try again.';
+      console.warn('[nutrition request]', error?.message);
+    });
 
   // Nutrition ownership, from the record itself. Same single write path the
   // worklist card uses, so the guard trigger and the history stay honest.

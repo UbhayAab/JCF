@@ -19,6 +19,7 @@ import { avatarColor, initials } from '../utils/avatar.js';
 import { sanitize } from '../utils/validators.js';
 import { loadSaturdayCard, loadResourceReplies, loadDocsWaitingCard } from '../components/dashCards.js';
 import { renderAdminDashboard } from './dashboardAdmin.js';
+import { mountCareNotifications } from '../components/careNotifications.js';
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 function greetingWord() { const h = new Date().getHours(); return h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening'; }
 
@@ -82,6 +83,7 @@ export async function renderDashboard(container) {
         <a class="qa" id="qa-resources"><span class="qa-ico coral">${icon('handHeart')}</span><div><div class="qa-title">Money &amp; stay help</div><div class="qa-sub">Free stays, grants and schemes</div></div></a>`}
       </div>
 
+      <div id="care-notifications"></div>
       <div id="saturday-card"></div>
       <div id="resource-replies"></div>
       <div id="docs-waiting-card"></div>
@@ -129,7 +131,7 @@ export async function renderDashboard(container) {
   document.getElementById('qa-resources')?.addEventListener('click', () => navigate('resources/money_stay'));
   document.getElementById('open-portal')?.addEventListener('click', () => navigate(isSpecialist ? (role === 'nutritionist' ? 'nutrition' : 'sessions') : (isIntake ? 'upload' : 'calling')));
 
-  const tasks = [loadStats(),
+  const tasks = [mountCareNotifications(container.querySelector('#care-notifications')), loadStats(),
     isSpecialist ? loadRecentCheckins() : loadRecentCalls(),
     isSpecialist ? loadSpecialistPeople(role) : loadDueToday(isIntake),
     loadSaturdayCard(role), loadResourceReplies(), loadDocsWaitingCard()];
