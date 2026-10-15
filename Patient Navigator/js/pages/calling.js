@@ -61,6 +61,12 @@ let availableToday = true;
 let currentContext = null;      // get_call_context row for the family on the call (sql/146)
 let listContext = new Map();    // patient_id -> get_call_context row, for today's list
 let recordingSection = null;    // the mounted recording box ({ refresh, dispose }), sql/166
+let disposeSaturdaySession = null;
+let saturdayMountGeneration = 0;
+function clearSaturdaySession() {
+  saturdayMountGeneration++;
+  disposeSaturdaySession?.(); disposeSaturdaySession = null;
+}
 const form = blankForm();
 
 // --- active-call persistence: survive a WebView reload, leaving the site to
@@ -288,6 +294,7 @@ function addDays(n) { const d = new Date(); d.setDate(d.getDate() + n); return d
 function badge(tone, label) { return `<span class="badge badge-${tone}"><span class="dot"></span>${label}</span>`; }
 
 export async function renderCalling(container) {
+  clearSaturdaySession();
   me = getCurrentProfile();
   container.innerHTML = `<div id="portal-content"></div>`;
   if (!me?.id) { root().innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Not signed in</h4><p>Please sign in again.</p></div>`; return; }
@@ -390,6 +397,7 @@ async function mountReady() {
           <div><div class="rs-num">${summary.done_today}</div><div class="rs-lbl">Done today</div></div>
         </div>
       </div>
+      <div id="saturday-session"></div>
       <div id="hb-requests" hidden></div>
       <div id="doc-collect-due" hidden></div>
       <div class="card card-flush" id="today-list">
@@ -404,6 +412,16 @@ async function mountReady() {
   document.getElementById('avail-toggle')?.addEventListener('click', toggleAvailability);
   el.querySelectorAll('[data-goto-list]').forEach(t => t.addEventListener('click', scrollToTodayList));
   mountHopebotRequests(document.getElementById('hb-requests'), { mode: 'calling' });
+  // Load only in Ready: a failed optional schedule must never block calling.
+  const saturdayMount = el.querySelector('#saturday-session');
+  const saturdayGeneration = saturdayMountGeneration;
+  const readyHash = window.location.hash;
+  import('../components/saturdaySession.js').then((m) => {
+    if (saturdayMount?.isConnected && !currentQueueId
+        && saturdayGeneration === saturdayMountGeneration && readyHash === window.location.hash) {
+      disposeSaturdaySession = m.mountSaturdaySession(saturdayMount);
+    }
+  }).catch((e) => console.warn('[Saturday session]', e.message));
   import('../components/docCollection.js')
     .then((m) => m.mountCollectionList(document.getElementById('doc-collect-due'), { scope: 'mine', compact: true }))
     .catch((e) => console.warn('[documents] due list:', e.message));
@@ -633,6 +651,7 @@ async function getNextCall(justSkippedId = null) {
 // One entry into the active-call view: get_next_call and the tappable
 // Today's list both land here with the same claimed-queue JSON.
 async function startCallSession(data) {
+  clearSaturdaySession();
   // First, before any wait: a transcript still on its way belongs to the call
   // that was on screen, never to this one (Skip and the flag exits land here).
   recordingSection?.dispose(); recordingSection = null;
@@ -808,6 +827,7 @@ async function mountReferralBrief(mount, p) {
 
 // ============================================================ Active view
 function mountActive(p, history) {
+  clearSaturdaySession();
   currentHistory = history || [];
   recordingSection?.dispose(); recordingSection = null;
   const el = root(); if (!el) return;
@@ -2266,6 +2286,7 @@ async function mountQueueEmpty() {
 }
 
 function resetState() {
+  clearSaturdaySession();
   recordingSection?.dispose(); recordingSection = null;
   currentQueueId = null; currentPatient = null; currentPatientPitches = null; currentPatientPriority = null; currentHistory = []; currentPatientSessions = [];
   currentContext = null;
