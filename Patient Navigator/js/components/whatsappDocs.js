@@ -30,28 +30,38 @@ import { showToast } from './toast.js';
 import { icon } from './icons.js';
 
 const INVITE_URL = `${CONFIG.SUPABASE_URL}/functions/v1/hopebot-invite`;
+const uncertainKey = (patientId) => `jcf_hopebot_invite_unknown_${getCurrentUser()?.id}_${patientId}`;
+const UNKNOWN_SEND = 'Send outcome unknown. Do not send again. Refresh delivery status on the family card and ask your lead to check.';
+const pendingInvites = new Set();
 const esc = (s) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 async function callInvite(patientId, dryRun) {
-  const { data: sess } = await getSupabase().auth.getSession();
-  const token = sess?.session?.access_token;
-  if (!token) return { ok: false, error: 'Your sign-in has expired. Sign in again.' };
   try {
+    const { data: sess } = await getSupabase().auth.getSession();
+    const token = sess?.session?.access_token;
+    if (!token) return { ok: false, error: 'Your sign-in has expired. Sign in again.' };
     const res = await fetch(INVITE_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ patientId, dryRun }),
     });
-    return await res.json().catch(() => ({ ok: false, error: `The HopeBot service answered ${res.status}.` }));
+    return await res.json().catch(() => ({ ok: false, reason: dryRun ? 'preview_failed' : 'send_unknown',
+      error: dryRun ? `The HopeBot service answered ${res.status}.` : UNKNOWN_SEND }));
   } catch (e) {
-    return { ok: false, error: 'Could not reach the HopeBot service. Check your internet and try again.' };
+    return { ok: false, reason: dryRun ? 'preview_failed' : 'send_unknown',
+      error: dryRun ? 'Could not reach the HopeBot service. Check your internet and try again.' : UNKNOWN_SEND };
   }
 }
 
 /** Resolves true once WhatsApp accepted an invite. Delivery is reported separately. */
 export async function sendHopeBotInvite(patientId, patientName = '') {
+  const key = uncertainKey(patientId);
+  if (pendingInvites.has(key) || localStorage.getItem(key)) {
+    showToast(UNKNOWN_SEND, 'warning', 10000);
+    return false;
+  }
   const preview = await callInvite(patientId, true);
   if (!preview.ok) {
     showToast(preview.error || 'HopeBot cannot be sent to this family.', 'warning', 9000);
@@ -79,13 +89,22 @@ export async function sendHopeBotInvite(patientId, patientName = '') {
     });
     document.getElementById('hb-cancel')?.addEventListener('click', () => { closeModal(); resolve(false); });
     document.getElementById('hb-send')?.addEventListener('click', async (e) => {
+      if (pendingInvites.has(key) || localStorage.getItem(key)) return;
+      pendingInvites.add(key);
+      // Save before the request so a closed tab or a lost response cannot invite a retry.
+      try { localStorage.setItem(key, 'pending'); }
+      catch { pendingInvites.delete(key); showToast('Could not save the send check. Nothing was sent. Allow site storage before trying again.', 'error', 10000); return; }
       const btn = e.currentTarget;
       btn.disabled = true;
       btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>Sending…';
       const out = await callInvite(patientId, false);
+      if (out.reason !== 'send_unknown' && !(out.ok && out.logged === false)) localStorage.removeItem(key);
+      pendingInvites.delete(key);
       closeModal();
       if (out.ok) {
-        showToast(`WhatsApp accepted the message to ${out.to}; delivery pending. Refresh delivery status on the family card.`, 'info', 10000);
+        showToast(out.logged === false
+          ? `WhatsApp accepted the message to ${out.to}, but its status could not be saved. Do not send again. Refresh delivery status and ask your lead to check.`
+          : `WhatsApp accepted the message to ${out.to}; delivery pending. Refresh delivery status on the family card.`, 'info', 10000);
         resolve(true);
       } else {
         showToast(out.error || 'HopeBot was not sent.', 'error', 10000);
