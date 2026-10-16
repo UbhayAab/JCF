@@ -79,6 +79,11 @@ const isDelete = (x) => x.reason === 'deletion_request' && !x.safety;
 const intentLabel = (k) => INTENTS[k] || pretty(k);
 export const cancerLabel = (c) => (c ? CANCERS[c] || pretty(c) : null);
 export const stageLabel = (s) => (!s ? null : s === 'pata_nahi' || s === 'unknown' ? 'Stage not known' : /^stage_\d$/.test(s) ? `Stage ${s.slice(6)}` : pretty(s));
+// The language the family chose on HopeBot (sql/208 keeps 'bn'). Each view
+// keeps its own fallback for a missing value, so English and Hindi read as before.
+const LANGS = new Map([['en', 'English'], ['hi', 'Hindi'], ['bn', 'Bengali']]);
+export const langLabel = (code, fallback) => LANGS.get(code) || fallback;
+const BENGALI_TIP = 'This family chose Bengali on HopeBot. A Bengali-speaking Saarthi should call.';
 const timeIN = (d) => new Date(d).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
 const dayIN = (d) => {
   const x = new Date(d); const t = new Date();
@@ -125,7 +130,7 @@ function familyLine(f) {
     f.city ? sanitize(f.city) : null,
     cancerLabel(f.cancer_type) ? sanitize(cancerLabel(f.cancer_type)) : null,
     stageLabel(f.stage) ? sanitize(stageLabel(f.stage)) : null,
-    f.lang === 'en' ? 'English' : 'Hindi',
+    langLabel(f.lang, 'Hindi'),
   ].filter(Boolean).join(' · ');
 }
 
@@ -360,7 +365,7 @@ export async function mountHopebotCard(el, patientId) {
     <div class="card" style="padding:12px 14px;margin:0 0 12px">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span style="display:inline-flex;width:18px;height:18px">${icon('message')}</span>
-        <strong>Talked to HopeBot on WhatsApp</strong>
+        <strong>Talked to HopeBot on WhatsApp</strong>${d.lang === 'bn' ? `<span class="badge badge-info" data-hb-lang="bn" title="${BENGALI_TIP}">Bengali</span>` : ''}
         <span class="due-meta">${d.last_message_at ? `last message ${formatRelativeTime(d.last_message_at)}` : ''}${d.first_seen_at ? ` · first ${formatRelativeTime(d.first_seen_at)}` : ''}</span>
       </div>
       ${open.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${open.map((r) => `<span class="badge badge-warn">${sanitize(reasonLabel(r.reason))}: open</span>`).join('')}

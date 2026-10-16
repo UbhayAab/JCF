@@ -29,6 +29,10 @@ let filter = 'new'; // new | contacted | all | nocaller (managers) | team
 let roster = null;  // managers: who can take a family (hopebot_assignable)
 let openReqs = new Map(); // lead_id -> open HopeBot request ids this person may log
 let searchQ = '';
+// The family's HopeBot language (sql/208 keeps 'bn'). A local copy, not an
+// import: a phone may still hold the previous hopebotFamily.js for a while
+// (tools/stale_import_check.mjs).
+const LEAD_LANGS = new Map([['en', 'English'], ['hi', 'Hindi'], ['bn', 'Bengali']]);
 
 export async function renderLeads(container) {
   container.innerHTML = `
@@ -164,7 +168,7 @@ function paint(container) {
           r.city && r.city !== 'other' ? sanitize(r.city) : 'City not pinned',
           r.cancer_type ? sanitize(cancerLabel(r.cancer_type)) : null,
           r.stage && r.stage !== 'unknown' ? sanitize(/^stage_|pata_nahi/.test(r.stage) ? stageLabel(r.stage) : 'Stage ' + r.stage) : null,
-          r.lang === 'hi' ? 'Hindi' : 'English',
+          LEAD_LANGS.get(r.lang) || 'English',
         ].filter(Boolean).join(' · ')}</div>
         ${r.notes ? `<div class="due-meta" style="margin-top:6px;color:var(--ink-1);white-space:pre-wrap">${sanitize(r.notes)}</div>` : ''}
         ${digestHTML(digests.get(r.id))}
