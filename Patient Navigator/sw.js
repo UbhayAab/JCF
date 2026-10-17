@@ -11,13 +11,14 @@
 // rename is the only thing that guarantees a stale index.html - and with it
 // the old ?v= asset URLs it points at - is thrown away rather than served on
 // the next slow connection. v3 -> v4 on 2026-09-10.
-const CACHE = 'jcf-pwa-v76';
+const CACHE = 'jcf-pwa-v77';
 // A call recording shared into the app (manifest share_target, Fixboard #22):
 // Google's Phone app keeps recordings inside itself, so Share is the only way
 // out. Kept in its own cache, which activate() leaves alone; the calling page
 // offers it on the next call and drops it after six hours.
 const SHARE_CACHE = 'jcf-shared-recording';
-const SHARED_KEY = './__shared-recording';
+const SHARE_PREFIX = './__shared-recording/';
+const SHARE_STATE_PREFIX = './__shared-recording-state/';
 const SHARE_TTL_MS = 6 * 3600 * 1000;
 const SHARE_MAX_BYTES = 50 * 1024 * 1024;
 const NET_TIMEOUT_MS = 3500;
@@ -63,8 +64,27 @@ async function networkFirstWithTimeout(req) {
 async function dropStaleShare() {
   try {
     const cache = await caches.open(SHARE_CACHE);
-    const hit = await cache.match(SHARED_KEY);
-    if (hit && Date.now() - Number(hit.headers.get('X-Shared-At') || 0) > SHARE_TTL_MS) await cache.delete(SHARED_KEY);
+    const prefix = new URL(SHARE_PREFIX, self.registration.scope).href;
+    const statePrefix = new URL(SHARE_STATE_PREFIX, self.registration.scope).href;
+    for (const request of await cache.keys()) {
+      if (request.url.startsWith(statePrefix)) {
+        const id = request.url.slice(statePrefix.length);
+        if (!/^[0-9a-f-]{36}$/i.test(id)) continue;
+        let state; try { state = await (await cache.match(request))?.json(); } catch { state = null; }
+        if (!await cache.match(prefix + id) || Date.now() - Number(state?.sharedAt || 0) > SHARE_TTL_MS) await cache.delete(request);
+        continue;
+      }
+      if (!request.url.startsWith(prefix)) continue;
+      const id = request.url.slice(prefix.length);
+      if (!/^[0-9a-f-]{36}$/i.test(id)) continue;
+      const hit = await cache.match(request);
+      if (hit && hit.headers.get('X-Share-ID') === id && Date.now() - Number(hit.headers.get('X-Shared-At') || 0) > SHARE_TTL_MS) {
+        await cache.delete(request);
+        await cache.delete(new URL(SHARE_STATE_PREFIX + id, self.registration.scope).href);
+      }
+    }
+    // Never delete the legacy singleton: an older worker may overwrite it
+    // after a read. Unique share keys make exact expiry safe going forward.
   } catch (_) { /* nothing to drop */ }
 }
 
@@ -83,7 +103,9 @@ async function receiveSharedRecording(req) {
       && (/^audio\//i.test(file.type || '') || /\.(m4a|mp3|wav|aac|ogg|opus|oga|webm)$/i.test(file.name || ''));
     if (audio && file.size > 0 && file.size <= SHARE_MAX_BYTES) {
       const cache = await caches.open(SHARE_CACHE);
-      await cache.put(SHARED_KEY, new Response(file, { headers: {
+      const id = crypto.randomUUID();
+      await cache.put(new URL(SHARE_PREFIX + id, self.registration.scope).href, new Response(file, { headers: {
+        'X-Share-ID': id,
         'Content-Type': file.type || 'application/octet-stream',
         'X-File-Name': encodeURIComponent(file.name || 'recording'),
         'X-Last-Modified': String(file.lastModified || Date.now()),

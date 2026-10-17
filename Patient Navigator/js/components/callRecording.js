@@ -15,11 +15,13 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
+import { getCurrentProfile } from '../auth.js';
 import { showToast } from './toast.js';
 import { showModal, closeModal, confirmModal } from './modal.js';
 import { icon } from './icons.js';
 import { mountCallMeasurements } from './measurements.js';
 import { verifiedCareCallDate, recordingResultForForm } from '../utils/careFollowup.js';
+import { createSharedRecordingStore, SHARE_TTL_MS } from '../utils/sharedRecording.js';
 
 // The consent line, exactly as agreed for Ubhay (chat #533). A change of words
 // is a new version: the version is saved with every answer.
@@ -67,7 +69,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 export function blankRecording() {
   return { reminded: false, intent: null, dialedAt: null, consentId: null, decision: null,
-    recordingId: null, path: null, fileName: '', durationS: null, status: null, error: null, result: null, applied: null };
+    recordingId: null, path: null, fileName: '', durationS: null, status: null, error: null, result: null, applied: null,
+    sharedRecording: null, sharedUploadDurable: false, sharedCleanupError: null };
 }
 
 // sql/193: a recording joins a call made within 7 days of the family's answer.
@@ -200,27 +203,33 @@ export function readAudioDuration(file, timeoutMs = 5000) {
 // Google's Phone app keeps its recordings inside itself: Share is the way out.
 // The installed app is a share target (manifest.webmanifest); sw.js keeps the
 // shared file in this cache until the next call offers it, for six hours.
-const SHARE_CACHE = 'jcf-shared-recording';
-const SHARED_KEY = './__shared-recording';
-const SHARED_MAX_AGE_MS = 6 * 3600 * 1000;
-
 export async function takeSharedRecording() {
   try {
     if (!('caches' in window)) return null;
-    const cache = await caches.open(SHARE_CACHE);
-    const res = await cache.match(SHARED_KEY);
-    if (!res) return null;
-    const sharedAt = Number(res.headers.get('X-Shared-At') || 0);
-    if (!sharedAt || Date.now() - sharedAt > SHARED_MAX_AGE_MS) { await cache.delete(SHARED_KEY); return null; }
-    const blob = await res.blob();
-    const name = decodeURIComponent(res.headers.get('X-File-Name') || 'recording');
-    // Only an audio file of a sane size is ever offered; anything else is dropped.
-    if (!blob.size || blob.size > MAX_SHARED_BYTES || !canonicalAudioType(name, blob.type)) { await cache.delete(SHARED_KEY); return null; }
-    return new File([blob], name, { type: blob.type, lastModified: Number(res.headers.get('X-Last-Modified') || sharedAt) });
+    const store = createSharedRecordingStore(), share = (await store.list())[0];
+    if (!share || !canonicalAudioType(share.file.name, share.file.type)) return null;
+    share.file._jcfShared = { ...store.refOf(share), binding: share.binding };
+    return share.file;
   } catch { return null; }
 }
-async function dropSharedRecording() {
-  try { await (await caches.open(SHARE_CACHE)).delete(SHARED_KEY); } catch { /* nothing to drop */ }
+
+async function verifySharedAttachment(expected) {
+  if (!expected.uploaderId || expected.uploaderId !== getCurrentProfile()?.id) return { attached: false, uploaded: false };
+  const sb = getSupabase();
+  const { data: row, error } = await sb.from('call_recordings')
+    .select('id,consent_id,call_log_id,storage_path,patient_id,uploaded_by,status,audio_deleted_at')
+    .eq('id', expected.recordingId).maybeSingle();
+  if (error) throw error;
+  const { data: log, error: logError } = await sb.from('call_logs').select('id,patient_id,caller_id').eq('id', expected.callLogId).maybeSingle();
+  if (logError) throw logError;
+  const attached = row?.id === expected.recordingId && row.consent_id === expected.consentId
+    && row.call_log_id === expected.callLogId && row.storage_path === expected.path && row.patient_id === expected.patientId
+    && row.uploaded_by === expected.uploaderId && log?.id === expected.callLogId
+    && log.patient_id === expected.patientId && log.caller_id === expected.uploaderId;
+  // attach_call_recording only leaves 'uploading' after verifying the stored
+  // object exists. Reloads with persisted matching upload metadata can retry
+  // cleanup without invoking transcription again.
+  return { attached, uploaded: !!attached && !row.audio_deleted_at && ['uploaded','transcribing','done','failed'].includes(row.status) };
 }
 
 async function invokeTranscribe(recordingId) {
@@ -333,6 +342,7 @@ export function mountRecordingSection(el, ctx) {
   let guideOpen = false;       // inline setup steps
   let busy = false;
   let disposed = false;        // the call moved on: late answers must not touch the next family's form
+  let selectionEpoch = 0;     // a slow duration check must not replace a newer selection
   let measurementBox = null;
   const measurementStates = new Map(); // private to this mounted call, never an automatic write
   const sb = getSupabase();
@@ -349,8 +359,10 @@ export function mountRecordingSection(el, ctx) {
   function card(inner, tone = 'neutral') {
     const border = tone === 'ok' ? 'var(--ok)' : tone === 'warn' ? 'var(--gold)' : tone === 'danger' ? 'var(--danger)' : 'var(--line)';
     const bg = tone === 'ok' ? 'var(--ok-soft)' : tone === 'warn' ? 'var(--gold-soft)' : 'var(--surface-2, var(--surface))';
+    const rec = ctx.get();
+    const local = rec.sharedRecording ? `<p style="font:var(--t-xs);color:var(--ink-2);margin:8px 0 0">${rec.sharedRecording.legacy ? 'This older shared copy cannot be safely removed automatically. Ask your team lead about legacy app-storage cleanup.' : 'The app-held shared copy is available here for six hours, or until upload and saved-call attachment are confirmed. Expired copies are cleared when the Navigator next checks them.'} The original in Phone or Files must be deleted manually.${rec.sharedCleanupError ? ` ${esc(rec.sharedCleanupError)}` : ''}</p>` : '';
     return `<div class="followup rec-card" style="border-color:${border};background:${bg};padding:12px 14px">
-      <div class="fu-head">${icon('mic')}<span>Call recording</span></div>${inner}</div>`;
+      <div class="fu-head">${icon('mic')}<span>Call recording</span></div>${inner}${local}</div>`;
   }
 
   function render() {
@@ -483,8 +495,9 @@ export function mountRecordingSection(el, ctx) {
     update({ decision: null, consentId: null });
   }
 
-  async function picked(file) {
+  async function picked(file, shareRef = null) {
     if (!file) return;
+    const selection = ++selectionEpoch;
     const type = canonicalAudioType(file.name, file.type);
     if (!type) {
       const ext = (file.name.split('.').pop() || '').toLowerCase();
@@ -492,13 +505,20 @@ export function mountRecordingSection(el, ctx) {
       return;
     }
     const consentId = ctx.get().consentId;
+    const sharedRecording = shareRef ? { id: shareRef.id, key: shareRef.key, legacy: !!shareRef.legacy,
+      sharedAt: shareRef.sharedAt, patientId: ctx.patientId, uploaderId: getCurrentProfile()?.id } : null;
+    update({ sharedRecording, sharedUploadDurable: false, sharedCleanupError: null });
+    if (sharedRecording && !sharedRecording.legacy) {
+      try { await createSharedRecordingStore().bind(sharedRecording, { consentId, patientId: ctx.patientId, uploaderId: sharedRecording.uploaderId }); }
+      catch { update({ sharedCleanupError: 'Local retry metadata could not be saved; the shared copy is kept.' }); }
+    }
     const durationS = await readAudioDuration(file);
-    if (!sameConsent(consentId)) return;
+    if (!sameConsent(consentId) || selection !== selectionEpoch) return;
     const rec = ctx.get();
     // No dial in the Navigator (a logged call reopened, a call back): measured from when the call was logged.
     const loggedAt = rec.dialedAt ? null : (ctx.callAt?.() || null);
     const check = checkRecordingFile({ lastModified: file.lastModified, durationS, dialedAt: rec.dialedAt, loggedAt, callSeconds: ctx.callSeconds() });
-    file._jcf = { type, durationS };
+    file._jcf = { type, durationS, sharedRecording };
     if (!check.ok) { pendingFile = file; pendingProblems = check.problems; render(); return; }
     await upload(file);
   }
@@ -508,14 +528,21 @@ export function mountRecordingSection(el, ctx) {
     pendingFile = null; pendingProblems = [];
     const rec = ctx.get();
     const consentId = rec.consentId;
-    const { type, durationS } = file._jcf || { type: canonicalAudioType(file.name, file.type), durationS: null };
+    const { type, durationS, sharedRecording = null } = file._jcf || { type: canonicalAudioType(file.name, file.type), durationS: null };
+    if (sharedRecording && !sharedRecording.legacy && Date.now() - sharedRecording.sharedAt > SHARE_TTL_MS) {
+      await createSharedRecordingStore().discard(sharedRecording);
+      busy = false;
+      update({ sharedRecording: null, sharedUploadDurable: false, sharedCleanupError: null });
+      showToast('That app-held shared copy has expired. Choose the original recording from Phone or Files if it should still be uploaded.', 'warning', 9000);
+      return;
+    }
     // An earlier try that never got its file: its row goes first (the sweep would take it anyway).
     if (rec.recordingId && (rec.status === 'upload_failed' || rec.status === 'interrupted')) {
       try { await sb.rpc('discard_call_recording', { p_recording_id: rec.recordingId }); } catch { /* the sweep takes it */ }
       if (!sameConsent(consentId)) { busy = false; return; }
       ctx.set({ ...ctx.get(), recordingId: null, path: null });
     }
-    update({ status: 'uploading', fileName: file.name, durationS: durationS || null, error: null });
+    update({ status: 'uploading', fileName: file.name, durationS: durationS || null, error: null, sharedRecording, sharedUploadDurable: false });
     try {
       const { data: opened, error } = await sb.rpc('start_call_recording', {
         p_consent_id: consentId, p_file_name: file.name, p_mime_type: type, p_size_bytes: file.size,
@@ -525,11 +552,22 @@ export function mountRecordingSection(el, ctx) {
       if (error) throw error;
       if (!sameConsent(consentId)) { busy = false; return; }
       update({ recordingId: opened.id, path: opened.path });
+      const sharedBinding = { consentId, recordingId: opened.id, path: opened.path,
+        patientId: sharedRecording?.patientId, uploaderId: sharedRecording?.uploaderId };
+      if (sharedRecording && !sharedRecording.legacy) {
+        try { await createSharedRecordingStore().bind(sharedRecording, { ...sharedBinding, uploaded: false }); }
+        catch { if (sameRecording(opened.id)) update({ sharedCleanupError: 'Local retry metadata could not be saved; the shared copy is kept.' }); }
+      }
       // Sent with the canonical type: a File keeps its own (Android often gives
       // none at all), and the bucket accepts only audio types it knows.
       const body = new Blob([file], { type: opened.content_type });
       const { error: upErr } = await sb.storage.from(BUCKET).upload(opened.path, body, { contentType: opened.content_type, upsert: false });
       if (upErr) throw upErr;
+      if (sharedRecording && !sharedRecording.legacy) {
+        try { await createSharedRecordingStore().bind(sharedRecording, { ...sharedBinding, uploaded: true }); }
+        catch { if (sameRecording(opened.id)) update({ sharedCleanupError: 'Upload succeeded. Local cleanup metadata could not be saved; the shared copy is kept.' }); }
+      }
+      if (sameRecording(opened.id)) update({ sharedUploadDurable: true });
       busy = false;
       if (sameRecording(opened.id)) await transcribe();
     } catch (e) {
@@ -578,7 +616,8 @@ export function mountRecordingSection(el, ctx) {
       const { error } = await sb.rpc('discard_call_recording', { p_recording_id: rec.recordingId });
       if (error) throw error;
       transcripts.delete(rec.recordingId);
-      ctx.set({ ...ctx.get(), recordingId: null, path: null, fileName: '', status: null, error: null, result: null, applied: null });
+      ctx.set({ ...ctx.get(), recordingId: null, path: null, fileName: '', status: null, error: null, result: null, applied: null,
+        sharedRecording: null, sharedUploadDurable: false, sharedCleanupError: null });
       showToast('Recording removed', 'success');
       render();
       return true;
@@ -595,14 +634,35 @@ export function mountRecordingSection(el, ctx) {
     const file = await takeSharedRecording();
     const slot = el.querySelector('#rec-shared');
     if (!file || disposed || !slot) return;
+    const ref = file._jcfShared;
+    // A previous cleanup may have failed after a successful saved-call attach.
+    // Recover only from this share's persisted binding and exact server rows.
+    if (ref?.binding?.recordingId && ref.binding.path && ref.binding.consentId) {
+      const binding = { ...ref.binding };
+      try {
+        const { data: row, error } = await sb.from('call_recordings').select('call_log_id').eq('id', binding.recordingId).maybeSingle();
+        if (error) throw error;
+        if (row?.call_log_id) {
+          const result = await createSharedRecordingStore().cleanupAttached(ref, { ...binding, callLogId: row.call_log_id }, verifySharedAttachment);
+          if (disposed || !slot.isConnected) return;
+          slot.textContent = result.cleaned ? `${result.alreadyAbsent ? 'The selected app-held shared copy is no longer present.' : 'App-held shared copy removed after the saved call was verified.'} Delete the original in Phone or Files manually.` : result.reason;
+          return;
+        }
+      } catch { /* unverified: retain bytes and offer the ordinary file check */ }
+    }
     slot.innerHTML = `
       <div style="margin-top:10px;padding:10px 12px;border:1px dashed var(--line);border-radius:var(--r-sm)">
         <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px"><strong>A recording was shared to the Navigator:</strong> ${esc(file.name)}, ${esc(fmtWhen(file.lastModified))}. Attach it to this call?</p>
+        <p style="font:var(--t-xs);margin:0 0 8px">${ref?.legacy ? 'This older shared copy cannot be safely removed automatically; ask your team lead about legacy app-storage cleanup.' : 'This app-held copy is available here for six hours; expired copies are cleared when the Navigator next checks them. After a confirmed saved-call attachment, only this app copy is removed.'} Delete the original in Phone or Files manually.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button type="button" class="btn btn-primary btn-sm" id="rec-shared-use">Attach it</button>
           <button type="button" class="btn btn-ghost btn-sm" id="rec-shared-drop">Not this one</button></div></div>`;
-    slot.querySelector('#rec-shared-use').addEventListener('click', async () => { await dropSharedRecording(); picked(file); });
-    slot.querySelector('#rec-shared-drop').addEventListener('click', async () => { await dropSharedRecording(); slot.innerHTML = ''; });
+    slot.querySelector('#rec-shared-use').addEventListener('click', () => picked(file, ref));
+    slot.querySelector('#rec-shared-drop').addEventListener('click', async () => {
+      const result = await createSharedRecordingStore().discard(ref);
+      if (result.cleaned) slot.innerHTML = '';
+      else slot.textContent = result.reason;
+    });
   }
 
   function wire() {
@@ -643,11 +703,28 @@ export function mountRecordingSection(el, ctx) {
 // blocks the log: a failure is said, and the nightly sweep handles leftovers.
 export async function attachRecordingToLog(callLogId, rec) {
   if (!callLogId || !rec?.consentId) return 0;
-  const { data, error } = await getSupabase().rpc('attach_call_recording', { p_call_log_id: callLogId, p_consent_id: rec.consentId });
+  const captured = { ...rec, sharedRecording: rec.sharedRecording ? { ...rec.sharedRecording } : null };
+  const { data, error } = await getSupabase().rpc('attach_call_recording', { p_call_log_id: callLogId, p_consent_id: captured.consentId });
   if (error) {
     console.warn('[recording] attach failed:', error.message);
     showToast('The call is logged, but its recording could not be attached. Tell your team lead.', 'warning', 8000);
     return 0;
+  }
+  try {
+    const store = createSharedRecordingStore();
+    const recovered = captured.sharedRecording ? null : await store.find({ recordingId: captured.recordingId, consentId: captured.consentId });
+    const ref = captured.sharedRecording || (recovered ? store.refOf(recovered) : null);
+    if (ref) {
+      const expected = { ...(recovered?.binding || {}), ...ref, consentId: captured.consentId,
+        recordingId: captured.recordingId, path: captured.path, callLogId };
+      const result = await store.cleanupAttached(ref, expected, verifySharedAttachment);
+      rec.sharedCleanupError = result.cleaned ? null : result.reason;
+      showToast(result.cleaned ? `${result.alreadyAbsent ? 'The selected app-held shared copy is no longer present.' : 'App-held shared copy removed.'} Delete the original in Phone or Files manually.`
+        : `The call is saved. ${result.reason} Delete the original in Phone or Files manually only after checking the saved recording.`, result.cleaned ? 'info' : 'warning', 10000);
+    }
+  } catch {
+    rec.sharedCleanupError = 'The app-held shared copy could not be checked or removed. It is kept within its six-hour limit.';
+    showToast(`The call is saved. ${rec.sharedCleanupError} Delete the original in Phone or Files manually after checking it.`, 'warning', 10000);
   }
   return data || 0;
 }
@@ -667,7 +744,7 @@ export async function decorateRecordings(container) {
   for (const slot of slots) {
     const r = byLog.get(slot.dataset.log);
     if (!r) continue;
-    slot.innerHTML = `<button type="button" class="btn btn-ghost btn-sm" style="gap:5px;padding:2px 8px">${icon('play')}Recording</button>`;
+    slot.innerHTML = `<button type="button" class="btn btn-ghost btn-sm" title="Protected cloud copy retained for 90 days; local app-copy cleanup does not delete it" style="gap:5px;padding:2px 8px">${icon('play')}Cloud recording</button>`;
     slot.querySelector('button').addEventListener('click', () => {
       if (slot.dataset.inline) renderRecordingViewer(slot, r.id);
       else openRecordingViewer(r.id);
@@ -750,6 +827,7 @@ async function renderRecordingViewer(container, recordingId) {
   const turns = Array.isArray(r.transcript) ? r.transcript : [];
   const n = r.suggestions?.note || null;
   container.innerHTML = `
+      <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">This is the protected cloud copy, retained for 90 days when linked to a saved call. Removing the app-held shared copy does not delete this recording. The original in Phone or Files must be deleted manually.</p>
       ${r.audio_deleted_at ? `<p style="color:var(--ink-2);margin:0 0 10px">The audio was deleted after 90 days. The transcript stays with the call.</p>`
         : '<audio id="rec-audio" class="rec-audio" controls preload="none" style="width:100%;margin-bottom:10px"></audio>'}
       <p style="font:var(--t-xs);color:var(--ink-3);margin:0 0 8px">Recorded ${esc(fmtWhen(new Date(r.created_at).getTime()))}${r.duration_seconds ? ` · ${fmtDur(r.duration_seconds)}` : ''}${r.language ? ` · ${esc(r.language)}` : ''}. Only the caller, their managers and admins can open it.</p>
