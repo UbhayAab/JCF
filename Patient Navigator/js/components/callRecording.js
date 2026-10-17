@@ -23,14 +23,28 @@ import { mountCallMeasurements } from './measurements.js';
 import { verifiedCareCallDate, recordingResultForForm } from '../utils/careFollowup.js';
 import { createSharedRecordingStore, SHARE_TTL_MS } from '../utils/sharedRecording.js';
 
-// The consent line, exactly as agreed for Ubhay (chat #533). A change of words
-// is a new version: the version is saved with every answer.
-export const CONSENT_WORDING_VERSION = 'rec-v1-2026-10-08';
-export const CONSENT_LINE_EN = 'May I record this call so I do not miss anything you tell me? Only our care team will listen to it, and the recording is deleted after three months. Is that all right?';
-export const CONSENT_LINE_HI = 'Kya hum yeh call record kar sakte hain, taaki aapki koi baat chhoot na jaaye? Ise sirf hamari care team sunegi, aur teen mahine baad recording hata di jaati hai. Kya yeh theek hai?';
+// Historical wording is never relabelled. sql/212 opts in only a fresh rec-v2
+// answer while its prospective completion policy is enabled.
+export const CONSENT_WORDING_VERSION = 'rec-v2';
+export const CONSENT_LINE_EN = 'May I record this call so I do not miss anything you tell me? Only our care team will listen to it. Once a complete written note is ready and the call is saved, the cloud recording is deleted. If processing or review is incomplete, it is kept for no more than three months. The written notes stay with the call. Is that all right?';
+export const CONSENT_LINE_HI = 'Kya hum yeh call record kar sakte hain, taaki aapki koi baat chhoot na jaaye? Ise sirf hamari care team sunegi. Poori likhit note taiyaar hone aur call save hone ke baad cloud recording hata di jaayegi. Agar processing ya jaanch adhoori ho, to recording zyada se zyada teen mahine rakhi jaayegi. Likhi hui baatein call ke saath rahengi. Kya yeh theek hai?';
+const LEGACY_CONSENT = { version: 'rec-v1-2026-10-08',
+  en: 'May I record this call so I do not miss anything you tell me? Only our care team will listen to it, and the recording is deleted after three months. Is that all right?',
+  hi: 'Kya hum yeh call record kar sakte hain, taaki aapki koi baat chhoot na jaaye? Ise sirf hamari care team sunegi, aur teen mahine baad recording hata di jaati hai. Kya yeh theek hai?' };
+export function recordingConsentNotice(policy) {
+  return policy?.completion_cleanup_enabled === true && policy.wording_version === CONSENT_WORDING_VERSION && policy.max_audio_days === 90
+    ? { version: CONSENT_WORDING_VERSION, en: CONSENT_LINE_EN, hi: CONSENT_LINE_HI } : { ...LEGACY_CONSENT };
+}
+async function currentRecordingConsentNotice() {
+  try {
+    const { data, error } = await getSupabase().rpc('call_recording_retention_policy');
+    if (!error) return recordingConsentNotice(data);
+  } catch { /* offline or rollback: keep the established notice */ }
+  return { ...LEGACY_CONSENT };
+}
 // The privacy line families hear with the general consent question.
 // Names the computer service, because the audio does leave the team to be written down.
-export const PRIVACY_LINE = 'Sometimes we ask to record a call so we do not miss anything. Only our care team listens to it; a computer service (Google) writes it down as notes for them, and the recording is deleted after three months.';
+export const PRIVACY_LINE = 'Sometimes we ask to record a call so we do not miss anything. Only our care team listens to it; a computer service (Google) writes it down as notes for them. The recording is deleted within three months, and the written notes stay with the call.';
 
 const BUCKET = 'call-recordings';
 const PHONE_KEY = 'jcf_rec_phone';
@@ -68,7 +82,7 @@ const PHONES = {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 export function blankRecording() {
-  return { reminded: false, intent: null, dialedAt: null, consentId: null, decision: null,
+  return { reminded: false, intent: null, dialedAt: null, wordingVersion: null, consentId: null, decision: null,
     recordingId: null, path: null, fileName: '', durationS: null, status: null, error: null, result: null, applied: null,
     sharedRecording: null, sharedUploadDurable: false, sharedCleanupError: null };
 }
@@ -217,7 +231,7 @@ async function verifySharedAttachment(expected) {
   if (!expected.uploaderId || expected.uploaderId !== getCurrentProfile()?.id) return { attached: false, uploaded: false };
   const sb = getSupabase();
   const { data: row, error } = await sb.from('call_recordings')
-    .select('id,consent_id,call_log_id,storage_path,patient_id,uploaded_by,status,audio_deleted_at')
+    .select('id,consent_id,call_log_id,storage_path,patient_id,uploaded_by,status,audio_deleted_at,audio_delete_reason,delete_audio_after_transcription,transcription_complete,transcribed_at,audio_quality,transcript,summary,suggestions')
     .eq('id', expected.recordingId).maybeSingle();
   if (error) throw error;
   const { data: log, error: logError } = await sb.from('call_logs').select('id,patient_id,caller_id').eq('id', expected.callLogId).maybeSingle();
@@ -229,7 +243,38 @@ async function verifySharedAttachment(expected) {
   // attach_call_recording only leaves 'uploading' after verifying the stored
   // object exists. Reloads with persisted matching upload metadata can retry
   // cleanup without invoking transcription again.
-  return { attached, uploaded: !!attached && !row.audio_deleted_at && ['uploaded','transcribing','done','failed'].includes(row.status) };
+  // Transcription can finish before a local cleanup retry. Only the explicit
+  // completed-note policy is equivalent to the verified original upload;
+  // erasure, consent withdrawal and legacy expiry are never such a receipt.
+  const completedDeletion = row?.audio_deleted_at && completedAudioReceipt(row);
+  return { attached, uploaded: !!attached && (completedDeletion
+    || (!row.audio_deleted_at && ['uploaded','transcribing','done','failed'].includes(row.status))) };
+}
+
+export function completedAudioReceipt(row) {
+  const flags = row?.suggestions?.note?.red_flags;
+  const needsListening = (value) => typeof value === 'string' ? /listen to (?:the )?recording/i.test(value)
+    : Array.isArray(value) ? value.some(needsListening)
+      : value && typeof value === 'object' ? value.unverified === true || Object.values(value).some(needsListening) : false;
+  return row?.delete_audio_after_transcription === true && row.audio_delete_reason === 'completed_transcript_saved_call'
+    && row.transcription_complete === true && row.status === 'done' && row.audio_quality === 'clear' && Number.isFinite(Date.parse(row.transcribed_at))
+    && typeof row.summary === 'string' && !!row.summary.trim() && Array.isArray(row.transcript)
+    && row.transcript.some((turn) => typeof turn?.text === 'string' && !!turn.text.trim())
+    && Array.isArray(flags) && flags.every((flag) => flag?.unverified !== true && typeof flag?.evidence === 'string' && !!flag.evidence.trim())
+    && !needsListening(row.suggestions);
+}
+
+// This cannot invalidate an upload or a saved call. The server checks exact
+// attachment and policy; failures remain eligible for the existing sweep.
+export async function finalizeRecordingAudio(recordingId, callLogId) {
+  if (!recordingId || !callLogId) return null;
+  try {
+    const { data, error } = await getSupabase().functions.invoke('call-recording-finalize', {
+      body: { recording_id: recordingId, call_log_id: callLogId },
+    });
+    if (error || !data?.ok) return { state: 'pending' };
+    return data.cleanup || { state: 'pending' };
+  } catch { return { state: 'pending' }; }
 }
 
 async function invokeTranscribe(recordingId) {
@@ -299,15 +344,21 @@ export function guardDialLinks(links, ctx) {
   }, true));
 }
 
-function openReminder(href, ctx) {
+async function openReminder(href, ctx) {
+  const before = ctx.get();
+  // Some callers return a fresh blank object until the first state write.
+  // Persist that same object so the async policy read can detect a changed call.
+  ctx.set(before);
+  const notice = await currentRecordingConsentNotice();
+  if (ctx.get() !== before) return; // changed family/call while the policy loaded
   const phone = savedPhone();
   const tel = esc(href);
   const overlay = showModal({
     title: 'Before you call: recording',
     content: `
       <p style="margin:0 0 8px;color:var(--ink-2)">When they pick up, ask first:</p>
-      <p style="margin:0 0 8px;padding:10px 12px;background:var(--surface-3);border-radius:var(--r-sm);color:var(--ink)">“${esc(CONSENT_LINE_EN)}”</p>
-      <p lang="hi-Latn" style="margin:0 0 10px;padding:10px 12px;background:var(--surface-3);border-radius:var(--r-sm);color:var(--ink)">“${esc(CONSENT_LINE_HI)}”</p>
+      <p style="margin:0 0 8px;padding:10px 12px;background:var(--surface-3);border-radius:var(--r-sm);color:var(--ink)">“${esc(notice.en)}”</p>
+      <p lang="hi-Latn" style="margin:0 0 10px;padding:10px 12px;background:var(--surface-3);border-radius:var(--r-sm);color:var(--ink)">“${esc(notice.hi)}”</p>
       <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">If they agree, keep recording on. If they say no, stop the recording, or delete it from your phone after the call.</p>
       ${phoneTipHTML(phone)}
       <button type="button" class="btn btn-ghost btn-sm" id="rec-howto" style="margin-top:6px;gap:6px">${icon('info')}How to turn on recording on this phone</button>`,
@@ -317,7 +368,7 @@ function openReminder(href, ctx) {
   });
   overlay.querySelector('#rec-howto')?.addEventListener('click', () => openRecordingSetupGuide());
   const go = (intent) => () => {
-    ctx.set({ ...ctx.get(), reminded: true, intent, dialedAt: Date.now() });
+    ctx.set({ ...ctx.get(), reminded: true, intent, dialedAt: Date.now(), wordingVersion: notice.version });
     ctx.onDial();
     setTimeout(() => closeModal(), 300);   // after the link has been followed
   };
@@ -344,6 +395,11 @@ export function mountRecordingSection(el, ctx) {
   let disposed = false;        // the call moved on: late answers must not touch the next family's form
   let selectionEpoch = 0;     // a slow duration check must not replace a newer selection
   let measurementBox = null;
+  // A notice already read on this call keeps its original version through a
+  // reload. Older drafts without a version remain v1, never silently opted in.
+  let consentNotice = ctx.get().wordingVersion === CONSENT_WORDING_VERSION
+    ? recordingConsentNotice({ completion_cleanup_enabled: true, wording_version: CONSENT_WORDING_VERSION, max_audio_days: 90 })
+    : ctx.get().reminded ? { ...LEGACY_CONSENT } : null;
   const measurementStates = new Map(); // private to this mounted call, never an automatic write
   const sb = getSupabase();
   const inline = !!ctx.inline;
@@ -384,8 +440,9 @@ export function mountRecordingSection(el, ctx) {
 
     if (!rec.decision) {
       el.innerHTML = card(`
+        ${!rec.reminded ? consentNotice ? `<details style="font:var(--t-xs);margin:6px 0 8px"><summary>If you have not read the recording notice, ask before choosing Yes</summary><p>${esc(consentNotice.en)}</p><p lang="hi-Latn">${esc(consentNotice.hi)}</p></details>` : small('Checking the recording notice...') : ''}
         <p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 10px">Did the family agree to this call being recorded?${rec.intent === 'off' ? ' You chose to call without recording.' : ''}</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">${btn('rec-yes', 'Yes, they agreed', 'btn-primary')}${btn('rec-no', 'No')}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">${consentNotice ? btn('rec-yes', 'Yes, they agreed', 'btn-primary') : ''}${btn('rec-no', 'No')}</div>
         ${small('Not recorded, or nobody picked up? Leave this and log the call as usual.')}
         ${howto}`);
     } else if (rec.decision === 'declined') {
@@ -466,10 +523,11 @@ export function mountRecordingSection(el, ctx) {
   async function answer(decision) {
     if (busy) return; busy = true;
     try {
+      const wordingVersion = consentNotice?.version || LEGACY_CONSENT.version;
       const { data, error } = await sb.rpc('record_call_recording_consent',
-        { p_patient_id: ctx.patientId, p_decision: decision, p_wording_version: CONSENT_WORDING_VERSION });
+        { p_patient_id: ctx.patientId, p_decision: decision, p_wording_version: wordingVersion });
       if (error) throw error;
-      update({ consentId: data, decision });
+      update({ consentId: data, decision, wordingVersion });
     } catch (e) {
       showToast(`Could not save the answer: ${e.message}`, 'error', 7000);
     } finally { busy = false; }
@@ -694,6 +752,9 @@ export function mountRecordingSection(el, ctx) {
   // goes ahead. Not arrived: "interrupted, pick it again".
   const start = ctx.get();
   render();
+  if (!consentNotice && !start.decision) currentRecordingConsentNotice().then((notice) => {
+    if (!disposed) { consentNotice = notice; render(); }
+  });
   if (start.recordingId && (start.status === 'uploading' || start.status === 'transcribing')) transcribe();
   else if (start.status === 'uploading') update({ status: 'interrupted' });
   return { refresh: render, dispose() { disposed = true; measurementBox?.dispose(); } };
@@ -726,6 +787,10 @@ export async function attachRecordingToLog(callLogId, rec) {
     rec.sharedCleanupError = 'The app-held shared copy could not be checked or removed. It is kept within its six-hour limit.';
     showToast(`The call is saved. ${rec.sharedCleanupError} Delete the original in Phone or Files manually after checking it.`, 'warning', 10000);
   }
+  // Local cleanup runs first; the transcription hook or sweep may already
+  // have finished cloud cleanup, which the exact readback also recognizes.
+  const cleanup = await finalizeRecordingAudio(captured.recordingId, callLogId);
+  if (cleanup?.state === 'pending') showToast('The call is saved. Cloud audio cleanup is pending and will be retried; the written note stays with the call.', 'info', 9000);
   return data || 0;
 }
 
@@ -738,13 +803,17 @@ export async function decorateRecordings(container) {
   const ids = [...new Set(slots.map((s) => s.dataset.log).filter(Boolean))];
   if (!ids.length) return;
   const { data, error } = await getSupabase().from('call_recordings')
-    .select('id, call_log_id, status').in('call_log_id', ids);
+    .select('id, call_log_id, status, audio_deleted_at, audio_delete_reason, delete_audio_after_transcription').in('call_log_id', ids);
   if (error || !data?.length) return;
   const byLog = new Map(data.map((r) => [r.call_log_id, r]));
   for (const slot of slots) {
     const r = byLog.get(slot.dataset.log);
     if (!r) continue;
-    slot.innerHTML = `<button type="button" class="btn btn-ghost btn-sm" title="Protected cloud copy retained for 90 days; local app-copy cleanup does not delete it" style="gap:5px;padding:2px 8px">${icon('play')}Cloud recording</button>`;
+    const gone = !!r.audio_deleted_at;
+    const title = gone ? 'Read the saved transcript and note; the cloud audio was deleted'
+      : r.delete_audio_after_transcription ? 'Cloud audio is deleted after a complete clear transcript and saved call; incomplete processing or review keeps it for at most 90 days'
+        : 'Protected cloud copy retained for 90 days; this recording uses the original retention policy';
+    slot.innerHTML = `<button type="button" class="btn btn-ghost btn-sm" title="${esc(title)}" style="gap:5px;padding:2px 8px">${icon(gone ? 'fileText' : 'play')}${gone ? 'Call note' : 'Cloud recording'}</button>`;
     slot.querySelector('button').addEventListener('click', () => {
       if (slot.dataset.inline) renderRecordingViewer(slot, r.id);
       else openRecordingViewer(r.id);
@@ -774,7 +843,7 @@ export async function mountLogRecording(el, { log, meId, consentOnFile, callSeco
   if (exErr) { couldNotCheck(); return null; }
   if (existing?.length) {
     note(`<p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 8px">This call already has a recording.</p>
-      <div id="rec-inline-viewer"><button type="button" class="btn btn-secondary btn-sm" id="rec-open" style="gap:6px">${icon('play')}Play it and read the note</button></div>`, 'ok');
+      <div id="rec-inline-viewer"><button type="button" class="btn btn-secondary btn-sm" id="rec-open" style="gap:6px">${icon('fileText')}Open the recording and note</button></div>`, 'ok');
     el.querySelector('#rec-open')?.addEventListener('click', () => renderRecordingViewer(el.querySelector('#rec-inline-viewer'), existing[0].id));
     return null;
   }
@@ -821,14 +890,18 @@ export async function mountLogRecording(el, { log, meId, consentOnFile, callSeco
 async function renderRecordingViewer(container, recordingId) {
   const sb = getSupabase();
   const { data: r, error } = await sb.from('call_recordings')
-    .select('id, patient_id, storage_path, status, summary, suggestions, transcript, duration_seconds, audio_deleted_at, created_at, language, uploaded_by')
+    .select('id, patient_id, storage_path, status, summary, suggestions, transcript, duration_seconds, audio_deleted_at, audio_delete_reason, delete_audio_after_transcription, created_at, language, uploaded_by')
     .eq('id', recordingId).maybeSingle();
   if (error || !r) { showToast('This recording is not open to you.', 'warning'); return null; }
   const turns = Array.isArray(r.transcript) ? r.transcript : [];
   const n = r.suggestions?.note || null;
   container.innerHTML = `
-      <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">This is the protected cloud copy, retained for 90 days when linked to a saved call. Removing the app-held shared copy does not delete this recording. The original in Phone or Files must be deleted manually.</p>
-      ${r.audio_deleted_at ? `<p style="color:var(--ink-2);margin:0 0 10px">The audio was deleted after 90 days. The transcript stays with the call.</p>`
+      <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">${r.delete_audio_after_transcription
+        ? 'This recording uses the new cleanup policy: cloud audio is deleted after a complete clear transcript and a saved call. Incomplete processing or review keeps it for at most 90 days.'
+        : 'This recording uses the original policy: the protected cloud audio is retained for 90 days when linked to a saved call.'} The transcript and written notes stay with the call. The temporary app-held shared copy is cleaned separately after upload and saved-call attachment. The original in Phone or Files must be deleted manually.</p>
+      ${r.audio_deleted_at ? `<p style="color:var(--ink-2);margin:0 0 10px">${r.audio_delete_reason === 'completed_transcript_saved_call'
+        ? 'The cloud audio was deleted after the complete transcript and saved call were confirmed.'
+        : ['kept90days', 'kept 90 days'].includes(r.audio_delete_reason) ? 'The cloud audio was deleted after 90 days.' : 'The cloud audio has been deleted.'} The transcript stays with the call.</p>`
         : '<audio id="rec-audio" class="rec-audio" controls preload="none" style="width:100%;margin-bottom:10px"></audio>'}
       <p style="font:var(--t-xs);color:var(--ink-3);margin:0 0 8px">Recorded ${esc(fmtWhen(new Date(r.created_at).getTime()))}${r.duration_seconds ? ` · ${fmtDur(r.duration_seconds)}` : ''}${r.language ? ` · ${esc(r.language)}` : ''}. Only the caller, their managers and admins can open it.</p>
       ${n ? `<div style="margin:0 0 10px"><p style="font:var(--t-xs);color:var(--ink-3);margin:0">Call note (AI, not checked by a person):</p>${noteHTML({ note: n })}</div>`
