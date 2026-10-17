@@ -18,6 +18,7 @@ import { DIAL_STATUSES, RECEPTIVENESS, CONDITIONS, REQUIREMENTS, LEVER_GROUPS, M
 // name that file lacks stops the whole app at boot (tools/stale_import_check.mjs).
 // Missing names are undefined here instead, and the recording box waits for the new file.
 import * as recording from './callRecording.js';
+import { CARE_CASE_FIELDS, indiaCallDay, dayPlus, activeCareCase, careCallBounds, normalizeCareCall } from '../utils/careFollowup.js';
 
 // Which wellbeing measures each care role captures by default (IMPACT section).
 const ROLE_MEASURES = {
@@ -33,8 +34,6 @@ const ROLE_LEVER_GROUP = {
 };
 
 const STATUS_DAYS = { no_answer: 7, busy: 7, voicemail: 7, callback_requested: 7, wrong_number: null };
-
-function addDays(n) { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().split('T')[0]; }
 
 // ---- Save must always be reachable, and must always say what it is waiting for ----
 // Field report, 25 Sep 2026 (a nutrition intern on an iPhone): "Save Call
@@ -134,9 +133,11 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   // did not. It is asked here, where she already is. Only asked of people who
   // have not given it: re-ticking it would overwrite the original date.
   let consentOnFile = false;
+  let carePatient = patient;
   if (patient?.id) {
-    const { data: pc } = await sb.from('patients').select('consent_given').eq('id', patient.id).maybeSingle();
+    const { data: pc } = await sb.from('patients').select('consent_given,' + CARE_CASE_FIELDS).eq('id', patient.id).maybeSingle();
     consentOnFile = !!pc?.consent_given;
+    carePatient = pc;
   }
 
   const role = getUserRole();
@@ -285,8 +286,8 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
       <div class="row" style="display:flex;gap:16px;flex-wrap:wrap;margin-top:var(--s5)">
         <div class="field" style="width:150px"><label>Duration (min)</label>
           <input class="input" id="lc-duration" type="number" min="0" step="1" value="0" /></div>
-        <div class="field" style="flex:1;min-width:170px"><label>Next check-in <span class="fu-auto" id="lc-auto" style="display:none">suggested</span></label>
-          <input class="input" id="lc-followup" type="date" min="${addDays(3)}" /></div>
+        <div class="field" style="flex:1;min-width:170px"><label>Next care call <span class="fu-auto" id="lc-auto" style="display:none">suggested</span></label>
+          <input class="input" id="lc-followup" type="date" /><div class="muted" style="font-size:12px">Doctor appointments and treatment dates belong in Notes.</div></div>
       </div>
       <div class="field" style="margin-top:var(--s4)"><label>Notes</label>
         <textarea class="textarea" id="lc-notes" placeholder="Anything worth remembering about this conversation…"></textarea></div>
@@ -326,6 +327,8 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   const $ = (sel) => el.querySelector(sel);
   const $$ = (sel) => el.querySelectorAll(sel);
   let dateManual = false;
+  const followupRules = (callAt = new Date()) => ({ callDay: indiaCallDay(callAt), outcome: state.dial,
+    active: activeCareCase(carePatient) });
 
   const chosenPatientId = () => patient?.id || $('#lc-patient')?.value || '';
   const consentGiven = () => consentWritten || (patient
@@ -354,13 +357,12 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     fillEmpty('#lc-strategy', v('next_mentor_note'), 'Note for the next caller');
     fillEmpty('#lc-fb-patient', v('patient_feedback'), 'Feedback from patient');
     fillEmpty('#lc-fb-caregiver', v('caregiver_feedback'), 'Feedback from caregiver');
-    const day = recording.suggestedFollowup(s);
+    const day = recording.suggestedFollowup(s, result?.call_day);
     if (day && !dateManual) {
-      // The portal's rule: a connected call rests at least 7 days, anything else 3.
-      const min = recording.localDateIn(state.dial === 'connected' ? 7 : 3);
-      $('#lc-followup').value = day < min ? min : day;
+      const normalized = normalizeCareCall(day, followupRules());
+      $('#lc-followup').value = normalized || '';
       dateManual = true; $('#lc-auto').style.display = 'none';
-      filled.push(day < min ? 'Next check-in (the agreed day was sooner; a connected call rests 7 days)' : 'Next check-in');
+      filled.push(day !== normalized ? 'Next care call (moved into the care-call interval)' : 'Next care call');
     }
     updateSubmit();
     return filled;
@@ -395,12 +397,15 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   }
 
   function suggestFollowup() {
+    const input = $('#lc-followup'), auto = $('#lc-auto');
+    const rules = followupRules();
+    const bounds = careCallBounds(rules);
+    input.min = bounds.min || ''; input.max = bounds.max || '';
     if (dateManual) return;
     let days = null;
     if (state.dial === 'connected') days = RECEPTIVENESS.find(x => x.key === state.recep)?.days ?? null;
     else if (state.dial) days = STATUS_DAYS[state.dial];
-    const input = $('#lc-followup'), auto = $('#lc-auto');
-    if (days != null) { input.value = addDays(days); auto.style.display = ''; }
+    if (days != null) { input.value = normalizeCareCall(dayPlus(rules.callDay, days), rules) || ''; auto.style.display = ''; }
     else { input.value = ''; auto.style.display = 'none'; }
   }
   // One list of what is missing, used by the reason text, by the button's
@@ -459,7 +464,14 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     showToast(reasonText(missing), 'warning', 6000);
   }
 
-  $('#lc-patient')?.addEventListener('change', updateSubmit);
+  $('#lc-patient')?.addEventListener('change', () => { suggestFollowup(); updateSubmit(); });
+  $('#lc-patient')?.addEventListener('change', async (e) => {
+    const patientId = e.target.value;
+    carePatient = null;
+    const { data } = await sb.from('patients').select(CARE_CASE_FIELDS).eq('id', patientId).maybeSingle();
+    if (chosenPatientId() !== patientId) return;
+    carePatient = data; suggestFollowup();
+  });
   // Picking a patient from the dropdown decides whether the consent
   // question is worth asking at all.
   $('#lc-patient')?.addEventListener('change', (e) => {
@@ -629,7 +641,13 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
 
     const customReq = $('#lc-customreq')?.value.trim() || '';
     const reqList = [...state.reqs]; if (customReq) reqList.push(customReq);
-    const followUp = $('#lc-followup').value || null;
+    const callAt = new Date().toISOString();
+    const requestedFollowup = $('#lc-followup').value;
+    const followUp = normalizeCareCall(requestedFollowup, followupRules(callAt));
+    if (requestedFollowup && requestedFollowup !== followUp) {
+      $('#lc-followup').value = followUp || '';
+      showToast('Next care call moved into the allowed care-call interval. Appointment dates stay in Notes.', 'info');
+    }
     const structured = {
       requirements: state.reqs, custom_requirement: customReq || null,
       condition: state.cond || null, whatsapp_link_sent: state.waLink, whatsapp: state.waJoin,
@@ -640,7 +658,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
         patient_id: patientId,
         caller_id: me.id,
         contacted_by_name: me.full_name ? me.full_name.toUpperCase() : null,
-        call_date: new Date().toISOString(),
+        call_date: callAt,
         dial_status: state.dial,
         call_duration_mins: parseFloat($('#lc-duration').value) || 0,
         receptiveness_bucket: connected ? state.recep : null,

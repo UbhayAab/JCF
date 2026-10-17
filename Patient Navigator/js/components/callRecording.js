@@ -19,6 +19,7 @@ import { showToast } from './toast.js';
 import { showModal, closeModal, confirmModal } from './modal.js';
 import { icon } from './icons.js';
 import { mountCallMeasurements } from './measurements.js';
+import { verifiedCareCallDate, recordingResultForForm } from '../utils/careFollowup.js';
 
 // The consent line, exactly as agreed for Ubhay (chat #533). A change of words
 // is a new version: the version is saved with every answer.
@@ -110,12 +111,9 @@ export function localDateIn(n) {
 
 // The day the family agreed for the next call, YYYY-MM-DD, or null. Prompt v3
 // names the day itself (followup_on), so a recording added the day after the
-// call does not move it; older results only carry a count of days.
-export function suggestedFollowup(s) {
-  const on = s?.followup_on?.value;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(String(on || ''))) return String(on);
-  const days = Number(s?.followup_in_days?.value);
-  return Number.isInteger(days) && days >= 3 ? localDateIn(days) : null;
+// call does not move it. Older results lack independently verified provenance.
+export function suggestedFollowup(s, sourceCallDay) {
+  return verifiedCareCallDate(s, sourceCallDay);
 }
 
 // The note goes into the call log's notes, always under a line saying it came
@@ -551,9 +549,7 @@ export function mountRecordingSection(el, ctx) {
     if (res?.ok) {
       transcripts.set(id, res.transcript || []);
       // note: the full call note by section (prompt v3); summary: the same note as the text the log keeps.
-      const result = { summary: res.summary, note: res.note || null, points: res.points || [], turns: (res.transcript || []).length,
-        suggestions: res.suggestions || {}, dropped: res.dropped || 0, quality: res.quality, language: res.language,
-        durationS: ctx.get().durationS || null };
+      const result = recordingResultForForm(res, ctx.get().durationS || null);
       let applied = [];
       try { applied = ctx.apply(result) || []; } catch (e) { console.warn('[recording] could not fill the form:', e); }
       update({ status: 'done', result, applied });

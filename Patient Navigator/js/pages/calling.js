@@ -38,6 +38,7 @@ import { blankRecording, guardDialLinks, mountRecordingSection, attachRecordingT
 // Names added for Fixboard #36 come through the namespace: a phone holding yesterday's
 // callRecording.js for a few minutes then gets undefined, not an app that never boots.
 import * as recordingNext from '../components/callRecording.js';
+import { CARE_CASE_FIELDS, indiaCallDay, dayPlus, activeCareCase, careCallBounds, normalizeCareCall } from '../utils/careFollowup.js';
 // sql/172: families who asked HopeBot for a call. Footprint in this file: this
 // import, the #hb-requests div in mountReady() and the one call after it.
 import { mountHopebotRequests } from '../components/hopebotFamily.js';
@@ -291,7 +292,6 @@ function overdueBadge(days) {
 }
 
 function fmtTimer(s) { return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
-function addDays(n) { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().split('T')[0]; }
 function badge(tone, label) { return `<span class="badge badge-${tone}"><span class="dot"></span>${label}</span>`; }
 
 export async function renderCalling(container) {
@@ -704,7 +704,7 @@ async function loadPatientPitches(patientId) {
     const cols = SERVICES.map(s => s.column).join(',');
     // maybeSingle: callers can't always SELECT unassigned new leads (RLS).
     // Zero rows is normal there, not an error.
-    const { data } = await sb.from('patients').select(cols).eq('id', patientId).maybeSingle();
+    const { data } = await sb.from('patients').select(cols + ',' + CARE_CASE_FIELDS).eq('id', patientId).maybeSingle();
     currentPatientPitches = data || {};
   } catch { currentPatientPitches = {}; }
 }
@@ -1049,20 +1049,18 @@ function applyRecordingSuggestions(result) {
     const t = document.getElementById('t-time'); if (t) t.textContent = fmtTimer(timerSeconds);
     filled.push('Minutes talked (from the recording)');
   }
-  const agreed = recordingNext.suggestedFollowup ? recordingNext.suggestedFollowup(s) : null;
+  const agreed = recordingNext.suggestedFollowup ? recordingNext.suggestedFollowup(s, result?.call_day) : null;
   if (!form.dateManual && agreed) {
-    // The phone's own calendar day (suggestedFollowup): addDays() goes through
-    // UTC, which is the previous day between midnight and 05:30 in India.
-    let date = agreed;
+    // The recording's agreed absolute day was checked against its source call;
+    // this new log keeps its existing timestamp and care-call interval.
+    let date = normalizeCareCall(agreed, followupRules());
     // The same rule as a typed date (suggestFollowup): a connected call rests
     // at least 7 days, anything else at least 3.
-    const minDate = addDays(form.dialStatus === 'connected' ? 7 : 3);
-    const moved = date < minDate;
-    if (moved) date = minDate;
+    const moved = date !== agreed;
     const box = document.getElementById('f-followup');
     if (box) {
       box.value = date; form.followupDate = date; form.dateManual = true;
-      filled.push(moved ? 'Next check-in (the agreed day was sooner; a connected call rests 7 days)' : 'Next check-in');
+      filled.push(moved ? 'Next care call (moved into the care-call interval)' : 'Next care call');
     }
     const auto = document.getElementById('fu-auto'); if (auto) auto.style.display = 'none';
   }
@@ -1611,8 +1609,8 @@ function renderLogForm(p) {
         <div class="field"><label>General notes</label>
           <textarea class="textarea" id="f-notes" placeholder="Anything worth remembering about this conversation…"></textarea></div>
         <div class="followup">
-          <div class="fu-head">${icon('calendar')}<span>Next check-in</span><span class="fu-auto" id="fu-auto" style="display:none">suggested for you</span></div>
-          <div class="field"><label>Date</label><input class="input" type="date" id="f-followup" min="${addDays(3)}" /></div>
+          <div class="fu-head">${icon('calendar')}<span>Next care call</span><span class="fu-auto" id="fu-auto" style="display:none">suggested for you</span></div>
+          <div class="field"><label>Date</label><input class="input" type="date" id="f-followup" /><div class="muted" style="font-size:12px">Doctor appointments and treatment dates belong in General notes.</div></div>
           <div class="field" style="margin-top:12px"><label>A note to hand the next caregiver mentor</label>
             <textarea class="textarea" id="f-strategy" placeholder="What helped, what to lead with, the best time to reach them…"></textarea></div>
         </div>
@@ -2038,21 +2036,19 @@ function openClinicalDetailsModal(p) {
 // A connected call rests the family for 7 days (the queue's connected
 // cooldown), so a connected outcome floors both the date-picker min and the
 // suggestion at 7 days. Anything earlier would sit in the queue unservable.
+function followupRules(callAt = new Date()) {
+  return { callDay: indiaCallDay(callAt), outcome: form.dialStatus, active: activeCareCase(currentPatientPitches) };
+}
 function suggestFollowup() {
   const input = document.getElementById('f-followup'); const autoEl = document.getElementById('fu-auto');
   const connected = form.dialStatus === 'connected';
-  const minDate = addDays(connected ? 7 : 3);
-  if (input) input.min = minDate;
-  if (connected && form.dateManual && form.followupDate && form.followupDate < minDate) {
-    form.followupDate = minDate;
-    if (input) input.value = minDate;
-    showToast(`Connected calls rest for 7 days, check-in moved to ${new Date(minDate).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}`, 'info');
-  }
+  const rules = followupRules(), bounds = careCallBounds(rules);
+  if (input) { input.min = bounds.min || ''; input.max = bounds.max || ''; }
   if (form.dateManual) return;
   let days = null;
   if (connected) { const r = RECEPTIVENESS.find(x => x.key === form.receptiveness); days = r ? Math.max(r.days, 7) : null; }
   else if (form.dialStatus) days = STATUS_DAYS[form.dialStatus];
-  if (days != null) { form.followupDate = addDays(days); if (input) input.value = form.followupDate; if (autoEl) autoEl.style.display = ''; }
+  if (days != null) { form.followupDate = normalizeCareCall(dayPlus(rules.callDay, days), rules) || ''; if (input) input.value = form.followupDate; if (autoEl) autoEl.style.display = ''; }
   else { form.followupDate = ''; if (input) input.value = ''; if (autoEl) autoEl.style.display = 'none'; }
 }
 function updateSubmit() {
@@ -2216,14 +2212,20 @@ async function submitCallLog() {
     } catch (_) { /* guard is best-effort; never block a real log */ }
 
     const callerName = me.full_name ? me.full_name.toUpperCase() : null;
-    const followUp = form.followupDate || null;
+    const callAt = new Date().toISOString();
+    const followUp = normalizeCareCall(form.followupDate, followupRules(callAt));
+    if (form.followupDate && form.followupDate !== followUp) {
+      form.followupDate = followUp || '';
+      const followupBox = document.getElementById('f-followup'); if (followupBox) followupBox.value = form.followupDate;
+      showToast('Next care call moved into the allowed care-call interval. Appointment dates stay in General notes.', 'info');
+    }
     const reqList = [...form.requirements]; if (form.customReq.trim()) reqList.push(form.customReq.trim());
     const structured = { requirements: form.requirements, custom_requirement: form.customReq.trim() || null,
       condition: form.condition || null, services: form.services, whatsapp: form.whatsapp, social: form.social,
       whatsapp_link_sent: form.waLink, consent_taken: form.consent };
     const { data: callLog, error } = await sb.from('call_logs').insert({
       patient_id: currentPatient.patient_id, caller_id: me.id, contacted_by_name: callerName,
-      call_date: new Date().toISOString(), dial_status: form.dialStatus,
+      call_date: callAt, dial_status: form.dialStatus,
       call_duration_mins: Math.ceil(timerSeconds / 60) || null,
       receptiveness_bucket: connected ? form.receptiveness : null,
       patient_condition: form.condition || null, structured,

@@ -29,6 +29,7 @@ import { CONDITIONS, DIAL_STATUSES, RECEPTIVENESS } from '../utils/catalog.js';
 // name that file lacks stops the whole app at boot (tools/stale_import_check.mjs).
 // Missing names are undefined here instead, and the recording box waits for the new file.
 import * as recording from '../components/callRecording.js';
+import { CARE_CASE_FIELDS, indiaCallDay, activeCareCase, careCallBounds, normalizeCareCall } from '../utils/careFollowup.js';
 
 // Outcomes where nobody was talked to: a recording of a conversation replaces them.
 const NOT_REACHED = ['no_answer', 'busy', 'voicemail'];
@@ -402,8 +403,11 @@ function canCorrectCall(c) {
 // submitted ("once you enter a log call you cannot go back"). loadCalls() at
 // the end of the save is a no-op when the Calls page is not mounted, so this
 // is safe to drive from anywhere.
-export function openEditCall(c) {
+export async function openEditCall(c) {
   if (!c) return;
+  // Only this already-visible call's family is read; a missing/denied record
+  // never becomes assumed active client metadata.
+  const { data: carePatient } = await getSupabase().from('patients').select(CARE_CASE_FIELDS).eq('id', c.patient_id).maybeSingle();
   const el = document.createElement('div');
   const curFollow = c.follow_up_date ? String(c.follow_up_date).slice(0, 10) : '';
   const durVal = (c.call_duration_mins != null && c.call_duration_mins !== '') ? c.call_duration_mins : '';
@@ -476,8 +480,9 @@ export function openEditCall(c) {
       <textarea class="textarea" id="ec-strategy" rows="3" placeholder="What helped, what to lead with, the best time to reach them…">${val(c.followup_strategy_notes)}</textarea>
     </div>
     <div class="form-group">
-      <label class="form-label">Next check-in</label>
+      <label class="form-label">Next care call</label>
       <input class="input" id="ec-followup" type="date" value="${curFollow}" />
+      <div class="muted" style="font-size:12px">Doctor appointments and treatment dates belong in Notes.</div>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -505,6 +510,16 @@ export function openEditCall(c) {
   // replaces its outcome, minutes and next check-in. Everything else fills
   // only what is empty, and the call note goes under notes already written.
   const box = (id) => el.querySelector('#' + id);
+  let followupTouched = false;
+  const followupRules = () => ({ callDay: indiaCallDay(c.call_date), outcome: box('ec-status').value,
+    active: activeCareCase(carePatient) });
+  const setFollowupBounds = () => {
+    const bounds = careCallBounds(followupRules());
+    box('ec-followup').min = bounds.min || ''; box('ec-followup').max = bounds.max || '';
+  };
+  box('ec-followup').addEventListener('input', () => { followupTouched = true; });
+  box('ec-status').addEventListener('change', setFollowupBounds);
+  setFollowupBounds();
   const labelOf = (list, k) => list.find((o) => o.key === k)?.label || k;
   const applyFromRecording = (result) => {
     const s = result?.suggestions || {};
@@ -540,15 +555,19 @@ export function openEditCall(c) {
     fillEmpty('ec-fb-patient', v('patient_feedback'), 'Feedback from the patient');
     fillEmpty('ec-fb-caregiver', v('caregiver_feedback'), 'Feedback from the caregiver');
     // The portal's rule: a connected call rests at least 7 days, anything else 3.
-    const min = recording.localDateIn(box('ec-status').value === 'connected' ? 7 : 3);
-    const day = recording.suggestedFollowup(s);
-    if (day && (reached || !box('ec-followup').value)) {
-      box('ec-followup').value = day < min ? min : day;
-      filled.push(day < min ? 'Next check-in (the agreed day was sooner; a connected call rests 7 days)' : 'Next check-in');
-    } else if (reached && box('ec-followup').value && box('ec-followup').value < min) {
+    setFollowupBounds();
+    const day = recording.suggestedFollowup(s, result?.call_day);
+    if (day && !followupTouched && (reached || !box('ec-followup').value)) {
+      const normalized = normalizeCareCall(day, followupRules());
+      box('ec-followup').value = normalized || '';
+      filled.push(day !== normalized ? 'Next care call (moved into the care-call interval)' : 'Next care call');
+    } else if (reached && !followupTouched && box('ec-followup').value) {
       // No day agreed: the No answer's quick retry becomes the connected call's 7-day rest.
-      box('ec-followup').value = min;
-      filled.push('Next check-in (a connected call rests 7 days)');
+      const normalized = normalizeCareCall(box('ec-followup').value, followupRules());
+      if (normalized !== box('ec-followup').value) {
+        box('ec-followup').value = normalized || '';
+        filled.push('Next care call (moved into the care-call interval)');
+      }
     }
     return filled;
   };
@@ -590,7 +609,16 @@ export function openEditCall(c) {
     put('feedback_patient', txt('ec-fb-patient') || null, c.feedback_patient);
     put('feedback_caregiver', txt('ec-fb-caregiver') || null, c.feedback_caregiver);
     put('followup_strategy_notes', txt('ec-strategy') || null, c.followup_strategy_notes);
-    put('follow_up_date', txt('ec-followup') || null, curFollow || null);
+    const requestedFollowup = txt('ec-followup');
+    // A status correction must also obey its interval. Anchor to the stored
+    // call, never today or the later recording-upload date.
+    const followupChanged = followupTouched || requestedFollowup !== curFollow || txt('ec-status') !== c.dial_status;
+    const followup = followupChanged ? normalizeCareCall(requestedFollowup, followupRules()) : requestedFollowup || null;
+    if (requestedFollowup && requestedFollowup !== followup) {
+      box('ec-followup').value = followup || '';
+      showToast('Next care call moved into the allowed interval for the original call. Appointment dates stay in Notes.', 'info');
+    }
+    put('follow_up_date', followup, curFollow || null);
 
     // The two WhatsApp flags. Reported by the field team: families often join
     // the group days after the call, and there was no way to record that
