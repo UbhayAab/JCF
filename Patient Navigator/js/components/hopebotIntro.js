@@ -79,7 +79,7 @@ export async function mountHopebotIntro(mount, patientId, options = {}) {
       ${data.next_allowed_at ? `<p style="margin:6px 0">Next intro can be requested ${sanitize(when(data.next_allowed_at))} India time.</p>` : ''}
     </div>` : '<p>No HopeBot intro has been requested for this family yet.</p>'}
     ${!last && data.next_allowed_at && blocked === 'recent_intro' ? `<p>HopeBot was sent recently. Next intro can be requested ${sanitize(when(data.next_allowed_at))} India time.</p>` : ''}
-    ${legacy ? `<p data-hi-document-delivery><strong>Document reminder:</strong> ${sanitize(STATES[legacy.status] || legacy.status)}${legacy.reason ? `: ${sanitize(legacy.reason)}` : ''}. Requested ${sanitize(when(legacy.sent_at))} India time.</p>` : delivery.error ? '<p>Document reminder delivery could not be checked. Refresh before trying again.</p>' : ''}
+    ${legacy ? `<div data-hi-document-delivery><strong>Document reminder:</strong>${(legacy.recipients || [legacy]).map(r => `<p>${r.to ? `${sanitize(r.to)}: ` : ''}${sanitize(STATES[r.status] || r.status)}${r.reason ? `: ${sanitize(r.reason)}` : ''}. Requested ${sanitize(when(r.sent_at))} India time.</p>`).join('')}</div>` : delivery.error ? '<p>Document reminder delivery could not be checked. Refresh before trying again.</p>' : ''}
     <button type="button" class="btn btn-ghost btn-sm" data-hi-refresh>Refresh delivery status</button>
     <p class="muted">Queued and accepted do not confirm delivery. Sent, delivered and read are WhatsApp status updates. Consent, STOP, the current number and contact restrictions are checked again before sending.</p>
   </section>`;

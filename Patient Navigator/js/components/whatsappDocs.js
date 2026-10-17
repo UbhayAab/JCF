@@ -23,7 +23,7 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
-import { getCurrentUser } from '../auth.js';
+import { getCurrentUser, isImpersonating } from '../auth.js';
 import { CONFIG } from '../config.js';
 import { showModal, closeModal } from './modal.js';
 import { showToast } from './toast.js';
@@ -37,15 +37,17 @@ const esc = (s) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-async function callInvite(patientId, dryRun) {
+async function callInvite(patientId, dryRun, previewVersion, owner) {
   try {
+    if (getCurrentUser()?.id !== owner) return { ok: false, reason: 'account_changed', error: 'Your account changed. Open this family again before sending.' };
     const { data: sess } = await getSupabase().auth.getSession();
+    if (getCurrentUser()?.id !== owner) return { ok: false, reason: 'account_changed', error: 'Your account changed. Open this family again before sending.' };
     const token = sess?.session?.access_token;
     if (!token) return { ok: false, error: 'Your sign-in has expired. Sign in again.' };
     const res = await fetch(INVITE_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ patientId, dryRun }),
+      body: JSON.stringify({ patientId, dryRun, ...(previewVersion ? { previewVersion } : {}) }),
     });
     return await res.json().catch(() => ({ ok: false, reason: dryRun ? 'preview_failed' : 'send_unknown',
       error: dryRun ? `The HopeBot service answered ${res.status}.` : UNKNOWN_SEND }));
@@ -57,22 +59,30 @@ async function callInvite(patientId, dryRun) {
 
 /** Resolves true once WhatsApp accepted an invite. Delivery is reported separately. */
 export async function sendHopeBotInvite(patientId, patientName = '') {
+  if (isImpersonating()) { showToast('Leave Preview as before sending HopeBot.', 'warning'); return false; }
+  const owner = getCurrentUser()?.id;
   const key = uncertainKey(patientId);
   if (pendingInvites.has(key) || localStorage.getItem(key)) {
     showToast(UNKNOWN_SEND, 'warning', 10000);
     return false;
   }
-  const preview = await callInvite(patientId, true);
+  const preview = await callInvite(patientId, true, undefined, owner);
   if (!preview.ok) {
     showToast(preview.error || 'HopeBot cannot be sent to this family.', 'warning', 9000);
     return false;
   }
+  if (getCurrentUser()?.id !== owner) return false;
+  const recipients = Array.isArray(preview.recipients) ? preview.recipients : [];
+  const eligible = recipients.filter(r => !r.reason);
   return await new Promise((resolve) => {
     const el = document.createElement('div');
     el.innerHTML = `
-      <p style="margin:0 0 12px">Request one WhatsApp message for ${esc(patientName || 'the family')} from
-      <strong>Jarurat Care Foundation (+91 93895 29263)</strong> on <strong class="tnum">${esc(preview.to)}</strong>,
-      in ${preview.lang === 'hi' ? 'Hindi' : 'English'}.</p>
+      <p style="margin:0 0 12px">Request the HopeBot papers link for ${esc(patientName || 'the family')} from
+      <strong>Jarurat Care Foundation (+91 93895 29263)</strong>, in ${preview.lang === 'hi' ? 'Hindi' : 'English'}.
+      One message goes to each eligible saved patient or caregiver number. Repeated numbers receive one message.
+      Only valid Indian mobile numbers are listed. Correct any missing contact numbers on the record first.</p>
+      <ul style="padding-left:20px;overflow-wrap:anywhere">${recipients.map(r => `<li><strong>${esc(String(r.role || 'contact').replaceAll('_', ' '))}: ${esc(r.to)}</strong><br>${r.reason ? `Not sent: ${esc(r.reasonText)}` : 'Will receive the papers link'}</li>`).join('')}</ul>
+      ${!recipients.length ? '<p>No valid saved patient or caregiver number was found. Add the family contacts to their record first.</p>' : ''}
       <div class="doc-callout" style="margin-bottom:12px">
         <strong>${icon('message')} What it says</strong>
         <p>It follows up on today's call, tells them they can send photos or PDFs of their hospital papers in
@@ -84,11 +94,12 @@ export async function sendHopeBotInvite(patientId, patientName = '') {
     showModal({
       title: 'Send HopeBot on WhatsApp', content: el, size: 'md',
       footer: `<button class="btn btn-secondary" id="hb-cancel">Cancel</button>
-               <button class="btn btn-primary" id="hb-send">${icon('message')}Send it</button>`,
+               <button class="btn btn-primary" id="hb-send" ${!eligible.length ? 'disabled' : ''}>${icon('message')}Send to ${eligible.length} ${eligible.length === 1 ? 'number' : 'numbers'}</button>`,
       onClose: () => resolve(false),
     });
     document.getElementById('hb-cancel')?.addEventListener('click', () => { closeModal(); resolve(false); });
     document.getElementById('hb-send')?.addEventListener('click', async (e) => {
+      if (!eligible.length || getCurrentUser()?.id !== owner || isImpersonating()) return;
       if (pendingInvites.has(key) || localStorage.getItem(key)) return;
       pendingInvites.add(key);
       // Save before the request so a closed tab or a lost response cannot invite a retry.
@@ -97,10 +108,19 @@ export async function sendHopeBotInvite(patientId, patientName = '') {
       const btn = e.currentTarget;
       btn.disabled = true;
       btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>Sending…';
-      const out = await callInvite(patientId, false);
+      const out = await callInvite(patientId, false, preview.version, owner);
       if (out.reason !== 'send_unknown' && !(out.ok && out.logged === false)) localStorage.removeItem(key);
       pendingInvites.delete(key);
+      if (getCurrentUser()?.id !== owner) { resolve(false); return; }
       closeModal();
+      if (Array.isArray(out.recipients)) {
+        const statuses = { accepted: 'Accepted by WhatsApp - delivery pending', unknown: 'Outcome unknown - do not send again', failed: 'Not accepted by WhatsApp' };
+        const result = document.createElement('div');
+        result.innerHTML = `<p>Each saved number has its own result. Refresh delivery status on the family card for delivered and read updates.</p><ul style="padding-left:20px;overflow-wrap:anywhere">${[...out.recipients, ...(out.held || []).map(r => ({...r,status:'held',reason:r.reasonText}))].map(r => `<li><strong>${esc(r.to)}</strong>: ${esc(statuses[r.status] || 'Not sent')}${r.reason ? `<br>${esc(r.reason)}` : ''}${r.logged === false ? '<br>Outcome could not be saved. Do not send again.' : ''}</li>`).join('')}</ul>`;
+        showModal({title:'HopeBot request results',content:result,size:'md'});
+        resolve(out.accepted > 0);
+        return;
+      }
       if (out.ok) {
         showToast(out.logged === false
           ? `WhatsApp accepted the message to ${out.to}, but its status could not be saved. Do not send again. Refresh delivery status and ask your lead to check.`
