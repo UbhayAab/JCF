@@ -30,7 +30,8 @@
    legacy alias live once in :root and follow the theme via var().
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400..800&display=swap');
+/* Keep the first painted font when the web font arrives late on a slow link. */
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400..800&display=optional');
 
 :root {
   /* ---- Grounds ---- */
