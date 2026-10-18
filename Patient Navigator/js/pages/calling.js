@@ -881,6 +881,7 @@ function mountActive(p, history) {
           <!-- sql/146: when the last document arrived and by whom, and the pages
                themselves one tap away, without leaving the call. -->
           <div id="doc-strip-mount">${currentContext ? docStripHTML(currentContext.documents, { canInvite: true }) : ''}</div>
+          <div id="hopebot-activity-call-mount"></div>
           <!-- Fixboard #32 (sql/183): they agree on this call to share their papers. -->
           <div id="doc-collect-mount" hidden style="margin-top:8px"></div>
           <div id="hopebot-intro-call-mount" style="margin-top:8px"></div>
@@ -938,6 +939,13 @@ function mountActive(p, history) {
   // Taken now, not after the import: a fast move to the next family must not
   // paint this family's button into that family's card.
   const docCollectMount = document.getElementById('doc-collect-mount');
+  const activityMount = document.getElementById('hopebot-activity-call-mount');
+  const activityProfile = getCurrentProfile()?.id;
+  const activityCurrent = () => activityMount?.isConnected && currentPatient?.patient_id === p.patient_id
+    && getCurrentProfile()?.id === activityProfile && root()?.contains(activityMount);
+  import('../components/hopebotActivity.js')
+    .then((m) => { if (activityCurrent()) m.mountHopebotActivity(activityMount, p.patient_id, { isCurrent: activityCurrent }); })
+    .catch(() => { if (activityCurrent()) activityMount.textContent = 'HopeBot activity could not load. Refresh to try again.'; });
   import('../components/docCollection.js')
     .then((m) => m.mountCollectStatus(docCollectMount, p.patient_id,
       { patientName: p.full_name || p.patient_code || '', preferred: 'verbal_during_call' }))

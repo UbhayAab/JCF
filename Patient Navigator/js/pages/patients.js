@@ -778,7 +778,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       <div style="font-family:var(--font-mono);font-size:12px;color:var(--ink-3);margin:6px 0 10px;letter-spacing:.22em;text-transform:uppercase">
         <b style="color:var(--gold);font-weight:600">Reach</b> · <b style="color:var(--primary-ink);font-weight:600">Action</b> · <b style="color:var(--clay);font-weight:600">Impact</b>: one person, three lenses
       </div>
-      <!-- sql/172: what this family asked HopeBot on WhatsApp, if they wrote. -->
+      <!-- sql/213: care-scoped read projection, including assigned probation. -->
       <div id="hb-family-card" hidden></div>
       <div id="family-whatsapp-card"></div>
       <div id="hopebot-intro-patient-card"></div>
@@ -813,9 +813,10 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       if (label) label.textContent = open ? 'Fewer actions' : 'More actions';
     });
     container.querySelector('#edit-patient-btn').addEventListener('click', () => showPatientForm(patient, reload));
-    import('../components/hopebotFamily.js')
-      .then((m) => { if (stillHere()) m.mountHopebotCard(container.querySelector('#hb-family-card'), patientId); })
-      .catch((e) => console.warn('[hopebot] card:', e.message));
+    const activityMount = container.querySelector('#hb-family-card');
+    import('../components/hopebotActivity.js')
+      .then((m) => { if (stillHere()) m.mountHopebotActivity(activityMount, patientId, { isCurrent: stillHere }); })
+      .catch(() => { if (stillHere() && activityMount?.isConnected) { activityMount.hidden = false; activityMount.textContent = 'HopeBot activity could not load. Refresh to try again.'; } });
     // The roles the Document collection page is open to (app.js 'doccollect').
     if (container.querySelector('#doc-collect-card')
         && ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'ground_poc'].includes(getUserRole())) {

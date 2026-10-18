@@ -156,7 +156,7 @@ function readingHTML(rr) {
     <div class="due-meta wraps" style="margin-top:4px;display:flex;flex-direction:column;gap:2px;color:var(--ink-1)">
       ${rows.map(([k, label]) => `<div><span style="color:var(--ink-3)">${label}:</span> ${sanitize(rr.fields[k])}</div>`).join('')}</div>
     ${told.length ? `<div class="due-meta wraps" style="margin-top:4px">The family corrected: ${told.map((t) => `"${sanitize(t.words)}"${t.field ? ` (${sanitize(readLabel(t.field))})` : ''}`).join('; ')}</div>` : ''}
-    <div class="due-meta wraps" style="margin-top:4px">Read by AI from the papers they sent, then checked with the family on WhatsApp. Confirm it on the call before acting on it.</div></details>`;
+    <div class="due-meta wraps" style="margin-top:4px">Extracted by AI from the papers they sent, not verified. Any recorded family corrections are shown separately above. Confirm it on the call before acting on it.</div></details>`;
 }
 
 // Tags, last questions and summary. Used on a lead card and the record card.
