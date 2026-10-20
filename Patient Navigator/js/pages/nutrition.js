@@ -39,7 +39,7 @@ export async function renderNutrition(container) {
         <h1>Nutrition</h1>
         <p class="header-subtitle" id="nut-sub" style="margin:4px 0 0"></p>
       </div>
-      <div class="nw-actions"><a class="btn btn-secondary btn-sm" href="#nutrition-tracker">Nutrition tracker</a><span class="badge badge-primary" id="nut-count">…</span></div>
+      <div class="nw-actions"><a class="btn btn-secondary btn-sm" href="#nutrition-tracker">${isManagerOrAdmin() ? "View all interns' requests" : 'Nutrition tracker'}</a><span class="badge badge-primary" id="nut-count">…</span></div>
     </div>
     <div class="chip-row" id="nut-tabs" style="margin:0 0 var(--s4)"></div>
     <div id="nut-panel"></div>`;
