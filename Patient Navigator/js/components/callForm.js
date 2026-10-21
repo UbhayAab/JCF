@@ -7,7 +7,8 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
-import { getCurrentUser, getCurrentProfile, isManagerOrAdmin, getUserRole } from '../auth.js';
+import { getCurrentUser, getCurrentProfile, getRealProfile, isImpersonating, isManagerOrAdmin, getUserRole } from '../auth.js';
+import { navigate } from '../router.js';
 import { showToast } from './toast.js';
 import { showModal, closeModal } from './modal.js';
 import { icon } from './icons.js';
@@ -34,6 +35,7 @@ const ROLE_LEVER_GROUP = {
 };
 
 const STATUS_DAYS = { no_answer: 7, busy: 7, voicemail: 7, callback_requested: 7, wrong_number: null };
+let callFormGeneration = 0;
 
 // ---- Save must always be reachable, and must always say what it is waiting for ----
 // Field report, 25 Sep 2026 (a nutrition intern on an iPhone): "Save Call
@@ -103,8 +105,16 @@ function hitTestButton(btn) {
 
 // opts: { patient: {id, full_name} | null, onSaved: fn | null }
 export async function openCallForm({ patient = null, onSaved = null } = {}) {
+  const generation = ++callFormGeneration;
   const sb = getSupabase();
   const me = getCurrentProfile() || { id: getCurrentUser()?.id };
+  const route = window.location.hash, account = JSON.stringify([getCurrentUser()?.id, getRealProfile()?.id, me.id, isImpersonating()]);
+  const freshActor = () => generation === callFormGeneration && account === JSON.stringify([getCurrentUser()?.id, getRealProfile()?.id, getCurrentProfile()?.id, isImpersonating()])
+    && route === window.location.hash && !isImpersonating() && me.id === getCurrentUser()?.id
+    && getRealProfile()?.id === me.id
+    && getRealProfile()?.is_active === true && ['caller', 'caregiver_mentor', 'nutritionist', 'therapist', 'manager', 'admin'].includes(getRealProfile()?.role)
+    && (!getRealProfile()?.ends_on || getRealProfile().ends_on >= indiaCallDay(new Date()));
+  if (!freshActor()) { showToast('Exit Open as and use your active signed-in care account to log a call.', 'warning'); return; }
   injectCallFormStyle();
 
   // Patient choices when not pre-selected. Care roles (mentors, nutrition,
@@ -139,6 +149,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     consentOnFile = !!pc?.consent_given;
     carePatient = pc;
   }
+  if (!freshActor()) return;
 
   const role = getUserRole();
   const state = { dial: '', recep: '', cond: '', reqs: [], waLink: null, waJoin: null,
@@ -319,10 +330,24 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   let recSection = null;
   let consentWritten = false;   // written the moment a waiting recording needed it
   const dropRec = () => { recSection?.dispose(); recSection = null; };
-  showModal({
+  let feedbackSection = null, disposed = false, savedCallId = null, callSaving = false, observer, subscription;
+  const current = () => !disposed && el.isConnected && modal?.isCurrentModal?.() && freshActor();
+  function dispose() {
+    if (disposed) return;
+    disposed = true; stopGuard(); dropRec(); feedbackSection?.dispose(); feedbackSection = null;
+    observer?.disconnect(); subscription?.unsubscribe(); window.removeEventListener('hashchange', checkCurrent);
+    document.removeEventListener('change', checkCurrent, true);
+  }
+  function checkCurrent() { if (!current()) { dispose(); modal?.closeOwnedModal(); } }
+  function closeOwned() { dispose(); modal?.closeOwnedModal(); }
+  const modal = showModal({
     title: patient ? `Log a call · ${sanitize(patient.full_name)}` : 'Log a call',
-    content: el, size: 'lg', onClose: () => { stopGuard(); dropRec(); },
+    content: el, size: 'lg', onClose: dispose,
   });
+  window.addEventListener('hashchange', checkCurrent);
+  document.addEventListener('change', checkCurrent, true);
+  subscription = sb.auth?.onAuthStateChange?.(() => checkCurrent())?.data?.subscription;
+  observer = new MutationObserver(checkCurrent); observer.observe(document.body, { childList: true, subtree: true });
 
   const $ = (sel) => el.querySelector(sel);
   const $$ = (sel) => el.querySelectorAll(sel);
@@ -338,6 +363,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   // The recording fills this form like the portal's: only what is still empty,
   // and the full call note under any notes already typed.
   function applyRecording(result) {
+    if (!current() || callSaving || savedCallId) return [];
     const s = result?.suggestions || {};
     const v = (k) => s[k]?.value;
     const filled = [];
@@ -424,6 +450,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     return missing.length ? `Still needed to save: ${missing.map(m => m.text).join(', ')}.` : '';
   }
   function updateSubmit() {
+    if (!current() || callSaving || savedCallId) return;
     const missing = missingItems();
     const btn = $('#lc-submit');
     btn.setAttribute('aria-disabled', missing.length ? 'true' : 'false');
@@ -466,10 +493,11 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
 
   $('#lc-patient')?.addEventListener('change', () => { suggestFollowup(); updateSubmit(); });
   $('#lc-patient')?.addEventListener('change', async (e) => {
+    if (!current() || callSaving || savedCallId) return;
     const patientId = e.target.value;
     carePatient = null;
     const { data } = await sb.from('patients').select(CARE_CASE_FIELDS).eq('id', patientId).maybeSingle();
-    if (chosenPatientId() !== patientId) return;
+    if (!current() || chosenPatientId() !== patientId) return;
     carePatient = data; suggestFollowup();
   });
   // Picking a patient from the dropdown decides whether the consent
@@ -525,6 +553,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   // waiting recording, consent is still written with the call as before.
   let consentWriting = false;
   async function writeConsentForRecording() {
+    if (!current() || callSaving || savedCallId) return;
     const pid = chosenPatientId();
     if (!pid || consentWriting || consentGiven() || rec.decision !== 'agreed') return;
     consentWriting = true;
@@ -534,7 +563,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
         .update({ consent_given: true, consent_date: new Date().toISOString(), consent_method: 'verbal_during_call' })
         .eq('id', pid).select('id');
       if (cErr || !done?.length) { showToast('Consent could not be saved' + (cErr ? `: ${cErr.message}` : '. Ask your team lead.'), 'error', 8000); return; }
-      if (chosenPatientId() !== pid) return;
+      if (!current() || chosenPatientId() !== pid) return;
       consentWritten = true;
       recSection?.refresh();
     } finally { consentWriting = false; }
@@ -573,7 +602,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   });
 
   $('#lc-followup').addEventListener('input', () => { dateManual = true; $('#lc-auto').style.display = 'none'; });
-  $('#lc-cancel').addEventListener('click', () => { stopGuard(); dropRec(); closeModal(); });
+  $('#lc-cancel').addEventListener('click', () => { if (current()) closeOwned(); });
 
   // Say what is missing from the moment the form opens, not only after the
   // first tap. An empty dropdown is then visible immediately.
@@ -628,6 +657,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
 
   $('#lc-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (!current() || callSaving || savedCallId) return;
     const btn = $('#lc-submit');
     if (btn.disabled) return;   // a save is already in flight
     const missing = missingItems();
@@ -637,6 +667,9 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     const patientId = patient?.id || $('#lc-patient')?.value;
     const connected = state.dial === 'connected';
 
+    callSaving = true;
+    const disabledBeforeSave = [...$('#lc-form').querySelectorAll('input,textarea,select,button')].map(control => [control, control.disabled]);
+    disabledBeforeSave.forEach(([control]) => { control.disabled = true; });
     btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:17px;height:17px;border-width:2.5px"></span>Saving…';
 
     const customReq = $('#lc-customreq')?.value.trim() || '';
@@ -679,10 +712,17 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
         lead_source: 'other',
       }).select('id').single();
       if (error) throw error;
+      savedCallId = logged?.id || 'unconfirmed';
+      if (!current()) return;
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(savedCallId)) {
+        showSavedCall('The call save response could not be confirmed. Check Call Logs before trying to log it again.');
+        return;
+      }
 
       // sql/193: the family's answer about recording, and its recording, join
       // this call. Never blocks the log; a failure says so (attachRecordingToLog).
       const recAttached = (logged?.id && rec.consentId) ? await recording.attachRecordingToLog(logged.id, rec) : 0;
+      if (!current()) return;
       dropRec();
 
       // Consent, taken on the call, written on the call. Direct update
@@ -697,6 +737,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
         const { error: cErr } = await sb.from('patients')
           .update({ consent_given: true, consent_date: nowIso, consent_method: 'verbal_during_call' })
           .eq('id', patientId);
+        if (!current()) return;
         if (cErr) showToast('The call saved, but consent did not: ' + cErr.message, 'error', 8000);
       }
 
@@ -716,10 +757,12 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
       const leverFailures = [];
       if (leverRows.length) {
         const { error: e2 } = await sb.from('patient_services').upsert(leverRows, { onConflict: 'patient_id,lever' });
+        if (!current()) return;
         if (e2) {
           console.error('lever save (batch):', e2.message);
           for (const row of leverRows) {
             const { error: e2b } = await sb.from('patient_services').upsert(row, { onConflict: 'patient_id,lever' });
+            if (!current()) return;
             if (e2b) { console.error('lever save:', row.lever, e2b.message); leverFailures.push({ lever: row.lever, msg: e2b.message }); }
           }
         }
@@ -732,11 +775,12 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
       let scoreFailed = null;
       if (assessRows.length) {
         const { error: e3 } = await sb.from('patient_assessments').insert(assessRows);
+        if (!current()) return;
         if (e3) { console.error('assessment save:', e3.message); scoreFailed = e3.message; }
       }
 
       stopGuard();
-      closeModal();
+      showSavedCall();
       const savedLevers = leverRows.length - leverFailures.length;
       const extras = (savedLevers ? ` · ${savedLevers} support` : '')
         + (assessRows.length && !scoreFailed ? ` · ${assessRows.length} scores` : '')
@@ -747,10 +791,53 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
         showToast(`Support not saved (${leverFailures.map(f => leverLabel(f.lever)).join(', ')}): ${leverFailures[0].msg}. Add it from the patient's Support tab.`, 'error', 9000);
       }
       if (scoreFailed) showToast(`Wellbeing scores not saved: ${scoreFailed}`, 'error', 9000);
-      if (typeof onSaved === 'function') onSaved();
+      if (typeof onSaved === 'function') {
+        try { Promise.resolve(onSaved()).catch(() => { if (current()) showToast('Call saved. Refresh the page to update its list.', 'info'); }); }
+        catch { if (current()) showToast('Call saved. Refresh the page to update its list.', 'info'); }
+      }
     } catch (err) {
+      if (!current()) return;
+      if (savedCallId) {
+        showSavedCall('The call saved, but a later step could not finish. Check its recording, consent and support entries before adding anything again.');
+        showToast('Call saved; a later step could not finish: ' + err.message, 'error', 9000);
+        return;
+      }
       showToast('Could not save: ' + err.message, 'error');
+      callSaving = false; disabledBeforeSave.forEach(([control, wasDisabled]) => { control.disabled = wasDisabled; });
       btn.disabled = false; btn.innerHTML = `${icon('check')}Save call`;
     }
   });
+
+  function showSavedCall(note = '') {
+    if (!current() || el.querySelector('[data-lc-saved-stage]')) return;
+    callSaving = false; stopGuard(); dropRec();
+    const form = $('#lc-form');
+    form.querySelectorAll('input,textarea,select,button').forEach(control => { control.disabled = true; });
+    const savedEntries = document.createElement('details');
+    const summary = document.createElement('summary'); summary.textContent = 'Saved call entries'; savedEntries.append(summary);
+    form.before(savedEntries); savedEntries.append(form);
+    const stage = document.createElement('section'); stage.className = 'card'; stage.dataset.lcSavedStage = '1';
+    stage.style.cssText = 'padding:16px;margin-bottom:16px;min-width:0;overflow-wrap:anywhere';
+    const confirmed = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(savedCallId);
+    $('#lc-submit').textContent = confirmed ? 'Call saved' : 'Check Call Logs';
+    stage.innerHTML = `<h3>${confirmed ? 'Call saved' : 'Check Call Logs'}</h3><p>${note ? sanitize(note) : 'HopeBot usage feedback is a separate answer linked to this saved call. You can add it now or reopen the call from Call Logs.'}</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="btn btn-primary" data-lc-feedback ${confirmed ? '' : 'disabled'}>Add HopeBot feedback</button><button type="button" class="btn btn-secondary" data-lc-logs>Open Call Logs</button><button type="button" class="btn btn-secondary" data-lc-done>Done</button></div>
+      <div data-lc-feedback-slot style="margin-top:16px;min-width:0" hidden></div><p data-lc-feedback-error role="status"></p>`;
+    el.prepend(stage); el.closest('.modal')?.scrollTo({ top: 0 });
+    stage.querySelector('[data-lc-done]').onclick = () => { if (current()) closeOwned(); };
+    stage.querySelector('[data-lc-logs]').onclick = () => { if (current()) { closeOwned(); navigate('calls'); } };
+    stage.querySelector('[data-lc-feedback]').onclick = async (event) => {
+      if (!current() || !confirmed || feedbackSection) return;
+      const button = event.currentTarget; button.disabled = true;
+      try {
+        const module = await import('./hopebotFeedback.js');
+        if (!current()) return;
+        const host = stage.querySelector('[data-lc-feedback-slot]'); host.hidden = false;
+        feedbackSection = module.mountHopebotFeedback(host, savedCallId, { anchorType: 'patient_call', isCurrent: current, preview: () => isImpersonating() });
+        button.hidden = true; stage.querySelector('[data-lc-feedback-error]').textContent = '';
+      } catch {
+        if (current()) { button.disabled = false; stage.querySelector('[data-lc-feedback-error]').textContent = 'Feedback could not load. Your call is saved. Try again here or reopen it from Call Logs.'; }
+      }
+    };
+  }
 }

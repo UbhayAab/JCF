@@ -5,7 +5,7 @@
 // behind (the old "wrong button highlighted" bug).
 // ============================================================
 
-import { getCurrentProfile, getUserRole, signOut } from '../auth.js';
+import { getCurrentProfile, getRealProfile, getUserRole, isImpersonating, signOut } from '../auth.js';
 import { sanitize } from '../utils/validators.js';
 import { getSupabase } from '../supabase.js';
 import { navigate } from '../router.js';
@@ -69,6 +69,7 @@ const NAV_ITEMS = [
       // 28 Sep, Aadrika: "see which intern uploaded documents of which patients".
       { id: 'uploads',     label: 'Document uploads', icon: 'fileText',   route: 'uploads',     roles: ['admin', 'manager'] },
       { id: 'report',      label: 'Impact Report',   icon: 'fileText',    route: 'report',      roles: ['admin', 'manager'] },
+      { id: 'hopebot-feedback', label: 'HopeBot feedback', icon: 'list', route: 'hopebot-feedback', roles: ['admin', 'manager'] },
       { id: 'admin-users', label: 'User Management', icon: 'shieldCheck', route: 'admin/users', roles: ['admin', 'manager'] },
       { id: 'admin-audit', label: 'Audit Log',       icon: 'fileText',    route: 'admin/audit', roles: ['admin'] },
     ],
@@ -100,13 +101,17 @@ export function renderSidebar() {
   const profile = getCurrentProfile();
   const role = getUserRole();
   const active = activeRouteFromHash();
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+  const today = ['year', 'month', 'day'].map(type => parts.find(part => part.type === type)?.value).join('-');
 
   const sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
 
   const navHTML = NAV_ITEMS.map(section => {
     // On probation (Fixboard #23) only the open tabs show: hidden, not greyed out.
-    const visibleItems = section.items.filter(item => item.roles.includes(role) && routeOpen(item.route, role));
+    const visibleItems = section.items.filter(item => item.roles.includes(role) && routeOpen(item.route, role)
+      && (item.id !== 'hopebot-feedback' || (!isImpersonating() && getRealProfile()?.is_active === true
+        && ['admin', 'manager'].includes(getRealProfile()?.role) && (!getRealProfile()?.ends_on || getRealProfile().ends_on >= today))));
     if (visibleItems.length === 0) return '';
     return `
       <div class="nav-section">

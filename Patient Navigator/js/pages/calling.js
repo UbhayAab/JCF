@@ -5,7 +5,7 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
-import { getCurrentProfile, getUserRole, isImpersonating } from '../auth.js';
+import { getCurrentUser, getRealProfile, getCurrentProfile, getUserRole, isImpersonating } from '../auth.js';
 import { showToast } from '../components/toast.js';
 import { openAssessmentFlow } from '../components/assessmentFlow.js';
 import { formatRelativeTime, capitalize } from '../utils/formatters.js';
@@ -42,6 +42,7 @@ import { CARE_CASE_FIELDS, indiaCallDay, dayPlus, activeCareCase, careCallBounds
 // sql/172: families who asked HopeBot for a call. Footprint in this file: this
 // import, the #hb-requests div in mountReady() and the one call after it.
 import { mountHopebotRequests } from '../components/hopebotFamily.js';
+import { mountHopebotUsageWork } from '../components/hopebotUsageWork.js';
 
 // ---- module state ----
 let me = null;                 // current profile
@@ -64,6 +65,25 @@ let listContext = new Map();    // patient_id -> get_call_context row, for today
 let recordingSection = null;    // the mounted recording box ({ refresh, dispose }), sql/166
 let disposeSaturdaySession = null;
 let saturdayMountGeneration = 0;
+let hopebotUsageSection = null;
+let portalFeedback = null;
+let portalSaving = null;
+let callingMount = null;
+let callingAccount = '';
+let callingRoute = '';
+let callingGeneration = 0;
+const callingIdentity = () => JSON.stringify([getCurrentUser()?.id, getRealProfile()?.id, getCurrentProfile()?.id, isImpersonating()]);
+function callingCurrent(generation = callingGeneration) {
+  return generation === callingGeneration && callingMount?.isConnected && root() === callingMount
+    && callingAccount === callingIdentity() && callingRoute === window.location.hash;
+}
+function callingWritable() {
+  const profile = getRealProfile();
+  return callingCurrent() && !isImpersonating() && profile?.id === getCurrentUser()?.id && profile?.id === me?.id
+    && profile.is_active === true && (!profile.ends_on || profile.ends_on >= indiaCallDay())
+    && ['admin', 'manager', 'caller', 'caregiver_mentor', 'nutritionist', 'therapist'].includes(profile.role);
+}
+function clearHopebotUsage() { hopebotUsageSection?.dispose(); hopebotUsageSection = null; }
 function clearSaturdaySession() {
   saturdayMountGeneration++;
   disposeSaturdaySession?.(); disposeSaturdaySession = null;
@@ -295,9 +315,13 @@ function fmtTimer(s) { return `${String(Math.floor(s / 60)).padStart(2, '0')}:${
 function badge(tone, label) { return `<span class="badge badge-${tone}"><span class="dot"></span>${label}</span>`; }
 
 export async function renderCalling(container) {
+  portalFeedback?.dispose(); portalFeedback = null;
+  portalSaving = null;
+  clearHopebotUsage(); callingGeneration++;
   clearSaturdaySession();
   me = getCurrentProfile();
   container.innerHTML = `<div id="portal-content"></div>`;
+  callingMount = container.querySelector('#portal-content'); callingAccount = callingIdentity(); callingRoute = window.location.hash;
   if (!me?.id) { root().innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Not signed in</h4><p>Please sign in again.</p></div>`; return; }
   const saved = isImpersonating() ? null : loadActive();
   if (saved && saved.queueId && saved.patient) { await restoreActive(saved); return; }
@@ -338,23 +362,29 @@ function teamPointerHTML() {
 
 // ============================================================ Ready
 async function mountReady() {
+  if (!callingCurrent()) return;
   resetState();
+  const generation = ++callingGeneration;
+  const member = me.id;
   const sb = getSupabase();
   // current availability for today
   try {
     const { data } = await sb.from('caller_availability').select('available').eq('caller_id', me.id).eq('day', new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })).maybeSingle();
+    if (!callingCurrent(generation)) return;
     availableToday = data ? data.available : true;
-  } catch { availableToday = true; }
+  } catch { if (!callingCurrent(generation)) return; availableToday = true; }
+  if (!callingCurrent(generation)) return;
 
   let summary = { pending: 0, follow_ups: 0, new_leads: 0, done_today: 0, overdue: 0, oldest_overdue_days: 0, scheduled_ahead: 0 };
   try {
-    const { data, error } = await sb.rpc('get_worklist_summary', { p_caller_id: me.id });
+    const { data, error } = await sb.rpc('get_worklist_summary', { p_caller_id: member });
+    if (!callingCurrent(generation)) return;
     if (error || !data) throw error || new Error('Summary unavailable');
     summary = data;
   } catch {
-    const el = root(); if (!el) return;
+    const el = root(); if (!callingCurrent(generation) || !el) return;
     el.innerHTML = `<div class="ready"><div class="ready-card"><h2>Could not load your daily list</h2><p>Your work has not been marked finished. Check your connection and try again.</p><button type="button" class="btn btn-primary" id="daily-list-retry">Try again</button></div></div><div id="hb-requests"></div>`;
-    document.getElementById('daily-list-retry')?.addEventListener('click', mountReady);
+    document.getElementById('daily-list-retry')?.addEventListener('click', () => { if (callingCurrent(generation)) mountReady(); });
     mountHopebotRequests(document.getElementById('hb-requests'), { mode: 'calling' });
     return;
   }
@@ -386,7 +416,7 @@ async function mountReady() {
     </div>`;
 
   // The person may have opened another page while the summary loaded.
-  const el = root(); if (!el) return;
+  const el = root(); if (!callingCurrent(generation) || !el) return;
   el.innerHTML = `
     <div class="ready">
       <div class="ready-column">
@@ -396,6 +426,7 @@ async function mountReady() {
         <p>${summary.pending > 0
           ? `You have <strong>${summary.pending}</strong> ${summary.pending === 1 ? 'person' : 'people'} on today's list: ${summary.follow_ups} follow-up${summary.follow_ups === 1 ? '' : 's'}, ${summary.new_leads} new and ${Number(summary.other_calls || 0)} other. One conversation at a time.`
           : emptyReason(summary)}</p>
+        ${summary.lead_pending != null ? `<p class="due-meta wraps">${Number(summary.patient_pending || 0)} patient calls and ${Number(summary.lead_pending || 0)} unlinked HopeBot lead calls share this same daily list and limit.</p>` : ''}
 
         ${summary.pending > 0 || summary.plan_total != null ? catchupHTML : ''}
         ${isImpersonating() ? '<p class="due-meta wraps">Previewing this mentor\'s daily list. Return to your own account to log calls or change availability.</p>' : ''}
@@ -418,6 +449,7 @@ async function mountReady() {
       <div id="saturday-session"></div>
       <div id="hb-requests" hidden></div>
       <div id="doc-collect-due" hidden></div>
+      <div id="hopebot-usage-work"></div>
       <div class="card card-flush" id="today-list">
         <div class="card-head"><h3>Today's list</h3><span class="badge badge-neutral" id="tl-count">…</span></div>
         <div id="tl-body"><div style="padding:var(--s4)">${Array(3).fill('<div class="sk skeleton-row"></div>').join('')}</div></div>
@@ -425,11 +457,16 @@ async function mountReady() {
       </div>
     </div>`;
 
-  document.getElementById('start')?.addEventListener('click', getNextCall);
+  document.getElementById('start')?.addEventListener('click', () => { if (callingCurrent(generation)) getNextCall(); });
   document.getElementById('goto-team')?.addEventListener('click', () => navigate('team'));
-  document.getElementById('avail-toggle')?.addEventListener('click', toggleAvailability);
+  document.getElementById('avail-toggle')?.addEventListener('click', () => { if (callingCurrent(generation)) toggleAvailability(); });
   el.querySelectorAll('[data-goto-list]').forEach(t => t.addEventListener('click', scrollToTodayList));
   mountHopebotRequests(document.getElementById('hb-requests'), { mode: 'calling' });
+  hopebotUsageSection = mountHopebotUsageWork(el.querySelector('#hopebot-usage-work'), {
+    memberId: member, preview: () => isImpersonating(),
+    isCurrent: () => callingCurrent(generation) && !currentQueueId,
+    onReturn: () => { if (callingCurrent(generation)) return mountReady(); },
+  });
   // Load only in Ready: a failed optional schedule must never block calling.
   const saturdayMount = el.querySelector('#saturday-session');
   const saturdayGeneration = saturdayMountGeneration;
@@ -451,12 +488,15 @@ async function mountReady() {
 // Servable rows are tappable; resting ones stay visible, greyed, with the
 // date they resurface. No one silently vanishes.
 async function loadTodayList() {
+  const generation = callingGeneration;
+  if (!callingCurrent(generation)) return;
   const card = document.getElementById('today-list');
   const body = document.getElementById('tl-body');
   const countEl = document.getElementById('tl-count');
   if (!card || !body) return;
   try {
     const { data, error } = await getSupabase().rpc('get_my_worklist', { p_caller_id: me.id });
+    if (!callingCurrent(generation)) return;
     if (error) throw error;
     const rows = data || [];
     if (!rows.length) { card.style.display = 'none'; return; }
@@ -471,8 +511,9 @@ async function loadTodayList() {
     // What each family is flagged for, their documents and numbers, in one
     // round trip for the whole list (sql/146). If it fails the list still
     // renders exactly as it did before, just without the chips.
-    try { listContext = await loadCallContext(rows.map(r => r.patient_id)); }
-    catch (e) { console.warn('[worklist] context unavailable:', e.message); listContext = new Map(); }
+    try { const contexts = await loadCallContext(rows.map(r => r.patient_id)); if (!callingCurrent(generation)) return; listContext = contexts; }
+    catch (e) { if (!callingCurrent(generation)) return; console.warn('[worklist] context unavailable:', e.message); listContext = new Map(); }
+    if (!callingCurrent(generation) || !body.isConnected) return;
     const flaggedN = servable.filter(r => (listContext.get(r.patient_id)?.flags || []).length).length;
     body.innerHTML = `
       ${flaggedN ? `<div class="due-meta wraps" style="padding:var(--s3) var(--s5) 0;color:var(--ink-2)">${flaggedN} of today's ${servable.length === 1 ? 'call is' : 'calls are'} flagged. Tap anyone to read why before you ring.</div>` : `<div class="due-meta wraps" style="padding:var(--s3) var(--s5) 0;color:var(--ink-3)">Tap anyone to see their details before you ring.</div>`}
@@ -486,6 +527,7 @@ async function loadTodayList() {
       ${later > 0 ? `<div class="due-meta wraps" style="padding:0 var(--s5) var(--s4);color:var(--ink-3)">+ ${later} other open tasks waiting for a future daily plan, their date or contact rest.</div>` : ''}`;
     body.querySelectorAll('[data-wl]').forEach(row => wireWorklistRow(row, rows.find(r => r.patient_id === row.dataset.wl && String(r.queue_id) === row.dataset.q)));
   } catch (err) {
+    if (!callingCurrent(generation)) return;
     // RPC not deployed yet or a network blip: the Start button still works.
     console.warn('Worklist error:', err);
     card.style.display = 'none';
@@ -561,12 +603,14 @@ function worklistPreviewHTML(r, kind) {
 
 function wireWorklistRow(row, r) {
   if (!row || !r) return;
+  const generation = callingGeneration;
   const kind = row.dataset.kind;
   const preview = row.querySelector('.wl-preview');
   const mainEl = row.querySelector('.wl-main');
   const fill = () => {
+    if (!callingCurrent(generation)) return;
     preview.innerHTML = worklistPreviewHTML(r, kind);
-    preview.querySelector('[data-wl-start]')?.addEventListener('click', () => startFromList(r.queue_id, row));
+    preview.querySelector('[data-wl-start]')?.addEventListener('click', () => { if (callingCurrent(generation)) startFromList(r.queue_id, row); });
     preview.querySelector('[data-wl-open]')?.addEventListener('click', () => navigate('patients/' + r.patient_id));
     preview.querySelector('[data-doc-view]')?.addEventListener('click', () =>
       openDocumentViewer({ patientId: r.patient_id, patientName: r.full_name || r.patient_code || '' }));
@@ -576,6 +620,7 @@ function wireWorklistRow(row, r) {
     });
   };
   const toggle = () => {
+    if (!callingCurrent(generation)) return;
     const open = preview.hidden;
     // One open at a time keeps the list a list.
     document.querySelectorAll('#tl-body .wl-row.open').forEach(o => {
@@ -604,15 +649,19 @@ function scrollToTodayList() {
 // Tap a specific person on the list: same claim + same active-call flow as
 // "Start calling", just this patient instead of rank #1.
 async function startFromList(queueId, rowEl) {
-  if (isImpersonating()) { showToast('Return to your own account to log a call.', 'info'); return; }
+  if (!callingWritable()) { if (callingCurrent()) showToast('Return to your own active account to log a call.', 'info'); return; }
+  if (hopebotUsageSection?.hasOpenCall()) return;
+  const generation = callingGeneration;
   if (!queueId || currentQueueId) return;
   if (rowEl) { rowEl.style.pointerEvents = 'none'; rowEl.style.opacity = '.6'; }
   try {
     const { data, error } = await getSupabase().rpc('get_call_by_queue_id', { p_queue_id: queueId });
+    if (!callingCurrent(generation) || !callingWritable()) return;
     if (error) throw error;
     if (!data || data.found === false) { showToast('Could not open this call, refreshing your list', 'warning'); await mountReady(); return; }
     await startCallSession(data);
   } catch (err) {
+    if (!callingCurrent(generation)) return;
     // The RPC raises human messages ('resting until…' / 'already completed').
     showToast(err.message || 'Could not open this call', 'warning');
     await mountReady();
@@ -620,11 +669,13 @@ async function startFromList(queueId, rowEl) {
 }
 
 async function toggleAvailability() {
-  if (isImpersonating()) { showToast('Return to your own account to change availability.', 'info'); return; }
+  if (!callingWritable()) { if (callingCurrent()) showToast('Return to your own active account to change availability.', 'info'); return; }
+  const generation = callingGeneration;
   const sb = getSupabase();
   const next = !availableToday;
   try {
     const { error } = await sb.rpc('mark_availability', { p_available: next, p_day: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) });
+    if (!callingCurrent(generation) || !callingWritable()) return;
     if (error) throw error;
     availableToday = next;
     showToast(next ? "You're marked as calling today" : "You're marked off today. Your patients will be covered", next ? 'success' : 'info');
@@ -632,7 +683,7 @@ async function toggleAvailability() {
     const btn = document.getElementById('avail-toggle');
     if (badge) { badge.className = `badge ${next ? 'badge-ok' : 'badge-warn'}`; badge.innerHTML = `<span class="dot"></span>${next ? 'Calling today' : 'Off today'}`; }
     if (btn) btn.textContent = next ? 'Mark me off today' : "I'm calling today";
-  } catch (e) { showToast('Could not update availability: ' + e.message, 'error'); }
+  } catch (e) { if (callingCurrent(generation)) showToast('Could not update availability: ' + e.message, 'error'); }
 }
 
 // ============================================================ Get next
@@ -640,7 +691,10 @@ async function toggleAvailability() {
 // caller is on the last one and needs to be told that, not shown the same
 // screen twice with no explanation.
 async function getNextCall(justSkippedId = null) {
-  if (isImpersonating()) { showToast('Return to your own account to log a call.', 'info'); return; }
+  if (portalFeedback) return;
+  if (!callingWritable()) { if (callingCurrent()) showToast('Return to your own active account to log a call.', 'info'); return; }
+  if (hopebotUsageSection?.hasOpenCall()) return;
+  const generation = callingGeneration;
   const sb = getSupabase();
   const btn = document.getElementById('start');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:20px;height:20px;border-width:2.5px"></span>Finding the next person…'; }
@@ -654,25 +708,36 @@ async function getNextCall(justSkippedId = null) {
   try {
     if (!navigator.onLine) throw new Error('You appear to be offline. Check your internet and try again.');
     const { data, error } = await withTimeout(sb.rpc('get_next_call', { p_team_member_id: me.id }), 20000);
+    if (!callingCurrent(generation) || !callingWritable()) return;
     if (error) throw error;
-    if (!data || !data.found) { await mountQueueEmpty(); return; }
+    if (!data || typeof data.found !== 'boolean') throw new Error('Could not confirm the next assigned call. Refresh and retry.');
+    if (data.found === false) {
+      if (hopebotUsageSection && await hopebotUsageSection.startNext()) return;
+      if (!callingCurrent(generation) || !callingWritable()) return;
+      await mountQueueEmpty(); return;
+    }
     if (justSkippedId && data.queue_id === justSkippedId) {
       showToast(`${(data.full_name || 'They').split(' ')[0]} is the only person left on your list today, so they come straight back.`, 'info', 9000);
     }
     await startCallSession(data);
   } catch (err) {
+    if (!callingCurrent(generation)) return;
     showToast('Something went wrong: ' + err.message, 'error');
     // The active view replaces this button; only restore it when we are
     // still on the ready screen (button still in the DOM and no call open).
     const live = document.getElementById('start');
     if (live && !currentQueueId) { live.disabled = false; live.innerHTML = `${icon('phoneCall')}Start calling`; }
     else if (!document.getElementById('portal-content')) { try { await mountReady(); } catch {} }
+  } finally {
+    const live = document.getElementById('start');
+    if (callingCurrent(generation) && live && !currentQueueId) { live.disabled = !callingWritable(); live.innerHTML = `${icon('phoneCall')}Start calling`; }
   }
 }
 
 // One entry into the active-call view: get_next_call and the tappable
 // Today's list both land here with the same claimed-queue JSON.
 async function startCallSession(data) {
+  clearHopebotUsage();
   clearSaturdaySession();
   // First, before any wait: a transcript still on its way belongs to the call
   // that was on screen, never to this one (Skip and the flag exits land here).
@@ -2180,17 +2245,24 @@ async function skipPatient() {
 }
 
 async function submitCallLog() {
+  if (!callingWritable() || portalFeedback || portalSaving) return;
   if (!currentPatient || !currentQueueId) return;
   const sb = getSupabase();
+  const operation = {}, generation = callingGeneration, identity = callingIdentity();
+  const patientId = currentPatient.patient_id, queueId = currentQueueId, callerId = me.id;
+  const stillCurrent = () => portalSaving === operation && callingCurrent(generation) && identity === callingIdentity()
+    && callingWritable() && currentPatient?.patient_id === patientId && currentQueueId === queueId && me?.id === callerId;
+  let confirmedCallId = null;
   const btn = document.getElementById('f-submit');
   const connected = form.dialStatus === 'connected';
   const introWanted = form.hopebotIntro === true;
   const introPatientId = currentPatient.patient_id;
   const requestIntro = async (callId) => {
-    if (!introWanted) return null;
+    if (!introWanted || !stillCurrent()) return null;
     if (!connected) return { ok: false, error: 'Not sent: a connected call is required for the HopeBot intro.' };
     try {
       const m = await import('../components/hopebotIntro.js');
+      if (!stillCurrent()) return null;
       return await m.requestHopebotIntro(introPatientId, callId);
     } catch {
       return { ok: false, error: 'The HopeBot request was not confirmed. Refresh the family card before trying again.' };
@@ -2214,31 +2286,41 @@ async function submitCallLog() {
     return;
   }
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:17px;height:17px;border-width:2.5px"></span>Saving…'; }
+  portalSaving = operation;
   stopTimer();
   try {
     // Duplicate guard: if this caregiver mentor already logged a call for
     // this patient in the last few minutes (double-tap, or a second device),
     // don't create a second row, just advance the queue. This is what was
     // inflating "completed" counts (5 → 7).
+    let dup = [];
     try {
       const since = new Date(Date.now() - 3 * 60 * 1000).toISOString();
-      const { data: dup } = await sb.from('call_logs').select('id')
-        .eq('patient_id', currentPatient.patient_id).eq('caller_id', me.id)
+      const { data } = await sb.from('call_logs').select('id')
+        .eq('patient_id', patientId).eq('caller_id', callerId)
         .gte('call_date', since).limit(1);
-      if (dup && dup.length) {
+      if (!stillCurrent()) return;
+      dup = data || [];
+    } catch (_) { if (!stillCurrent()) return; /* lookup failure retains the existing best-effort duplicate policy */ }
+    if (!stillCurrent()) return;
+    if (dup.length) {
+        confirmedCallId = dup[0].id;
         const intro = await requestIntro(dup[0].id);
+        if (!stillCurrent()) return;
         showToast(intro ? intro.ok ? 'Call already saved. HopeBot intro is queued; delivery is not confirmed.'
           : `Call already saved. ${intro.error}` : 'Already logged for this person a moment ago, not duplicating',
         intro && !intro.ok ? 'warning' : 'info', intro ? 12000 : 4000);
         // The recording joins the log that was saved, rather than waiting for the sweep.
         if (form.recording?.consentId) await attachRecordingToLog(dup[0].id, form.recording);
+        if (!stillCurrent()) return;
         recordingSection?.dispose(); recordingSection = null;
-        await sb.rpc('complete_queue_call', { p_queue_id: currentQueueId, p_status: 'completed' });
+        const { error: completeError } = await sb.rpc('complete_queue_call', { p_queue_id: queueId, p_status: 'completed' });
+        if (!stillCurrent()) return;
+        if (completeError) throw completeError;
         clearActive();
-        setTimeout(() => getNextCall(), 300);
+        await offerSavedCallFeedback(dup[0].id);
         return;
-      }
-    } catch (_) { /* guard is best-effort; never block a real log */ }
+    }
 
     const callerName = me.full_name ? me.full_name.toUpperCase() : null;
     const callAt = new Date().toISOString();
@@ -2253,7 +2335,7 @@ async function submitCallLog() {
       condition: form.condition || null, services: form.services, whatsapp: form.whatsapp, social: form.social,
       whatsapp_link_sent: form.waLink, consent_taken: form.consent };
     const { data: callLog, error } = await sb.from('call_logs').insert({
-      patient_id: currentPatient.patient_id, caller_id: me.id, contacted_by_name: callerName,
+      patient_id: patientId, caller_id: callerId, contacted_by_name: callerName,
       call_date: callAt, dial_status: form.dialStatus,
       call_duration_mins: Math.ceil(timerSeconds / 60) || null,
       receptiveness_bucket: connected ? form.receptiveness : null,
@@ -2270,7 +2352,9 @@ async function submitCallLog() {
       next_followup_date: followUp ? followUp + 'T00:00:00Z' : null,
       followup_strategy_notes: form.strategy.trim() || null, lead_source: 'other',
     }).select().single();
+    if (!stillCurrent()) return;
     if (error) throw error;
+    confirmedCallId = callLog?.id || 'unconfirmed';
 
     if (form.services.length > 0 || (form.consent === true && !form.consentSaved)) {
       const now = new Date().toISOString(); const patch = {};
@@ -2282,19 +2366,24 @@ async function submitCallLog() {
       }
       // RPC instead of a direct update: plain RLS blocks coverage callers
       // and unassigned new leads. The queue claim is the authorisation.
-      const { error: pErr } = await sb.rpc('update_patient_from_call', { p_patient_id: currentPatient.patient_id, p_fields: patch });
+      const { error: pErr } = await sb.rpc('update_patient_from_call', { p_patient_id: patientId, p_fields: patch });
+      if (!stillCurrent()) return;
       if (pErr) console.warn('Patient update failed:', pErr.message);
     }
     // sql/166: the family's answer about recording, and its recording, join this
     // log. Never blocks it; the old silent upload that saved nothing is gone.
     if (callLog && form.recording?.consentId) await attachRecordingToLog(callLog.id, form.recording);
+    if (!stillCurrent()) return;
     const intro = callLog?.id ? await requestIntro(callLog.id) : null;
+    if (!stillCurrent()) return;
     recordingSection?.dispose(); recordingSection = null;
 
     const queueStatus = (form.dialStatus === 'callback_requested') ? 'callback' : 'completed';
-    await sb.rpc('complete_queue_call', { p_queue_id: currentQueueId, p_status: queueStatus,
+    const { error: completeError } = await sb.rpc('complete_queue_call', { p_queue_id: queueId, p_status: queueStatus,
       p_next_followup_date: followUp ? followUp + 'T00:00:00Z' : null, p_strategy_notes: form.strategy.trim() || null,
       p_receptiveness: connected ? form.receptiveness : null });
+    if (!stillCurrent()) return;
+    if (completeError) throw completeError;
 
     clearActive();
     if (callLog?.id) {
@@ -2306,11 +2395,60 @@ async function submitCallLog() {
     showToast(intro ? intro.ok ? `${callMessage}. HopeBot intro is queued; delivery is not confirmed.`
       : `${callMessage}. ${intro.error} Open the family card to check or retry.` : callMessage,
     intro && !intro.ok ? 'warning' : 'success', intro ? 12000 : 4000);
-    setTimeout(() => getNextCall(), 400);
+    await offerSavedCallFeedback(callLog?.id);
   } catch (err) {
+    if (!stillCurrent()) return;
+    if (confirmedCallId) {
+      clearActive();
+      showToast('The call is saved, but a later step could not finish. Check Call Logs, recording and patient details before adding anything again.', 'warning', 10000);
+      await offerSavedCallFeedback(confirmedCallId);
+      return;
+    }
     showToast('Could not save: ' + err.message, 'error');
     if (btn) { btn.disabled = false; btn.innerHTML = `${icon('check')}Submit &amp; next call`; }
+  } finally {
+    if (portalSaving === operation) portalSaving = null;
   }
+}
+
+async function offerSavedCallFeedback(callId) {
+  const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  if (!callingWritable() || portalFeedback) return;
+  if (!uuid(callId)) { showToast('Check the saved call in Call Logs before recording feedback.', 'warning'); await mountReady(); return; }
+  const generation = callingGeneration, identity = callingIdentity(), route = window.location.hash;
+  const portal = root(); let feedback = null, subscription, observer, disposed = false, modal;
+  const body = document.createElement('div');
+  body.innerHTML = '<p>Your call is saved. Record what was said about HopeBot, or continue with usage left Not asked / unknown. Use Save feedback before leaving this screen.</p><div data-portal-feedback></div><p data-portal-feedback-error role="status"></p><div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:14px"><button type="button" class="btn btn-primary" data-portal-next>Continue to next call</button><button type="button" class="btn btn-secondary" data-portal-list>Return to daily list</button></div>';
+  const current = () => !disposed && portalFeedback === controller && modal?.isCurrentModal() && callingCurrent(generation)
+    && identity === callingIdentity() && route === window.location.hash && callingWritable();
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true; feedback?.dispose(); subscription?.unsubscribe(); observer?.disconnect();
+    window.removeEventListener('hashchange', check); if (portal) portal.inert = false;
+    body.replaceChildren(); modal?.closeOwnedModal(); if (portalFeedback === controller) portalFeedback = null;
+  };
+  const check = () => { if (!current()) dispose(); };
+  const controller = { dispose }; portalFeedback = controller;
+  if (portal) portal.inert = true;
+  modal = showModal({ title: 'Call saved - HopeBot feedback', content: body, size: 'lg', dismissible: false });
+  window.addEventListener('hashchange', check);
+  subscription = getSupabase().auth?.onAuthStateChange?.(check)?.data?.subscription;
+  observer = new MutationObserver(check); observer.observe(document.body, { childList: true, subtree: true });
+  async function finish(next) {
+    if (!current()) return;
+    const dirty = [...body.querySelectorAll('[data-portal-feedback] input,[data-portal-feedback] textarea')].some(control =>
+      ['radio','checkbox'].includes(control.type) ? control.checked !== control.defaultChecked : control.value !== control.defaultValue);
+    if (dirty && !window.confirm('Leave these unsaved HopeBot feedback entries? Your call is already saved.')) return;
+    dispose(); await mountReady();
+    if (next && callingWritable()) await getNextCall();
+  }
+  body.querySelector('[data-portal-next]').onclick = () => { finish(true).catch(() => { if (callingCurrent()) showToast('Call saved. Refresh your daily list to continue.', 'warning'); }); };
+  body.querySelector('[data-portal-list]').onclick = () => { finish(false).catch(() => { if (callingCurrent()) showToast('Call saved. Refresh your daily list.', 'warning'); }); };
+  try {
+    const module = await import('../components/hopebotFeedback.js');
+    if (!current()) return;
+    feedback = module.mountHopebotFeedback(body.querySelector('[data-portal-feedback]'), callId, { anchorType: 'patient_call', isCurrent: current });
+  } catch { if (current()) body.querySelector('[data-portal-feedback-error]').textContent = 'Feedback could not load. Your call is saved; reopen it from Call Logs to add feedback later.'; }
 }
 
 async function mountQueueEmpty() {
@@ -2346,6 +2484,7 @@ async function mountQueueEmpty() {
 }
 
 function resetState() {
+  clearHopebotUsage();
   clearSaturdaySession();
   recordingSection?.dispose(); recordingSection = null;
   currentQueueId = null; currentPatient = null; currentPatientPitches = null; currentPatientPriority = null; currentHistory = []; currentPatientSessions = [];

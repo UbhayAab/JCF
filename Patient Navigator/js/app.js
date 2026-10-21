@@ -2,7 +2,7 @@
 // Patient Navigator: Main App Controller
 // ============================================================
 
-import { initAuth, getCurrentUser, getCurrentProfile, getUserRole, signIn, isImpersonating, stopImpersonation } from './auth.js';
+import { initAuth, getCurrentUser, getCurrentProfile, getRealProfile, getUserRole, signIn, isImpersonating, stopImpersonation } from './auth.js';
 import { sanitize } from './utils/validators.js';
 import { registerRoute, initRouter, navigate, setAuthGuard, setRoleGuard } from './router.js';
 import { renderSidebar, bindSidebarSync } from './components/sidebar.js';
@@ -505,7 +505,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261021a';  // bumped on every breaking deploy
+const APP_BUILD = '20261021b';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -573,6 +573,15 @@ async function init() {
   registerRoute('intake', (c) => renderIntake(c), { requiresAuth: true, roles: UPLOAD_ROLES });
   registerRoute('nutrition', (c) => renderNutrition(c), { requiresAuth: true, roles: ['nutritionist', 'manager', 'admin'] });
   registerRoute('nutrition-tracker', renderNutritionTracker, { requiresAuth: true });
+  registerRoute('hopebot-feedback', async (c) => {
+    const account = getCurrentUser()?.id, route = window.location.hash;
+    const allowed = () => c.isConnected && route === window.location.hash && account === getCurrentUser()?.id
+      && !isImpersonating() && getCurrentProfile()?.id === account && getRealProfile()?.id === account
+      && getRealProfile()?.is_active === true && ['admin', 'manager'].includes(getRealProfile()?.role);
+    if (!allowed()) { c.innerHTML = '<p role="status">HopeBot feedback requires your active signed-in manager account. Exit Open as to continue.</p>'; return; }
+    const module = await import('./pages/hopebotFeedback.js');
+    if (allowed()) return module.renderHopebotFeedback(c);
+  }, { requiresAuth: true, roles: ['admin', 'manager'] });
   registerRoute('leaderboard', (c) => renderLeaderboard(c), { requiresAuth: true, roles: ['admin', 'manager'] });
   // Concerns: managers triage; calling roles can follow the flags they raised.
   registerRoute('concerns', (c) => renderConcerns(c), { requiresAuth: true, roles: CARE_ROLES });

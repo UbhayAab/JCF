@@ -15,7 +15,7 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
-import { isManagerOrAdmin, getCurrentProfile } from '../auth.js';
+import { isManagerOrAdmin, getCurrentUser, getCurrentProfile, getRealProfile, isImpersonating } from '../auth.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal } from '../components/modal.js';
 import { openCallForm } from '../components/callForm.js';
@@ -36,6 +36,13 @@ const NOT_REACHED = ['no_answer', 'busy', 'voicemail'];
 
 const PAGE_SIZE = 25;
 let currentPage = 1;
+const callUuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+const callAccount = () => JSON.stringify([getCurrentUser()?.id, getRealProfile()?.id, getCurrentProfile()?.id, isImpersonating()]);
+function realCallManager() {
+  const real = getRealProfile();
+  return !isImpersonating() && real?.id === getCurrentUser()?.id && real?.id === getCurrentProfile()?.id
+    && real?.is_active === true && ['manager', 'admin'].includes(real.role) && (!real.ends_on || real.ends_on >= indiaCallDay(new Date()));
+}
 
 // Who logged the call vs who actually spoke to the family. They differ when a
 // call is handed over: a colleague calls because they share the family's
@@ -51,7 +58,7 @@ function spokeWith(c) {
 }
 
 export async function renderCalls(container) {
-  const canExport = isManagerOrAdmin();
+  const canExport = realCallManager();
   container.innerHTML = `
     <div class="page-header">
       <div>
@@ -156,13 +163,24 @@ async function loadTodayAssignments() {
   const sb = getSupabase();
   const el = document.getElementById('today-view');
   if (!el) return;
+  const account = callAccount(), route = window.location.hash, token = {};
+  el._assignmentRequest = token;
+  const current = () => el.isConnected && document.getElementById('today-view') === el && el._assignmentRequest === token
+    && account === callAccount() && route === window.location.hash && realCallManager();
+  if (!current()) { el.innerHTML = '<p role="status">Assigned today requires your active signed-in manager account.</p>'; return; }
   el.innerHTML = `<div class="table-container"><div style="padding:var(--s5)">${renderSkeleton(6)}</div></div>`;
   try {
-    const { data, error } = await sb.rpc('get_daily_call_assignments');
+    const { data, error } = await sb.rpc('get_daily_call_assignments_v2');
+    if (!current()) return;
     if (error) throw error;
-    const rows = data || [];
+    if (!Array.isArray(data) || data.some(r => !r || !callUuid(r.assigned_to)
+      || (r.call_kind === 'patient_call' ? r.kind !== 'patient' || !callUuid(r.patient_id) || !callUuid(r.queue_id)
+        : r.call_kind === 'lead_call' ? r.kind !== 'lead' || !callUuid(r.lead_id) || !callUuid(r.work_id) || r.patient_id != null || r.queue_id != null : true))) {
+      throw new Error('Assignments returned an unconfirmed patient or lead identity. Refresh before opening a record.');
+    }
+    const rows = [...data];
     if (!rows.length) {
-      el.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('clock')}</div><h4>No one is due for a call today</h4><p>Everyone's caught up, or today's list hasn't been built yet.</p></div>`;
+      el.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('clock')}</div><h4>No admitted calls for today</h4><p>There may still be future, held or capacity-waiting work in HopeBot feedback and Team &amp; Queue.</p></div>`;
       return;
     }
     const overdue = r => Number(r.overdue_days) || 0;
@@ -174,20 +192,26 @@ async function loadTodayAssignments() {
           <strong>${rows.length}</strong> ${rows.length === 1 ? 'person' : 'people'} on today's routine and additional lists across <strong>${mentors.size}</strong> team member${mentors.size === 1 ? '' : 's'}. Other backlog stays in Team &amp; Queue.
         </div>
         <table class="data-table">
-          <thead><tr><th>Assigned to</th><th>Patient</th><th>Phone</th><th>Status</th></tr></thead>
+          <thead><tr><th>Assigned to</th><th>Patient or lead</th><th>Record</th><th>Status</th></tr></thead>
           <tbody>
-            ${rows.map(r => { const d = overdue(r);
-              return `<tr class="row-link" data-pid="${r.patient_id}" tabindex="0">
+            ${rows.map((r, index) => { const d = overdue(r), lead = r.call_kind === 'lead_call', status = r.status || r.q_status || 'pending';
+              return `<tr>
                 <td>${r.assigned_name ? sanitize(r.assigned_name) : '<span style="color:var(--ink-4)">Unassigned</span>'}</td>
-                <td><strong>${sanitize(r.full_name || 'N/A')}</strong>${r.patient_code ? `<br><span style="font-size:12px;color:var(--ink-3)">${sanitize(r.patient_code)}</span>` : ''}</td>
-                <td class="cell-mono">${sanitize(r.phone_full || 'N/A')}</td>
-                <td><span class="badge badge-${r.status === 'in_progress' ? 'info' : r.status === 'callback' ? 'gold' : 'neutral'}">${capitalize((r.status || '').replace('_', ' '))}</span><div class="due-meta wraps">${sanitize(r.lane || '')}</div>${d ? ` <span class="badge badge-${d >= 7 ? 'danger' : 'warn'}">${d}d overdue</span>` : ''}</td>
+                <td><strong>${sanitize(r.full_name || 'Name not recorded')}</strong>${r.patient_code ? `<br><span style="font-size:12px;color:var(--ink-3)">${sanitize(r.patient_code)}</span>` : ''}${lead ? '<div class="due-meta wraps">Unlinked lead - no verified Patient ID</div>' : ''}</td>
+                <td><button type="button" class="btn btn-ghost btn-sm" style="white-space:normal" data-assignment="${index}">${lead ? 'Review in HopeBot feedback' : 'Open patient'}</button></td>
+                <td><span class="badge badge-${status === 'in_progress' ? 'info' : status === 'callback' ? 'gold' : 'neutral'}">${sanitize(capitalize(status.replaceAll('_', ' ')))}</span><div class="due-meta wraps">${sanitize(r.lane || '')}</div>${d ? ` <span class="badge badge-${d >= 7 ? 'danger' : 'warn'}">${d}d overdue</span>` : ''}</td>
               </tr>`; }).join('')}
           </tbody>
         </table>
       </div>`;
-    el.querySelectorAll('tr[data-pid]').forEach(tr => tr.addEventListener('click', () => navigate('patients/' + tr.dataset.pid)));
+    el.querySelectorAll('[data-assignment]').forEach(button => button.addEventListener('click', () => {
+      if (!current()) return;
+      const row = rows[Number(button.dataset.assignment)];
+      if (row?.call_kind === 'patient_call' && callUuid(row.patient_id)) navigate('patients/' + row.patient_id);
+      else if (row?.call_kind === 'lead_call' && callUuid(row.work_id)) navigate('hopebot-feedback');
+    }));
   } catch (e) {
+    if (!current()) return;
     el.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Couldn't load assignments</h4><p>${sanitize(e.message)}</p></div>`;
   }
 }
@@ -240,6 +264,10 @@ async function loadCalls() {
   const daysFilter = document.getElementById('filter-days')?.value || '';
   const tableBody = document.getElementById('calls-table-body');
   if (!tableBody) return;
+  const account = callAccount(), route = window.location.hash, token = {};
+  tableBody._callsRequest = token;
+  const current = () => tableBody.isConnected && document.getElementById('calls-table-body') === tableBody
+    && tableBody._callsRequest === token && account === callAccount() && route === window.location.hash;
 
   try {
     // Left-embed patients by default so a caller's own calls survive a
@@ -271,6 +299,7 @@ async function loadCalls() {
     }
 
     const { data, count, error } = await query;
+    if (!current()) return;
     if (error) throw error;
 
     if (!data || data.length === 0) {
@@ -309,7 +338,7 @@ async function loadCalls() {
 
     const byId = Object.fromEntries(data.map(c => [c.id, c]));
     tableBody.querySelectorAll('[data-call]').forEach(row => {
-      const open = () => showCallDetail(byId[row.dataset.call]);
+      const open = () => { if (current()) showCallDetail(byId[row.dataset.call]); };
       row.addEventListener('click', open);
       row.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
     });
@@ -328,6 +357,7 @@ async function loadCalls() {
       document.getElementById('calls-next')?.addEventListener('click', () => { currentPage++; loadCalls(); });
     }
   } catch (err) {
+    if (!current()) return;
     console.error('Load calls error:', err);
     showToast('Failed to load calls: ' + err.message, 'error');
   }
@@ -335,6 +365,10 @@ async function loadCalls() {
 
 function showCallDetail(c) {
   if (!c) return;
+  const account = callAccount(), route = window.location.hash;
+  let feedback = null, modal;
+  const current = () => el.isConnected && modal?.isCurrentModal?.() && account === callAccount() && route === window.location.hash;
+  const disposeFeedback = () => { feedback?.dispose(); feedback = null; };
   const cond = CONDITIONS.find(x => x.key === c.patient_condition);
   const reqs = c.structured?.requirements || [];
   const el = document.createElement('div');
@@ -359,18 +393,26 @@ function showCallDetail(c) {
     ${c.feedback_patient ? `<p style="font:var(--t-sm);font-style:italic;color:var(--ink-2);margin:0 0 6px">“${sanitize(c.feedback_patient)}” · patient</p>` : ''}
     ${c.feedback_caregiver ? `<p style="font:var(--t-sm);font-style:italic;color:var(--ink-2);margin:0 0 6px">“${sanitize(c.feedback_caregiver)}” · caregiver</p>` : ''}
     ${c.followup_strategy_notes ? `<div class="strategy" style="margin-top:var(--s3)"><div class="strategy-title" style="margin-bottom:4px">Note for the next caller</div><div class="strategy-body">${sanitize(c.followup_strategy_notes)}</div></div>` : ''}
+    <div data-call-hopebot-feedback style="margin-top:16px;min-width:0"></div>
     <div class="form-actions">
-      ${canCorrectCall(c) ? `<button class="btn btn-ghost" id="cd-edit" style="margin-right:auto">${icon('edit')}Edit call</button>` : ''}
+      ${!isImpersonating() && canCorrectCall(c) ? `<button class="btn btn-ghost" id="cd-edit" style="margin-right:auto">${icon('edit')}Edit call</button>` : ''}
       <button class="btn btn-secondary" id="cd-close">Close</button>
       ${c.patients?.id ? `<button class="btn btn-primary" id="cd-open-patient">${icon('user')}Open patient</button>` : ''}
     </div>
   `;
-  showModal({ title: `Call · ${sanitize(c.patients?.full_name || '')}`, content: el, size: 'lg' });
+  modal = showModal({ title: `Call · ${sanitize(c.patients?.full_name || '')}`, content: el, size: 'lg', onClose: disposeFeedback });
+  if (callUuid(c.id)) import('../components/hopebotFeedback.js').then(module => {
+    if (!current()) return;
+    feedback = module.mountHopebotFeedback(el.querySelector('[data-call-hopebot-feedback]'), c.id,
+      { anchorType: 'patient_call', preview: () => isImpersonating(), isCurrent: current });
+  }).catch(() => {
+    if (current()) el.querySelector('[data-call-hopebot-feedback]').textContent = 'HopeBot feedback could not load. Close and reopen this saved call to try again.';
+  });
   // Its recording, for those allowed to hear it (RLS decides), played inside this sheet.
   recording.decorateRecordings(el).catch((e) => console.warn('[calls] recording unavailable:', e.message));
-  el.querySelector('#cd-close').addEventListener('click', () => closeModal());
-  el.querySelector('#cd-edit')?.addEventListener('click', () => openEditCall(c));
-  el.querySelector('#cd-open-patient')?.addEventListener('click', () => { closeModal(); navigate('patients/' + c.patients.id); });
+  el.querySelector('#cd-close').addEventListener('click', () => { if (current()) { disposeFeedback(); modal.closeOwnedModal(); } });
+  el.querySelector('#cd-edit')?.addEventListener('click', () => { if (current() && !isImpersonating()) { disposeFeedback(); openEditCall(c); } });
+  el.querySelector('#cd-open-patient')?.addEventListener('click', () => { if (current() && callUuid(c.patients.id)) { disposeFeedback(); modal.closeOwnedModal(); navigate('patients/' + c.patients.id); } });
 }
 
 // ---- Who may correct a logged call ----
