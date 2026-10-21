@@ -8,7 +8,7 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
-import { getCurrentProfile, isManagerOrAdmin, getUserRole } from '../auth.js';
+import { getCurrentProfile, isManagerOrAdmin, getUserRole, isImpersonating } from '../auth.js';
 import { formatRelativeTime, capitalize } from '../utils/formatters.js';
 import { measureLabel } from '../utils/catalog.js';
 import { showToast } from '../components/toast.js';
@@ -145,20 +145,31 @@ async function loadCallerAvailability() {
   const el = document.getElementById('caller-avail');
   if (!el || !me?.id) return;
   let available = true, summary = { pending: 0, follow_ups: 0, new_leads: 0, done_today: 0 };
-  try { const { data } = await sb.from('caller_availability').select('available').eq('caller_id', me.id).eq('day', new Date().toISOString().slice(0, 10)).maybeSingle(); available = data ? data.available : true; } catch {}
-  try { const { data } = await sb.rpc('get_worklist_summary', { p_caller_id: me.id }); if (data) summary = data; } catch {}
+  try { const { data } = await sb.from('caller_availability').select('available').eq('caller_id', me.id).eq('day', new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })).maybeSingle(); available = data ? data.available : true; } catch {}
+  try {
+    const { data, error } = await sb.rpc('get_worklist_summary', { p_caller_id: me.id });
+    if (error || !data) throw error || new Error('Summary unavailable'); summary = data;
+  } catch {
+    if (el.isConnected) el.innerHTML = '<div class="card" style="padding:16px"><p class="due-meta wraps">Could not load your daily list. Your work has not been marked finished.</p><button type="button" class="btn btn-secondary" id="daily-summary-retry">Try again</button></div>';
+    document.getElementById('daily-summary-retry')?.addEventListener('click', loadCallerAvailability); return;
+  }
   el.innerHTML = `
     <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:16px 20px">
       <div id="avail-open" style="display:flex;align-items:center;gap:12px;cursor:pointer;min-width:0" title="Open your worklist">
         <span class="stat-ico ${available ? 'ok' : 'warn'}">${icon(available ? 'checkCircle' : 'clock')}</span>
         <div style="min-width:0"><div class="info-value">${available ? "You're on for calls today" : "You're marked off today"}</div>
-          <div class="due-meta wraps">${summary.pending} to reach · ${summary.follow_ups} follow-ups · ${summary.new_leads} new · ${summary.done_today} done ${icon('arrowRight')}</div></div>
+          <div class="due-meta wraps">${summary.pending} on today's list · ${summary.follow_ups} follow-ups · ${summary.new_leads} new · ${Number(summary.other_calls || 0)} other ${icon('arrowRight')}</div>
+          ${summary.plan_total != null ? `<div class="due-meta wraps">Daily routine: ${Number(summary.routine_remaining)} left of ${Number(summary.plan_total)} planned · ${Number(summary.additional_pending || 0)} additional · ${Number(summary.done_today)} call logs today.</div>` : ''}
+          ${summary.backlog ? `<div class="due-meta wraps">${Number(summary.backlog)} other due tasks wait for future daily plans. Today's routine does not refill.</div>` : ''}</div>
       </div>
-      <button class="btn ${available ? 'btn-secondary' : 'btn-primary'} btn-sm" id="dash-avail">${available ? 'Mark me off today' : "I'm calling today"}</button>
+      ${isImpersonating() ? '<p class="due-meta wraps">Preview only. Return to your own account to change availability.</p>' : ''}
+      <button class="btn ${available ? 'btn-secondary' : 'btn-primary'} btn-sm" id="dash-avail" ${isImpersonating() ? 'disabled' : ''}>${available ? 'Mark me off today' : "I'm calling today"}</button>
     </div>`;
   document.getElementById('avail-open')?.addEventListener('click', () => navigate('calling'));
   document.getElementById('dash-avail')?.addEventListener('click', async () => {
-    try { await sb.rpc('mark_availability', { p_available: !available });
+    if (isImpersonating()) { showToast('Return to your own account to change availability.', 'info'); return; }
+    try { const { error } = await sb.rpc('mark_availability', { p_available: !available, p_day: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) });
+      if (error) throw error;
       showToast(!available ? "You're on for calls today" : "Marked off. Your patients will be covered", !available ? 'success' : 'info');
       loadCallerAvailability();
     } catch (e) { showToast(e.message, 'error'); }
@@ -329,8 +340,8 @@ async function loadStats() {
       hero.innerHTML = `
         <div class="hero-card teal"><span class="hc-ico">${icon('handHeart')}</span><div class="hc-label">Reached today</div><div class="hc-num">${connected}</div>
           <div class="hc-sub">${totalCalls ? `of ${totalCalls} ${totalCalls === 1 ? 'call' : 'calls'} connected` : 'No calls logged yet today'}</div></div>
-        <div class="hero-card paper" id="hero-due" ${canCall ? 'style="cursor:pointer" title="Open the calling portal"' : ''}><span class="hc-ico">${icon('clock')}</span><div class="hc-label">Check-ins due</div><div class="hc-num">${due}</div>
-          <div class="hc-sub">${due ? 'Follow-ups and callbacks waiting' : "You're all caught up."}</div></div>`;
+        <div class="hero-card paper" id="hero-due" ${canCall ? 'style="cursor:pointer" title="Open the calling portal"' : ''}><span class="hc-ico">${icon('clock')}</span><div class="hc-label">Today's call list</div><div class="hc-num">${due}</div>
+          <div class="hc-sub">${due ? 'Daily routine and explicit additional work' : 'No calls on the daily list. Backlog waits for future plans.'}</div></div>`;
       if (canCall) document.getElementById('hero-due')?.addEventListener('click', () => navigate('calling'));
     }
     const grid = document.getElementById('stats');

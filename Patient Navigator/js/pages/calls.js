@@ -158,23 +158,20 @@ async function loadTodayAssignments() {
   if (!el) return;
   el.innerHTML = `<div class="table-container"><div style="padding:var(--s5)">${renderSkeleton(6)}</div></div>`;
   try {
-    const { data, error } = await sb.rpc('get_queue_board');
+    const { data, error } = await sb.rpc('get_daily_call_assignments');
     if (error) throw error;
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const dueToday = (r) => !r.scheduled_for || r.scheduled_for.slice(0, 10) <= todayStr;
-    const rows = (data || []).filter(r => ['pending', 'in_progress', 'callback'].includes(r.status) && dueToday(r));
+    const rows = data || [];
     if (!rows.length) {
       el.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('clock')}</div><h4>No one is due for a call today</h4><p>Everyone's caught up, or today's list hasn't been built yet.</p></div>`;
       return;
     }
-    const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
-    const overdue = (r) => { if (!r.generated_for) return 0; const g = new Date(r.generated_for); g.setHours(0, 0, 0, 0); return Math.max(0, Math.round((midnight - g) / 86400000)); };
+    const overdue = r => Number(r.overdue_days) || 0;
     rows.sort((a, b) => (a.assigned_name || '~').localeCompare(b.assigned_name || '~') || (a.full_name || '').localeCompare(b.full_name || ''));
     const mentors = new Set(rows.map(r => r.assigned_name).filter(Boolean));
     el.innerHTML = `
       <div class="table-container">
         <div style="padding:12px 16px;border-bottom:1px solid var(--line);font:var(--t-sm);color:var(--ink-2)">
-          <strong>${rows.length}</strong> ${rows.length === 1 ? 'person' : 'people'} assigned for today's calling across <strong>${mentors.size}</strong> caregiver mentor${mentors.size === 1 ? '' : 's'}.
+          <strong>${rows.length}</strong> ${rows.length === 1 ? 'person' : 'people'} on today's routine and additional lists across <strong>${mentors.size}</strong> team member${mentors.size === 1 ? '' : 's'}. Other backlog stays in Team &amp; Queue.
         </div>
         <table class="data-table">
           <thead><tr><th>Assigned to</th><th>Patient</th><th>Phone</th><th>Status</th></tr></thead>
@@ -184,7 +181,7 @@ async function loadTodayAssignments() {
                 <td>${r.assigned_name ? sanitize(r.assigned_name) : '<span style="color:var(--ink-4)">Unassigned</span>'}</td>
                 <td><strong>${sanitize(r.full_name || 'N/A')}</strong>${r.patient_code ? `<br><span style="font-size:12px;color:var(--ink-3)">${sanitize(r.patient_code)}</span>` : ''}</td>
                 <td class="cell-mono">${sanitize(r.phone_full || 'N/A')}</td>
-                <td><span class="badge badge-${r.status === 'in_progress' ? 'info' : r.status === 'callback' ? 'gold' : 'neutral'}">${capitalize((r.status || '').replace('_', ' '))}</span>${d ? ` <span class="badge badge-${d >= 7 ? 'danger' : 'warn'}">${d}d overdue</span>` : ''}</td>
+                <td><span class="badge badge-${r.status === 'in_progress' ? 'info' : r.status === 'callback' ? 'gold' : 'neutral'}">${capitalize((r.status || '').replace('_', ' '))}</span><div class="due-meta wraps">${sanitize(r.lane || '')}</div>${d ? ` <span class="badge badge-${d >= 7 ? 'danger' : 'warn'}">${d}d overdue</span>` : ''}</td>
               </tr>`; }).join('')}
           </tbody>
         </table>

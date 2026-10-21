@@ -30,16 +30,17 @@ export async function renderTeam(container) {
   container.innerHTML = `
     <div class="page-header">
       <h1>Team &amp; Queue</h1>
-      <div class="flex gap-2">
+      <div class="flex gap-2" style="flex-wrap:wrap">
         <button class="btn btn-secondary" id="add-leads-btn">${icon('userPlus')}Add new leads</button>
         <button class="btn btn-primary" id="assign-patients-btn">${icon('userPlus')}Assign patients</button>
         <button class="btn btn-primary" id="build-btn">${icon('refresh')}Build today's assignments</button>
+        <button class="btn btn-secondary" id="daily-limit-btn">${icon('calendar')}Daily call limits</button>
         ${canCreateUsers ? `<button class="btn btn-secondary" id="invite-team-btn">${icon('users')}Invite member</button>` : ''}
       </div>
     </div>
     <div class="tabs" id="team-tabs">
       <button class="tab active" data-tab="availability">Availability today</button>
-      <button class="tab" data-tab="queue">Today's queue</button>
+      <button class="tab" data-tab="queue">Queue &amp; backlog</button>
       <button class="tab" data-tab="nutrition">Nutrition team</button>
       <button class="tab" data-tab="sessions">Saturday circles</button>
       <button class="tab" data-tab="holds">Not taking part</button>
@@ -52,6 +53,7 @@ export async function renderTeam(container) {
   document.getElementById('add-leads-btn')?.addEventListener('click', showBulkLeadModal);
   document.getElementById('assign-patients-btn')?.addEventListener('click', () => showAssignPatientsModal());
   document.getElementById('build-btn')?.addEventListener('click', buildAssignments);
+  document.getElementById('daily-limit-btn')?.addEventListener('click', openDailyLimit);
   document.querySelectorAll('#team-tabs .tab').forEach(tab => tab.addEventListener('click', () => {
     document.querySelectorAll('#team-tabs .tab').forEach(t => t.classList.remove('active')); tab.classList.add('active');
     if (tab.dataset.tab === 'queue') loadQueue();
@@ -70,6 +72,45 @@ export async function renderTeam(container) {
   const tabBtn = wantTab && document.querySelector(`#team-tabs .tab[data-tab="${wantTab}"]`);
   if (tabBtn) tabBtn.click();
   else await loadAvailability();
+}
+
+async function openDailyLimit() {
+  const sb = getSupabase();
+  try {
+    const [{ data: policy, error }, { data: team, error: rosterError }] = await Promise.all([
+      sb.rpc('get_daily_call_policy'), sb.rpc('get_team_availability')]);
+    if (error || rosterError) throw error || rosterError;
+    showModal({ title: 'Daily call limits', content: `<form id="daily-limit-form">
+      <p class="due-meta wraps">The default is ${Number(policy.default_limit)} routine calls per working day. A daily list stays fixed once shown. Changes apply to future daily plans. Smaller ramp limits still apply. Urgent requests and deliberately added extra calls stay separate.</p>
+      <label class="form-label" for="daily-limit-member">Whose limit</label>
+      <select class="form-select" id="daily-limit-member"><option value="">Team default</option>${(team || []).filter(r => ['caller','caregiver_mentor'].includes(r.role)).map(r => `<option value="${sanitize(r.caller_id)}">${sanitize(r.full_name)}</option>`).join('')}</select>
+      <label class="form-label" for="daily-limit-value" style="margin-top:12px">Routine calls per day (8 to 12)</label>
+      <input class="form-input" id="daily-limit-value" type="number" min="8" max="12" step="1" required value="${Number(policy.default_limit)}">
+      <p class="due-meta wraps" id="daily-limit-current"></p>
+      <p role="alert" class="due-meta wraps" id="daily-limit-error"></p>
+      <button class="btn btn-primary" type="submit" style="margin-top:12px">Save limit</button>
+    </form>` });
+    const form = document.getElementById('daily-limit-form'), member = form.querySelector('#daily-limit-member'), value = form.querySelector('#daily-limit-value');
+    let loadVersion = 0;
+    member.addEventListener('change', async () => {
+      const version = ++loadVersion; form.querySelector('button').disabled = true;
+      const { data, error } = await sb.rpc('get_daily_call_policy', { p_member: member.value || null });
+      if (!form.isConnected || version !== loadVersion) return;
+      form.querySelector('#daily-limit-error').textContent = error ? 'Could not load this limit. Choose again.' : '';
+      if (!error) { value.value = member.value ? data.effective_limit : data.default_limit; form.querySelector('#daily-limit-current').textContent = member.value && data.override_limit == null ? 'Currently follows the team default.' : ''; }
+      form.querySelector('button').disabled = !!error;
+    });
+    form.addEventListener('submit', async e => {
+      e.preventDefault(); const button = form.querySelector('button'); if (button.disabled) return;
+      button.disabled = true; member.disabled = true; value.disabled = true;
+      try {
+        const { error } = await sb.rpc('set_daily_call_limit', { p_limit: Number(value.value), p_member: member.value || null });
+        if (error) throw error;
+        if (form.isConnected) closeModal(); showToast('Limit saved. Existing daily lists stay fixed.', 'success');
+      } catch (err) { form.querySelector('#daily-limit-error').textContent = err.message || 'Limit did not save.'; }
+      finally { if (form.isConnected) { button.disabled = false; member.disabled = false; value.disabled = false; } }
+    });
+  } catch (err) { showToast('Could not load daily limits: ' + err.message, 'error'); }
 }
 
 // ---- Phone numbers: who HopeBot knows (sql/157, Fixboard #10) ----
@@ -599,7 +640,7 @@ async function loadAvailability() {
             <div class="tc-stats">
               <div class="tc-stat" title="Callable patients this person owns"><div class="tc-num">${c.owned_callable ?? 0}</div><div class="tc-lbl">owns (callable)</div></div>
               <div class="tc-stat" title="Owned patients nobody has ever dialled"><div class="tc-num ${(c.never_called ?? 0) > 0 ? 'accent' : 'muted'}">${c.never_called ?? 0}</div><div class="tc-lbl">never called</div></div>
-              <div class="tc-stat" title="Still to serve on today's list: target ~22/day"><div class="tc-num ${(c.servable_today ?? 0) > 22 ? 'over' : 'accent'}">${c.servable_today ?? 0}</div><div class="tc-lbl">on today's list</div></div>
+              <div class="tc-stat" title="Fixed daily routine plus explicit additional work; other due work waits"><div class="tc-num accent">${c.servable_today ?? 0}</div><div class="tc-lbl">on today's list</div></div>
             </div>
             <div class="tc-stats" style="border-top:none;padding-top:0">
               <div class="tc-stat" title="Calls completed today"><div class="tc-num">${c.done_today ?? 0}</div><div class="tc-lbl">done today</div></div>
@@ -608,8 +649,8 @@ async function loadAvailability() {
             </div>` : `
             <div class="tc-stats">
               <div class="tc-stat" title="Total patients this person owns"><div class="tc-num">${m.owned ?? 0}</div><div class="tc-lbl">patients</div></div>
-              <div class="tc-stat" title="Due today. Missed calls pile on here; target ~22/day"><div class="tc-num ${(m.today ?? 0) > 22 ? 'over' : 'accent'}">${m.today ?? 0}</div><div class="tc-lbl">today</div></div>
-              <div class="tc-stat" title="Scheduled for later days (spread ~22/day)"><div class="tc-num muted">${m.ahead ?? 0}</div><div class="tc-lbl">ahead</div></div>
+              <div class="tc-stat" title="Fixed daily routine plus explicit additional work"><div class="tc-num accent">${m.today ?? 0}</div><div class="tc-lbl">on today's list</div></div>
+              <div class="tc-stat" title="Waiting for a future plan, date or contact rest"><div class="tc-num muted">${m.ahead ?? 0}</div><div class="tc-lbl">waiting</div></div>
             </div>`;
           return `
           <div class="card team-card">
@@ -640,7 +681,7 @@ async function loadAvailability() {
       // try/catch never fired: a refused toggle just silently repainted the
       // old state. That is why managers reported the button doing nothing.
       btn.disabled = true;
-      const { error } = await sb.rpc('mark_availability_for', { p_caller_id: btn.dataset.id, p_available: !on });
+      const { error } = await sb.rpc('mark_availability_for', { p_caller_id: btn.dataset.id, p_available: !on, p_day: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) });
       btn.disabled = false;
       if (error) { showToast(error.message, 'error'); return; }
       // dataset decodes the escaped name: escape it again before it is HTML
@@ -776,6 +817,7 @@ function renderQueueShell() {
       <div class="qstat"><div class="qstat-num">${newCount}</div><div class="qstat-lbl">New leads</div></div>
       <div class="qstat"><div class="qstat-num">${followCount}</div><div class="qstat-lbl">Follow-ups</div></div>
     </div>
+    <p class="due-meta wraps">This is the full queue and backlog, including future work. Each caregiver's Calling list has a fixed daily routine. Use Add today only for a deliberate extra call, with a reason.</p>
     <div class="table-container">
       <div class="table-toolbar">
         <div class="table-search">
@@ -922,6 +964,8 @@ function applyAndRenderQueue() {
             ? `<span class="q-attempt" title="Dial attempts today">${r.attempts}/${r.max_attempts}</span>` : '';
           const moveBtn = canMove && ['pending', 'in_progress', 'callback'].includes(r.status)
             ? `<button class="btn btn-ghost btn-sm q-move-btn" data-qid="${r.queue_id}" data-pid="${r.patient_id}" title="Move this call to someone else on the same team">Move</button>` : '';
+          const extraBtn = canMove && r.assigned_to && !isNutritionRow(r) && ['pending','callback'].includes(r.status)
+            ? `<button type="button" class="btn btn-ghost btn-sm q-extra-btn" data-qid="${sanitize(r.queue_id)}">Add today</button>` : '';
           return `
           <tr class="row-link" data-pid="${r.patient_id}" tabindex="0">
             <td>
@@ -932,7 +976,7 @@ function applyAndRenderQueue() {
               </div>
             </td>
             <td><span class="badge badge-${tag.cls}">${tag.label}</span></td>
-            <td><div style="display:flex;align-items:center;gap:8px">${r.assigned_name ? sanitize(r.assigned_name) : '<span class="q-dim">Unassigned</span>'}${moveBtn}</div></td>
+            <td><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${r.assigned_name ? sanitize(r.assigned_name) : '<span class="q-dim">Unassigned</span>'}${moveBtn}${extraBtn}</div></td>
             <td><span class="badge badge-${QSTATUS_TONE[r.status] || 'neutral'}"><span class="dot"></span>${capitalize((r.status || '').replace('_', ' '))}</span>${attemptHint}${waitBadge(r)}</td>
             <td>${r.uploaded_at ? `<span title="${formatDateTime(r.uploaded_at)}">${formatDate(r.uploaded_at)}</span>` : '<span class="q-dim">N/A</span>'}</td>
             <td>${r.last_call_at ? formatRelativeTime(r.last_call_at) : '<span class="q-dim">Never</span>'}</td>
@@ -952,6 +996,28 @@ function applyAndRenderQueue() {
     e.stopPropagation();
     showMoveQueueModal(byQid[btn.dataset.qid]);
   }));
+  board.querySelectorAll('.q-extra-btn').forEach(btn => btn.addEventListener('click', e => {
+    e.stopPropagation(); openExtraCall(byQid[btn.dataset.qid]);
+  }));
+}
+
+function openExtraCall(row) {
+  if (!row) return;
+  showModal({ title: 'Add an extra call today', content: `<form id="extra-call-form">
+    <p class="due-meta wraps">Add ${sanitize(row.full_name || 'this family')} to ${sanitize(row.assigned_name || 'their caregiver')}'s additional work today. Their routine list stays fixed. Contact rest, holds and due dates still apply.</p>
+    <label class="form-label" for="extra-call-reason">Why is this needed today?</label><textarea class="form-input" id="extra-call-reason" required minlength="3" maxlength="500"></textarea>
+    <p role="alert" class="due-meta wraps" id="extra-call-error"></p><button class="btn btn-primary" type="submit">Add extra call</button></form>` });
+  const form = document.getElementById('extra-call-form');
+  form.addEventListener('submit', async e => {
+    e.preventDefault(); const button = form.querySelector('button'); if (button.disabled) return;
+    button.disabled = true;
+    try {
+      const { error } = await getSupabase().rpc('add_daily_call_extra', { p_queue: row.queue_id, p_reason: form.querySelector('textarea').value.trim() });
+      if (error) throw error;
+      if (form.isConnected) closeModal(); showToast('Extra call added separately from the daily routine.', 'success');
+    } catch (err) { if (form.isConnected) form.querySelector('#extra-call-error').textContent = err.message || 'Extra call did not save.'; }
+    finally { if (form.isConnected) button.disabled = false; }
+  });
 }
 
 // ---- Move a queued call to someone else on the same team (managers only) ----
@@ -992,7 +1058,7 @@ export async function showMoveQueueModal(row, { onMoved = loadQueue, handOver = 
             <span class="avatar" style="background:${avColor(m.full_name)}">${sanitize(inits(m.full_name))}</span>
             <span class="info-value" style="flex:1;min-width:0">${sanitize(m.full_name)}</span>
             ${!m.available ? '<span class="badge badge-danger">Off today</span>' : ''}
-            <span class="tc-num ${(!isNutRow && (m.today ?? 0) > 22) ? 'over' : 'muted'}" style="font-size:14px" title="${isNutRow ? 'Outreach calls waiting for them' : `Calls due today${(m.today ?? 0) > 22 ? ': already over the ~22/day target' : ''}`}">${m.today ?? 0} ${isNutRow ? 'to offer' : 'today'}</span>
+            <span class="tc-num muted" style="font-size:14px" title="${isNutRow ? 'Outreach calls waiting for them' : 'Current daily routine plus explicit additional calls'}">${m.today ?? 0} ${isNutRow ? 'to offer' : 'on the daily list'}</span>
           </label>`).join('')}
       </div>
       <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer">
@@ -1021,7 +1087,7 @@ export async function showMoveQueueModal(row, { onMoved = loadQueue, handOver = 
         });
         if (mvErr) throw mvErr;
         const n = res?.target_today ?? 0;
-        showToast(`Moved to ${target?.full_name || 'them'}: now has ${n} today${n > 22 ? ' (over the ~22/day target, keep an eye on their load)' : ''}`, 'success');
+        showToast(`Moved to ${target?.full_name || 'them'}: ${n} calls on their current daily list. Other work waits for a future plan unless you add it explicitly.`, 'success');
         closeModal();
         onMoved();
       } catch (err) { showToast(err.message, 'error'); btn.disabled = false; btn.innerHTML = `${icon('users')}Move call`; }

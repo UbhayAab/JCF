@@ -5,7 +5,7 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
-import { getCurrentProfile, getUserRole } from '../auth.js';
+import { getCurrentProfile, getUserRole, isImpersonating } from '../auth.js';
 import { showToast } from '../components/toast.js';
 import { openAssessmentFlow } from '../components/assessmentFlow.js';
 import { formatRelativeTime, capitalize } from '../utils/formatters.js';
@@ -299,7 +299,7 @@ export async function renderCalling(container) {
   me = getCurrentProfile();
   container.innerHTML = `<div id="portal-content"></div>`;
   if (!me?.id) { root().innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Not signed in</h4><p>Please sign in again.</p></div>`; return; }
-  const saved = loadActive();
+  const saved = isImpersonating() ? null : loadActive();
   if (saved && saved.queueId && saved.patient) { await restoreActive(saved); return; }
   await mountReady();
 }
@@ -319,6 +319,8 @@ function supervises() {
 // facts. Saying "you've worked through your list" to someone who never had one is
 // what made this look broken.
 function emptyReason(summary) {
+  if (summary.plan_total != null) return `Your daily routine list is finished or no longer callable. It will not refill today.${summary.backlog ? ` <strong>${Number(summary.backlog)}</strong> other due tasks are waiting for a future daily plan.` : ''} Urgent requests and a manager's explicit extra calls remain separate.`;
+  if (summary.backlog) return `No routine list is active for you right now. ${Number(summary.backlog)} due tasks are waiting for a daily plan. If you are marked off, they wait until you are calling again.`;
   if (summary.done_today > 0) {
     return `You have reached everyone on <strong>your</strong> list today: ${summary.done_today} done. Nothing further is queued for you.`;
   }
@@ -340,24 +342,34 @@ async function mountReady() {
   const sb = getSupabase();
   // current availability for today
   try {
-    const { data } = await sb.from('caller_availability').select('available').eq('caller_id', me.id).eq('day', new Date().toISOString().slice(0, 10)).maybeSingle();
+    const { data } = await sb.from('caller_availability').select('available').eq('caller_id', me.id).eq('day', new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })).maybeSingle();
     availableToday = data ? data.available : true;
   } catch { availableToday = true; }
 
   let summary = { pending: 0, follow_ups: 0, new_leads: 0, done_today: 0, overdue: 0, oldest_overdue_days: 0, scheduled_ahead: 0 };
-  try { const { data } = await sb.rpc('get_worklist_summary', { p_caller_id: me.id }); if (data) summary = data; } catch {}
+  try {
+    const { data, error } = await sb.rpc('get_worklist_summary', { p_caller_id: me.id });
+    if (error || !data) throw error || new Error('Summary unavailable');
+    summary = data;
+  } catch {
+    const el = root(); if (!el) return;
+    el.innerHTML = `<div class="ready"><div class="ready-card"><h2>Could not load your daily list</h2><p>Your work has not been marked finished. Check your connection and try again.</p><button type="button" class="btn btn-primary" id="daily-list-retry">Try again</button></div></div><div id="hb-requests"></div>`;
+    document.getElementById('daily-list-retry')?.addEventListener('click', mountReady);
+    mountHopebotRequests(document.getElementById('hb-requests'), { mode: 'calling' });
+    return;
+  }
 
-  // Today's progress + what's queued for the coming days (list is capped at
-  // 15/day; the rest is scheduled forward, so this stays manageable).
-  const total = (summary.done_today || 0) + (summary.pending || 0);
-  const pct = total ? Math.round((summary.done_today / total) * 100) : 0;
+  // Routine membership freezes once shown; consumed or unavailable slots never refill.
+  const routineLeft = summary.routine_remaining ?? summary.pending;
+  const total = summary.plan_total ?? ((summary.done_today || 0) + (summary.pending || 0));
+  const pct = total ? Math.round(Math.max(0, total - routineLeft) / total * 100) : 0;
   const overdue = summary.overdue || 0;
   const oldest = summary.oldest_overdue_days || 0;
   const ahead = summary.scheduled_ahead || 0;
   const catchupHTML = `
     <div class="catchup" style="border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px;background:var(--surface-2);margin:2px 0">
       <div style="display:flex;justify-content:space-between;align-items:center;font:var(--t-xs);color:var(--ink-3)">
-        <span>Today's progress</span><span><strong style="color:var(--ink)">${summary.done_today}</strong> done · ${summary.pending} to go</span>
+        <span>Daily routine${summary.plan_target != null ? ` · limit ${Number(summary.plan_target)}` : ''}</span><span><strong style="color:var(--ink)">${Number(routineLeft)}</strong> left of ${Number(total)} planned</span>
       </div>
       <div style="height:8px;background:var(--surface-3);border-radius:999px;overflow:hidden;margin:7px 0">
         <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,var(--primary-bright),var(--primary));transition:width .4s"></div>
@@ -365,8 +377,12 @@ async function mountReady() {
       ${overdue > 0
         ? `<div style="display:flex;align-items:center;gap:7px;font:var(--t-xs);color:var(${oldest >= 7 ? '--danger' : '--clay'})"><span style="width:15px;height:15px;display:inline-flex;flex:none">${icon('alertCircle')}</span><span><strong>${overdue} overdue</strong> · oldest ${oldest} day${oldest === 1 ? '' : 's'} behind: reach these first.</span></div>`
         : ahead > 0
-          ? `<div style="display:flex;align-items:center;gap:7px;font:var(--t-xs);color:var(--ink-3)"><span style="width:15px;height:15px;display:inline-flex;flex:none">${icon('calendar')}</span><span><strong style="color:var(--ink-2)">${ahead}</strong> more scheduled for the coming days: spread at about 22 a day.</span></div>`
-          : `<div style="display:flex;align-items:center;gap:7px;font:var(--t-xs);color:var(--ok)"><span style="width:15px;height:15px;display:inline-flex;flex:none">${icon('checkCircle')}</span>You're all caught up.</div>`}
+          ? `<div style="display:flex;align-items:center;gap:7px;font:var(--t-xs);color:var(--ink-3)"><span style="width:15px;height:15px;display:inline-flex;flex:none">${icon('calendar')}</span><span><strong style="color:var(--ink-2)">${ahead}</strong> waiting for their date or contact rest.</span></div>`
+          : `<div style="display:flex;align-items:center;gap:7px;font:var(--t-xs);color:var(--ok)"><span style="width:15px;height:15px;display:inline-flex;flex:none">${icon('checkCircle')}</span>No other calls on the current routine list.</div>`}
+      ${summary.plan_total != null ? `<div class="due-meta wraps" style="margin-top:8px">This routine list stays fixed today. ${Number(summary.additional_pending || 0)} additional urgent, manager-added or already underway. ${Number(summary.done_today || 0)} call logs saved today.</div>` : ''}
+      ${summary.prior_contacts ? `<div class="due-meta wraps">${Number(summary.prior_contacts)} families were already called before this plan; those calls consume today's limit.</div>` : ''}
+      ${summary.active_carried_pending ? `<div class="due-meta wraps">${Number(summary.active_carried_pending)} calls already underway when this plan opened stay available as additional work. They do not create new routine slots.</div>` : ''}
+      ${summary.backlog ? `<div class="due-meta wraps" style="margin-top:8px"><strong>${Number(summary.backlog)} other due tasks</strong> are waiting for future daily plans. Their original due dates are kept; they do not refill today's routine.</div>` : ''}
     </div>`;
 
   // The person may have opened another page while the summary loaded.
@@ -378,18 +394,19 @@ async function mountReady() {
         <div class="ready-ico">${icon('phoneCall')}</div>
         <h2>Ready when you are, ${sanitize(me.full_name?.split(' ')[0]) || 'there'}.</h2>
         <p>${summary.pending > 0
-          ? `You have <strong>${summary.pending}</strong> ${summary.pending === 1 ? 'person' : 'people'} to reach today: ${summary.follow_ups} follow-up${summary.follow_ups === 1 ? '' : 's'} and ${summary.new_leads} new. One conversation at a time.`
+          ? `You have <strong>${summary.pending}</strong> ${summary.pending === 1 ? 'person' : 'people'} on today's list: ${summary.follow_ups} follow-up${summary.follow_ups === 1 ? '' : 's'}, ${summary.new_leads} new and ${Number(summary.other_calls || 0)} other. One conversation at a time.`
           : emptyReason(summary)}</p>
 
-        ${summary.pending > 0 ? catchupHTML : ''}
+        ${summary.pending > 0 || summary.plan_total != null ? catchupHTML : ''}
+        ${isImpersonating() ? '<p class="due-meta wraps">Previewing this mentor\'s daily list. Return to your own account to log calls or change availability.</p>' : ''}
         ${summary.pending === 0 && supervises() ? teamPointerHTML() : ''}
 
         <div class="avail-row" id="avail-row" style="display:flex;align-items:center;justify-content:center;gap:10px;margin-top:4px">
           <span class="badge ${availableToday ? 'badge-ok' : 'badge-warn'}" id="avail-badge"><span class="dot"></span>${availableToday ? 'Calling today' : 'Off today'}</span>
-          <button class="btn btn-ghost btn-sm" id="avail-toggle">${availableToday ? 'Mark me off today' : "I'm calling today"}</button>
+          <button class="btn btn-ghost btn-sm" id="avail-toggle" ${isImpersonating() ? 'disabled' : ''}>${availableToday ? 'Mark me off today' : "I'm calling today"}</button>
         </div>
 
-        <button class="btn btn-primary btn-lg btn-block" id="start" ${summary.pending > 0 ? '' : 'disabled'} style="margin-top:6px">${icon('phoneCall')}Start calling</button>
+        <button class="btn btn-primary btn-lg btn-block" id="start" ${summary.pending > 0 && !isImpersonating() ? '' : 'disabled'} style="margin-top:6px">${icon('phoneCall')}${isImpersonating() ? 'Preview of daily list' : 'Start calling'}</button>
         <div class="ready-stats">
           <div data-goto-list style="cursor:pointer" title="See who's on today's list"><div class="rs-num" id="rs-follow">${summary.follow_ups}</div><div class="rs-lbl">Follow-ups</div></div>
           <div class="rs-div"></div>
@@ -439,7 +456,7 @@ async function loadTodayList() {
   const countEl = document.getElementById('tl-count');
   if (!card || !body) return;
   try {
-    const { data, error } = await getSupabase().rpc('get_my_worklist');
+    const { data, error } = await getSupabase().rpc('get_my_worklist', { p_caller_id: me.id });
     if (error) throw error;
     const rows = data || [];
     if (!rows.length) { card.style.display = 'none'; return; }
@@ -466,7 +483,7 @@ async function loadTodayList() {
       </div>
       ${noNumber.length ? `<div class="due-meta wraps" style="padding:0 var(--s5) var(--s4);color:var(--ink-3)">
         ${noNumber.length} ${noNumber.length === 1 ? 'person has' : 'people have'} no phone number on file, so they are held out of the call order instead of blocking it. Open the profile to add a number and they come back into the list.</div>` : ''}
-      ${later > 0 ? `<div class="due-meta wraps" style="padding:0 var(--s5) var(--s4);color:var(--ink-3)">+ ${later} more scheduled for the coming days.</div>` : ''}`;
+      ${later > 0 ? `<div class="due-meta wraps" style="padding:0 var(--s5) var(--s4);color:var(--ink-3)">+ ${later} other open tasks waiting for a future daily plan, their date or contact rest.</div>` : ''}`;
     body.querySelectorAll('[data-wl]').forEach(row => wireWorklistRow(row, rows.find(r => r.patient_id === row.dataset.wl && String(r.queue_id) === row.dataset.q)));
   } catch (err) {
     // RPC not deployed yet or a network blip: the Start button still works.
@@ -510,7 +527,7 @@ function worklistPreviewHTML(r, kind) {
   const ctx = listContext.get(r.patient_id);
   const actions = `
     <div class="wl-preview-actions">
-      ${kind === 'servable' ? `<button type="button" class="btn btn-primary btn-sm" data-wl-start>${icon('phoneCall')}Start this call</button>` : ''}
+      ${kind === 'servable' && !isImpersonating() ? `<button type="button" class="btn btn-primary btn-sm" data-wl-start>${icon('phoneCall')}Start this call</button>` : ''}
       <button type="button" class="btn btn-secondary btn-sm" data-wl-open>${icon('user')}${kind === 'nonumber' ? 'Open record to add a number' : 'Open full record'}</button>
     </div>`;
   if (!ctx) {
@@ -587,6 +604,7 @@ function scrollToTodayList() {
 // Tap a specific person on the list: same claim + same active-call flow as
 // "Start calling", just this patient instead of rank #1.
 async function startFromList(queueId, rowEl) {
+  if (isImpersonating()) { showToast('Return to your own account to log a call.', 'info'); return; }
   if (!queueId || currentQueueId) return;
   if (rowEl) { rowEl.style.pointerEvents = 'none'; rowEl.style.opacity = '.6'; }
   try {
@@ -602,10 +620,12 @@ async function startFromList(queueId, rowEl) {
 }
 
 async function toggleAvailability() {
+  if (isImpersonating()) { showToast('Return to your own account to change availability.', 'info'); return; }
   const sb = getSupabase();
   const next = !availableToday;
   try {
-    await sb.rpc('mark_availability', { p_available: next });
+    const { error } = await sb.rpc('mark_availability', { p_available: next, p_day: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) });
+    if (error) throw error;
     availableToday = next;
     showToast(next ? "You're marked as calling today" : "You're marked off today. Your patients will be covered", next ? 'success' : 'info');
     const badge = document.getElementById('avail-badge');
@@ -620,6 +640,7 @@ async function toggleAvailability() {
 // caller is on the last one and needs to be told that, not shown the same
 // screen twice with no explanation.
 async function getNextCall(justSkippedId = null) {
+  if (isImpersonating()) { showToast('Return to your own account to log a call.', 'info'); return; }
   const sb = getSupabase();
   const btn = document.getElementById('start');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:20px;height:20px;border-width:2.5px"></span>Finding the next person…'; }
@@ -2313,7 +2334,7 @@ async function mountQueueEmpty() {
     <div class="ready"><div class="ready-card">
       <div class="ready-ico" style="background:var(--ok-soft);color:var(--ok)">${icon(finished ? 'checkCircle' : 'inbox')}</div>
       <h2>${finished ? "That's everyone for now." : 'Nothing queued to you.'}</h2>
-      <p>${finished
+      <p>${summary.plan_total != null ? emptyReason(summary) : finished
         ? `You have worked through your list: ${summary.done_today} ${summary.done_today === 1 ? 'call' : 'calls'} today. Every one mattered, take a breath.`
         : emptyReason(summary)}</p>
       ${supervises() ? teamPointerHTML() : ''}

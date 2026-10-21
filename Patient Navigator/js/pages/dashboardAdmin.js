@@ -114,7 +114,7 @@ export async function renderAdminDashboard(container, { firstName, subtitle, tod
       <div class="dash-cols">
         <div class="dash-main">
           <section class="card dq-queue" id="dq-queue">
-            <div class="dq-queue-head"><h3 class="card-title">Today's queue</h3><span class="due-meta">Caregiver calls</span></div>
+            <div class="dq-queue-head"><h3 class="card-title">Queue &amp; backlog</h3><span class="due-meta">Caregiver work</span></div>
             <div class="dq-counters" id="dq-counters">${Array(4).fill('<div><div class="sk" style="height:46px"></div></div>').join('')}</div>
           </section>
           <div class="dash-pair">
@@ -206,8 +206,8 @@ async function loadKpis() {
     const cards = [
       { label: 'Reached today', ico: 'handHeart', well: 'stone', num: connected,
         sub: totalCalls ? `of ${totalCalls} ${totalCalls === 1 ? 'call' : 'calls'} connected` : 'No calls logged yet today' },
-      { label: 'Check-ins due', ico: 'clock', well: 'lav', num: due,
-        sub: due ? 'Follow-ups and callbacks waiting' : "You're all caught up.", go: 'queue' },
+      { label: 'Daily call lists', ico: 'clock', well: 'lav', num: due,
+        sub: 'Routine and additional work. Calls > Assigned for today shows the lists.', go: 'calls' },
       { label: 'People in our care', ico: 'users', well: 'beige', num: s.total_patients || 0, sub: 'On the registry today', go: 'patients' },
       { label: 'New this month', ico: 'trendingUp', well: 'stone', num: s.patients_this_month || 0, sub: 'Registered since the 1st' },
       { label: 'Uninsured: need financial aid', ico: 'shieldCheck', num: `${pct}%`, sub: `${uninsured} of ${totalP} people`, go: 'analytics', hot: true },
@@ -282,12 +282,12 @@ function renderCounters(rows) {
     done: rows.filter(r => r.status === 'completed').length,
   };
   el.innerHTML = [
-    ['On today\'s list', n.total, 'Everyone queued for today, the same count as Team > Today\'s queue'],
-    ['Still to reach', n.open, 'Due today and not done: pending, in progress or waiting on a callback'],
+    ['Queue records', n.total, 'Loaded queue records, including backlog and future work. These are not a daily allocation.'],
+    ['All due work', n.open, 'Due pending work, including tasks waiting for a future daily plan.'],
     // in_progress stays set until the call is logged or the next build, so
     // "being called now" overstated it
     ['In progress', n.calling, 'Opened in the calling portal and not logged yet'],
-    ['Done today', n.done, 'Calls completed from today\'s list'],
+    ['Completed records', n.done, 'Completed queue records in this snapshot; the call logs count actual calls.'],
   ].map(([l, v, t]) => `<div title="${t}"><div class="l">${l}</div><div class="n tnum">${v}</div></div>`).join('');
 }
 
@@ -296,7 +296,8 @@ function renderDue(open, reload) {
   if (!el) return;
   const shown = open.slice(0, 6);
   el.innerHTML = `
-    <div class="card-head"><h3>Due today</h3><span class="badge badge-neutral">${open.length}</span></div>
+    <div class="card-head"><h3>Due work &amp; backlog</h3><span class="badge badge-neutral">${open.length}</span></div>
+    <p class="due-meta wraps" style="padding:0 var(--s5)">Daily routine lists stay fixed. This wider view includes tasks waiting for future plans; Team &amp; Queue can add a deliberate extra call with a reason.</p>
     ${shown.length ? `<div class="due-list">${shown.map(r => {
       const name = r.full_name || r.patient_code || 'Patient';
       return `
@@ -312,7 +313,7 @@ function renderDue(open, reload) {
         </div>
       </div>`; }).join('')}</div>`
     : `<div class="empty" style="padding:var(--s6)"><div class="ico-wrap" style="background:var(--ok-soft);color:var(--ok)">${icon('checkCircle')}</div><h4>Nothing waiting</h4><p>Every call on today's list has been made, or the list is not built yet.</p></div>`}
-    <div class="card-foot"><a id="dq-open-queue">Open today's queue ${icon('arrowRight')}</a></div>`;
+    <div class="card-foot"><a id="dq-open-queue">Open queue &amp; backlog ${icon('arrowRight')}</a></div>`;
   const byQ = Object.fromEntries(shown.map(r => [r.queue_id, r]));
   el.querySelectorAll('.dq-move').forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
