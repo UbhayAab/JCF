@@ -9,7 +9,7 @@ import { renderSidebar, bindSidebarSync } from './components/sidebar.js';
 import { showToast } from './components/toast.js';
 import { maybeAskForPhone } from './components/phonePrompt.js';
 import { maybeShowFeatureUpdate, renderFeatureUpdates } from './components/featureUpdates.js';
-import { renderDashboard } from './pages/dashboard.js';
+import { renderDashboard } from './pages/dashboard.js?v=20261024e';
 import { renderPatients } from './pages/patients.js';
 import { renderCalls } from './pages/calls.js';
 import { renderAdmin } from './pages/admin.js';
@@ -20,7 +20,7 @@ import { renderProfile } from './pages/profile.js';
 import { renderLearn } from './pages/learn.js';
 import { renderUpload } from './pages/upload.js';
 import { renderIntake } from './pages/intake.js';
-import { renderNutrition } from './pages/nutrition.js';
+import { renderNutrition } from './pages/nutrition.js?v=20261024e';
 import { renderNutritionTracker } from './pages/nutritionTracker.js';
 import { renderLeaderboard } from './pages/leaderboard.js';
 import { renderConcerns } from './pages/concerns.js';
@@ -505,7 +505,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261024d';  // bumped on every breaking deploy
+const APP_BUILD = '20261024e';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
