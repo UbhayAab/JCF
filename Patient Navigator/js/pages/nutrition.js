@@ -31,8 +31,11 @@ let query = '';     // the search box
 let outScope = null;   // 'mine' | 'all': picked after first load
 let outQuery = '';
 let counts = {};    // tab -> how many, filled in as each list arrives
+const manuallyAssignedOnly = () => !!getCurrentProfile()?.on_probation;
 
 export async function renderNutrition(container) {
+  if (manuallyAssignedOnly()) { scope = 'assigned'; outScope = 'assigned'; }
+  else { if (scope === 'assigned') scope = null; if (outScope === 'assigned') outScope = null; }
   container.innerHTML = `
     <div class="page-header">
       <div>
@@ -98,7 +101,9 @@ async function openTab(container) {
   if (!panel) return;
   const skeleton = Array(4).fill('<div class="skeleton skeleton-row" style="height:96px;margin-bottom:10px"></div>').join('');
   if (tab === 'care') {
-    if (sub) sub.innerHTML = 'Everyone with nutrition work on file. <strong>Press Claim on anyone you are going to call</strong> - they are yours from that moment, and they stay yours until you hand them back or a lead moves them. Whoever holds a patient is the one who calls them.';
+    if (sub) sub.innerHTML = manuallyAssignedOnly()
+      ? 'During training, only families assigned to you by your lead are shown. Your lead manages assignments.'
+      : 'Everyone with nutrition work on file. <strong>Press Claim on anyone you are going to call</strong> - they are yours from that moment, and they stay yours until you hand them back or a lead moves them. Whoever holds a patient is the one who calls them.';
     panel.innerHTML = `
       <div style="display:flex;flex-wrap:wrap;gap:var(--s3);align-items:center;margin-bottom:var(--s5)">
         <div class="chip-row" id="nut-scopes" style="margin:0"></div>
@@ -111,7 +116,9 @@ async function openTab(container) {
       <div id="nut-list">${skeleton}</div>`;
     await load(container);
   } else {
-    if (sub) sub.innerHTML = 'People the caregiver team already knows: <strong>3 or more real conversations</strong>, and nobody has called them for <strong>4 days or more</strong>. None of them has been offered nutrition support yet. Call and offer it. This list is optional - nothing is overdue, and a fresh set is picked every morning.';
+    if (sub) sub.innerHTML = manuallyAssignedOnly()
+      ? 'Only outreach for families already assigned to you is shown during training. Your lead manages assignments.'
+      : 'People the caregiver team already knows: <strong>3 or more real conversations</strong>, and nobody has called them for <strong>4 days or more</strong>. None of them has been offered nutrition support yet. Call and offer it. This list is optional - nothing is overdue, and a fresh set is picked every morning.';
     panel.innerHTML = `
       <div style="display:flex;flex-wrap:wrap;gap:var(--s3);align-items:center;margin-bottom:var(--s5)">
         <div class="chip-row" id="out-scopes" style="margin:0"></div>
@@ -162,6 +169,8 @@ function paint(container) {
   const me = getCurrentProfile();
   const mine = rows.filter(r => r.continuity_id && r.continuity_id === me?.id);
   const unclaimed = rows.filter(r => !r.continuity_id);
+  const training = manuallyAssignedOnly();
+  if (training) scope = 'assigned';
   if (scope === null) scope = mine.length ? 'mine' : unclaimed.length ? 'unclaimed' : 'all';
   const inScope = scope === 'mine' ? mine : scope === 'unclaimed' ? unclaimed : rows;
   const q = query.trim().toLowerCase();
@@ -178,11 +187,11 @@ function paint(container) {
   }
 
   if (chips) {
-    chips.innerHTML = [
+    chips.innerHTML = (training ? [['assigned', `Assigned to you · ${rows.length}`]] : [
       ['mine', `My patients · ${mine.length}`],
       ['unclaimed', `Unclaimed · ${unclaimed.length}`],
       ['all', `Everyone · ${rows.length}`],
-    ].map(([k, l]) => `<button class="fchip ${scope === k ? 'on' : ''}" data-scope="${k}">${l}</button>`).join('');
+    ]).map(([k, l]) => `<button class="fchip ${scope === k ? 'on' : ''}" data-scope="${k}">${l}</button>`).join('');
     chips.querySelectorAll('.fchip').forEach(ch => ch.addEventListener('click', () => {
       scope = ch.dataset.scope;
       paint(container);
@@ -193,7 +202,7 @@ function paint(container) {
   // numbers and twenty minutes. set_nutrition_owner already takes an array.
   const batch = container.querySelector('#nut-claim-batch');
   if (batch) {
-    const canClaim = getUserRole() === 'nutritionist';
+    const canClaim = getUserRole() === 'nutritionist' && !training;
     const take = unclaimed.slice(0, 5);
     batch.style.display = (canClaim && scope === 'unclaimed' && take.length > 1 && !searched) ? '' : 'none';
     batch.textContent = '';
@@ -207,13 +216,15 @@ function paint(container) {
   const countEl = container.querySelector('#nut-count');
   if (countEl) countEl.textContent = searched
     ? `${shown.length} match${shown.length === 1 ? '' : 'es'}`
-    : `${shown.length} ${scope === 'mine' ? 'in your care' : scope === 'unclaimed' ? 'waiting to be claimed' : 'in care'}`;
+    : `${shown.length} ${training ? 'assigned to you' : scope === 'mine' ? 'in your care' : scope === 'unclaimed' ? 'waiting to be claimed' : 'in care'}`;
 
   if (!shown.length) {
     list.innerHTML = searched
       ? `<div class="empty"><div class="ico-wrap">${icon('search')}</div>
           <h4>No one matches “${sanitize(query.trim())}”</h4>
           <p>Searching all ${rows.length} people in the nutrition worklist.</p></div>`
+      : training
+      ? `<div class="empty"><div class="ico-wrap">${icon('leaf')}</div><h4>No nutrition families assigned yet</h4><p>Your lead can assign families for you to support during training.</p></div>`
       : scope === 'mine'
       ? `<div class="empty"><div class="ico-wrap">${icon('leaf')}</div>
           <h4>No one is yours yet</h4>
@@ -383,7 +394,8 @@ function cardHTML(r) {
   const me = getCurrentProfile();
   const isMine = !!r.continuity_id && r.continuity_id === me?.id;
   const isTheirs = !!r.continuity_id && !isMine;
-  const canClaim = getUserRole() === 'nutritionist';
+  const training = manuallyAssignedOnly();
+  const canClaim = getUserRole() === 'nutritionist' && !training;
   const canReassign = isManagerOrAdmin();
 
   const name = r.full_name || r.patient_code || 'Patient';
@@ -404,11 +416,13 @@ function cardHTML(r) {
   // glyph in the action row, where it wrapped onto a line of its own.
   const ownerBadge = isMine
     ? `<span class="badge badge-primary" style="font-size:11px" title="${r.owner_since ? 'Yours since ' + formatDate(r.owner_since) : 'Yours'}">Yours</span>
-       <button class="btn btn-ghost btn-sm" data-act="release" style="padding:2px 7px;font-size:11.5px" title="Hand them back to Unclaimed">Hand back</button>`
+       ${!training ? '<button class="btn btn-ghost btn-sm" data-act="release" style="padding:2px 7px;font-size:11.5px" title="Hand them back to Unclaimed">Hand back</button>' : ''}`
     : isTheirs
       ? `<span class="badge badge-neutral" style="font-size:11px" title="${sanitize(r.continuity_name)} is holding this patient">${icon('user')}${sanitize(r.continuity_name)}</span>
          ${canReassign ? `<button class="btn btn-ghost btn-sm" data-act="release" style="padding:2px 7px;font-size:11.5px" title="Take this patient off ${sanitize(r.continuity_name)}">Unassign</button>` : ''}`
-      : `<span class="badge badge-gold" style="font-size:11px" title="Nobody is holding this patient yet">Unclaimed</span>`;
+      : training
+        ? `<span class="badge badge-primary" style="font-size:11px">Assigned to you</span>`
+        : `<span class="badge badge-gold" style="font-size:11px" title="Nobody is holding this patient yet">Unclaimed</span>`;
 
   // "Why is this person on my list?", the question the team kept asking.
   // Ownership outranks everything else: a card someone just claimed must
@@ -490,6 +504,8 @@ function paintOutreach(container, rows) {
   const chips = container.querySelector('#out-scopes');
   if (!list) return;
   const mine = rows.filter(r => r.mine);
+  const training = manuallyAssignedOnly();
+  if (training) outScope = 'assigned';
   // Managers and admins hold none of these rows themselves; opening on an
   // empty "Yours" tab would read as "there is no outreach".
   if (outScope === null) outScope = mine.length ? 'mine' : 'all';
@@ -504,10 +520,10 @@ function paintOutreach(container, rows) {
   }
 
   if (chips) {
-    chips.innerHTML = [
+    chips.innerHTML = (training ? [['assigned', `Assigned families · ${rows.length}`]] : [
       ['mine', `Yours today · ${mine.length}`],
       ['all', `Whole team · ${rows.length}`],
-    ].map(([k, l]) => `<button class="fchip ${outScope === k ? 'on' : ''}" data-scope="${k}">${l}</button>`).join('');
+    ]).map(([k, l]) => `<button class="fchip ${outScope === k ? 'on' : ''}" data-scope="${k}">${l}</button>`).join('');
     chips.querySelectorAll('.fchip').forEach(ch => ch.addEventListener('click', () => {
       outScope = ch.dataset.scope;
       paintOutreach(container, rows);
@@ -523,6 +539,8 @@ function paintOutreach(container, rows) {
       ? `<div class="empty"><div class="ico-wrap">${icon('search')}</div>
           <h4>No one matches “${sanitize(outQuery.trim())}”</h4>
           <p>Searching all ${rows.length} people on the outreach board.</p></div>`
+      : training
+        ? `<div class="empty"><div class="ico-wrap">${icon('leaf')}</div><h4>No outreach assigned</h4><p>Only outreach for your assigned families appears here during training.</p></div>`
       : outScope === 'mine'
         ? `<div class="empty"><div class="ico-wrap" style="background:var(--ok-soft);color:var(--ok)">${icon('checkCircle')}</div>
             <h4>Nothing on your list today</h4>
@@ -568,7 +586,7 @@ function outCardHTML(r) {
         : ''}
       <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap">
         <button class="btn btn-primary btn-sm grow" data-act="log" style="flex:1">${icon('phone')}Log this call</button>
-        ${(!r.owner_id && getUserRole() === 'nutritionist')
+        ${(!r.owner_id && getUserRole() === 'nutritionist' && !manuallyAssignedOnly())
           ? `<button class="btn btn-secondary btn-sm" data-act="claim" title="Take them into your nutrition care now">${icon('handHeart')}Claim</button>` : ''}
         <button class="btn btn-secondary btn-sm" data-act="open">${icon('user')}Profile</button>
       </div>

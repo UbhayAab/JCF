@@ -203,13 +203,14 @@ async function renderSpecialistStats(id) {
     calls = data;
   } catch (e) { console.warn('call counts', e); }
   // Fall back gracefully if the DB predates v49 (no mine/pool split yet).
-  const mine = s.my_patients ?? s.domain_patients ?? 0;
+  const training = !!getCurrentProfile()?.on_probation;
+  const mine = training ? (s.domain_patients ?? 0) : (s.my_patients ?? s.domain_patients ?? 0);
   const pool = s.domain_patients ?? 0;
   const poolName = role === 'nutritionist' ? 'nutrition pool' : 'well-being pool';
   const hero = document.getElementById('hero-metrics');
   if (hero) hero.innerHTML = `
     <div class="hero-card teal"><span class="hc-ico">${icon('users')}</span><div class="hc-label">People in your care</div><div class="hc-num">${mine}</div>
-      <div class="hc-sub">${s.my_patients != null ? `yours, of ${pool} in the ${poolName}` : 'routed to you for support'}</div></div>
+      <div class="hc-sub">${training ? 'assigned to you during training' : s.my_patients != null ? `yours, of ${pool} in the ${poolName}` : 'routed to you for support'}</div></div>
     <div class="hero-card paper"><span class="hc-ico">${icon('activity')}</span><div class="hc-label">Well-being check-ins</div><div class="hc-num">${s.assessments_logged || 0}</div>
       <div class="hc-sub">${s.assessments_month || 0} this month</div></div>`;
   const grid = document.getElementById('stats');
@@ -217,8 +218,8 @@ async function renderSpecialistStats(id) {
     { ico: 'users', cls: '', num: mine, lbl: 'People in your care' },
     ...(calls ? [{ ico: 'phoneCall', cls: 'ok', num: calls.calls_month ?? 0,
       lbl: `Your calls this month (${calls.calls_today ?? 0} today)`, go: 'calls' }] : []),
-    { ico: role === 'nutritionist' ? 'handHeart' : 'heart', cls: 'ok', num: s.unclaimed ?? '…',
-      lbl: 'Waiting to be claimed', go: role === 'nutritionist' ? 'nutrition' : null },
+    ...(!training ? [{ ico: role === 'nutritionist' ? 'handHeart' : 'heart', cls: 'ok', num: s.unclaimed ?? '…',
+      lbl: 'Waiting to be claimed', go: role === 'nutritionist' ? 'nutrition' : null }] : []),
     ...(outMine != null ? [{ ico: 'phone', cls: 'warn', num: outMine, lbl: 'To offer nutrition today', go: 'nutrition' }] : []),
     { ico: 'heart', cls: '', num: s.new_this_month || 0, lbl: 'New this month' },
     { ico: 'activity', cls: 'warn', num: s.assessments_month || 0, lbl: 'Check-ins this month' },
@@ -239,20 +240,21 @@ async function loadSpecialistPeople(role) {
       const { data, error } = await sb.rpc('get_nutrition_worklist');
       if (error) throw error;
       const rows = data || [];
+      const training = !!me.on_probation;
       // v89: ownership is explicit now - "mine" means somebody pressed
       // Claim, or a lead assigned them. The card still shows unclaimed
       // people underneath, because a nutritionist who has claimed nobody
       // yet must not open the app to an empty screen while dozens wait.
       const mine = rows.filter(r => r.continuity_id === me.id);   // worklist is oldest-contact-first already
       const unclaimed = rows.filter(r => !r.continuity_id);
-      const shown = [...mine, ...unclaimed].slice(0, 8);
-      if (countEl) countEl.textContent = mine.length
+      const shown = (training ? rows : [...mine, ...unclaimed]).slice(0, 8);
+      if (countEl) countEl.textContent = training ? `${rows.length} assigned to you` : mine.length
         ? `${mine.length} yours · ${unclaimed.length} waiting`
         : `${unclaimed.length} waiting`;
       if (!rows.length) {
         el.innerHTML = `<div class="empty" style="padding:var(--s6)"><div class="ico-wrap">${icon('leaf')}</div>
-          <h4>Nobody is in nutrition care yet</h4>
-          <p>People arrive here when a mentor marks <strong>Nutritionist assigned</strong>, when nutrition work is logged, or when a lead assigns them to you.</p></div>`;
+          <h4>${training ? 'No nutrition families assigned yet' : 'Nobody is in nutrition care yet'}</h4>
+          <p>${training ? 'Your lead can assign families for you to support during training.' : 'People arrive here when a mentor marks <strong>Nutritionist assigned</strong>, when nutrition work is logged, or when a lead assigns them to you.'}</p></div>`;
         return;
       }
       el.innerHTML = `<div class="due-list">${shown.map(p => {
@@ -262,11 +264,13 @@ async function loadSpecialistPeople(role) {
           ? ` · <span style="color:var(--${Number(p.must_score) >= 2 ? 'danger' : Number(p.must_score) === 1 ? 'warn' : 'ok'})">MUST ${p.must_score}</span>`
           : '';
         const meta = sanitize([p.city, p.gi_subtype || p.cancer_type].filter(Boolean).join(' · ') || (p.patient_code || '')) + mustChip;
-        const tag = mineRow
+        const tag = training ? '<span class="badge badge-primary">Assigned</span>' : mineRow
           ? `<span class="badge badge-primary" title="Yours. You claimed them, or a lead assigned them to you.">Yours</span>`
           : `<span class="badge badge-gold" title="Nobody is holding them yet. Press Claim on the Nutrition page.">Unclaimed</span>`;
         return `<div class="due-row clickable" data-pid="${p.patient_id}" style="cursor:pointer"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(name)}</div><div class="due-meta">${meta}</div></div>${tag}</div>`;
-      }).join('')}</div>${unclaimed.length && shown.length < (mine.length + unclaimed.length)
+      }).join('')}</div>${training && shown.length < rows.length
+        ? `<div class="due-meta" style="padding:10px 14px;color:var(--ink-3)">+ ${rows.length - shown.length} more assigned families in your worklist.</div>`
+        : unclaimed.length && shown.length < (mine.length + unclaimed.length)
         ? `<div class="due-meta" style="padding:10px 14px;color:var(--ink-3)">+ ${mine.length + unclaimed.length - shown.length} more in the nutrition pool: open the full worklist to claim them.</div>`
         : ''}`;
       el.querySelectorAll('[data-pid]').forEach(r => r.addEventListener('click', () => navigate('patients/' + r.dataset.pid)));
