@@ -12,6 +12,7 @@ import { getCurrentUser, getCurrentProfile, isManagerOrAdmin, getUserRole } from
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, confirmModal } from '../components/modal.js';
 import { openCallForm } from '../components/callForm.js';
+import * as nutritionCare from '../components/nutritionCare.js';
 import { openWhatsappShare, recipientsFromPatient } from '../components/whatsappShare.js';
 import { openAssessmentFlow } from '../components/assessmentFlow.js';
 import { mountBeforeYouCall } from '../components/beforeYouCall.js';
@@ -1599,6 +1600,10 @@ function bindLeverRows(scope, patient, sb, me) {
       if (detail !== undefined) payload.detail = detail?.trim() || null;
       const { error } = await sb.from('patient_services').upsert(payload, { onConflict: 'patient_id,lever' });
       if (error) showToast('Could not save: ' + error.message, 'error');
+      else if (lever === 'nutrition_plan_given' && done) {
+        const actor = me?.id || getCurrentUser()?.id;
+        nutritionCare.promptNutritionCompletion({ patientId: patient.id, isCurrent: () => scope.isConnected && getCurrentUser()?.id === actor });
+      }
     };
 
     row.querySelector('[data-toggle]').addEventListener('change', (e) => {

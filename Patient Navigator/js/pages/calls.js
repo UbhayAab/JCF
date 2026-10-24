@@ -29,7 +29,8 @@ import { CONDITIONS, DIAL_STATUSES, RECEPTIVENESS } from '../utils/catalog.js';
 // name that file lacks stops the whole app at boot (tools/stale_import_check.mjs).
 // Missing names are undefined here instead, and the recording box waits for the new file.
 import * as recording from '../components/callRecording.js';
-import { CARE_CASE_FIELDS, indiaCallDay, activeCareCase, careCallBounds, normalizeCareCall } from '../utils/careFollowup.js';
+import * as careCalendar217 from '../utils/careFollowup.js?v=nutrition217';
+const { CARE_CASE_FIELDS, indiaCallDay, activeCareCase, careCallBounds, normalizeCareCall } = careCalendar217;
 
 // Outcomes where nobody was talked to: a recording of a conversation replaces them.
 const NOT_REACHED = ['no_answer', 'busy', 'voicemail'];
@@ -550,7 +551,7 @@ export async function openEditCall(c) {
   // only what is empty, and the call note goes under notes already written.
   const box = (id) => el.querySelector('#' + id);
   let followupTouched = false;
-  const followupRules = () => ({ callDay: indiaCallDay(c.call_date), outcome: box('ec-status').value,
+  const followupRules = () => ({ callDay: indiaCallDay(c.call_date), outcome: box('ec-status').value, team: c.call_team === 'nutrition' ? 'nutrition' : 'caregiver',
     active: activeCareCase(carePatient) });
   const setFollowupBounds = () => {
     const bounds = careCallBounds(followupRules());

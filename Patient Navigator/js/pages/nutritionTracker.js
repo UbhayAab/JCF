@@ -6,6 +6,7 @@ import { showToast } from '../components/toast.js';
 import { openNutritionRequest, NUTRITION_REASONS } from '../components/nutritionRequest.js';
 import { openNutritionPlanOutcome, openNutritionRequestHistory, PLAN_ATTEMPT_REASONS } from '../components/nutritionPlanOutcome.js';
 import { mountCareNotifications } from '../components/careNotifications.js';
+import * as nutritionCare from '../components/nutritionCare.js';
 
 const trackerMounts = new WeakMap();
 
@@ -31,6 +32,7 @@ export async function renderNutritionTracker(container) {
   let showClosed = false;
   let generation = 0;
   let initialHighlight = true;
+  let focusAfterSave = null;
   const highlighted = new URLSearchParams(window.location.hash.split('?')[1] || '').get('request');
   const current = () => !!userId && trackerMounts.get(container) === token && mount.isConnected && getCurrentUser()?.id === userId && !isImpersonating();
   const notificationHandle = mountCareNotifications(container.querySelector('[data-tracker-notifications]'));
@@ -55,7 +57,9 @@ export async function renderNutritionTracker(container) {
         ownerFilter = ''; filterNotice = 'That intern no longer has requests in this view. Showing all interns.';
       }
       settings = settingsResult.data;
-      if (initialHighlight && highlighted) showClosed = requests.find(row => row.id === highlighted)?.status === 'closed';
+      const focused = requests.find(row => row.id === (focusAfterSave || (initialHighlight ? highlighted : null)));
+      if (focused) showClosed = focused.status === 'closed' && !(focused.pending_followups || []).length;
+      focusAfterSave = null;
       paint();
     } catch (error) {
       if (!current() || thisGeneration !== generation) return;
@@ -65,9 +69,9 @@ export async function renderNutritionTracker(container) {
   }
   function visibleRows() {
     return requests.filter(row => {
-      if ((row.status === 'closed') !== showClosed) return false;
+      if ((row.status === 'closed' && !(row.pending_followups || []).length) !== showClosed) return false;
       if (filter === 'mine' && !row.is_mine) return false;
-      if (filter === 'overdue' && !row.overdue_stage) return false;
+      if (filter === 'overdue' && !row.overdue_stage && !(row.pending_followups || []).some(x => x.overdue)) return false;
       if (filter === 'unassigned' && row.owner_id) return false;
       if (pod && row.pod !== pod) return false;
       if (ownerFilter === '__unassigned__' ? !!row.owner_id : ownerFilter && row.owner_id !== ownerFilter) return false;
@@ -76,10 +80,10 @@ export async function renderNutritionTracker(container) {
   }
   function paint() {
     if (!current()) return;
-    const open = requests.filter(row => row.status !== 'closed');
+    const open = requests.filter(row => row.status !== 'closed' || (row.pending_followups || []).length);
     const pods = [...new Set(requests.map(row => row.pod).filter(Boolean))].sort();
     const owners = [...new Map(requests.filter(row => row.owner_id).map(row => [row.owner_id, row.owner_name || 'Nutrition intern'])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
-    mount.innerHTML = `<div class="card nw-tracker-controls"><div class="nw-section-head"><div class="chip-row" data-tracker-filters>${[['all', 'All open', open.length], ['mine', 'Mine', open.filter(row => row.is_mine).length], ['overdue', 'Overdue', open.filter(row => row.overdue_stage).length], ['unassigned', 'Unassigned', open.filter(row => !row.owner_id).length]].map(([key, label, count]) => `<button type="button" class="fchip ${filter === key ? 'on' : ''}" data-tracker-filter="${key}">${label} - ${count}</button>`).join('')}</div><label class="nw-closed-toggle"><input type="checkbox" data-tracker-closed ${showClosed ? 'checked' : ''}> Closed requests</label></div><div class="nw-filter-inputs">${isManagerOrAdmin() ? `<div><label class="form-label" for="tracker-owner">Intern</label><select id="tracker-owner" class="form-select"><option value="">All interns</option><option value="__unassigned__" ${ownerFilter === '__unassigned__' ? 'selected' : ''}>Unassigned</option>${owners.map(([id, name]) => `<option value="${sanitize(id)}" ${ownerFilter === id ? 'selected' : ''}>${sanitize(name)}</option>`).join('')}</select><span class="nw-muted">Interns with accessible requests, including closed history.</span></div>` : ''}<div><label class="form-label" for="tracker-pod">Raised by pod</label><select id="tracker-pod" class="form-select"><option value="">All pods</option>${pods.map(value => `<option value="${sanitize(value)}" ${pod === value ? 'selected' : ''}>${sanitize(value)}</option>`).join('')}</select></div><div><label class="form-label" for="tracker-search">Find a request</label><input type="search" class="form-input" id="tracker-search" value="${sanitize(search)}" placeholder="Patient, staff member or note"></div></div>${filterNotice ? `<p class="nw-muted" role="status">${sanitize(filterNotice)}</p>` : ''}<p class="nw-muted">Overdue after ${Number(settings?.assignment_days)} working days for assignment, ${Number(settings?.call_days)} after assignment for the first call, and ${Number(settings?.plan_days)} after that call for the plan. Working days: Monday to Friday, India time. Milestones update from recorded care events.</p></div><div data-tracker-list></div>`;
+    mount.innerHTML = `<div class="card nw-tracker-controls"><div class="nw-section-head"><div class="chip-row" data-tracker-filters>${[['all', 'All open', open.length], ['mine', 'Mine', open.filter(row => row.is_mine).length], ['overdue', 'Overdue', open.filter(row => row.overdue_stage || (row.pending_followups || []).some(x => x.overdue)).length], ['unassigned', 'Unassigned', open.filter(row => !row.owner_id).length]].map(([key, label, count]) => `<button type="button" class="fchip ${filter === key ? 'on' : ''}" data-tracker-filter="${key}">${label} - ${count}</button>`).join('')}</div><label class="nw-closed-toggle"><input type="checkbox" data-tracker-closed ${showClosed ? 'checked' : ''}> Closed requests</label></div><div class="nw-filter-inputs">${isManagerOrAdmin() ? `<div><label class="form-label" for="tracker-owner">Intern</label><select id="tracker-owner" class="form-select"><option value="">All interns</option><option value="__unassigned__" ${ownerFilter === '__unassigned__' ? 'selected' : ''}>Unassigned</option>${owners.map(([id, name]) => `<option value="${sanitize(id)}" ${ownerFilter === id ? 'selected' : ''}>${sanitize(name)}</option>`).join('')}</select><span class="nw-muted">Interns with accessible requests, including closed history.</span></div>` : ''}<div><label class="form-label" for="tracker-pod">Raised by pod</label><select id="tracker-pod" class="form-select"><option value="">All pods</option>${pods.map(value => `<option value="${sanitize(value)}" ${pod === value ? 'selected' : ''}>${sanitize(value)}</option>`).join('')}</select></div><div><label class="form-label" for="tracker-search">Find a request</label><input type="search" class="form-input" id="tracker-search" value="${sanitize(search)}" placeholder="Patient, staff member or note"></div></div>${filterNotice ? `<p class="nw-muted" role="status">${sanitize(filterNotice)}</p>` : ''}<p class="nw-muted">Overdue after ${Number(settings?.assignment_days)} working days for assignment, ${Number(settings?.call_days)} after assignment for the first call, and ${Number(settings?.plan_days)} after that call for the plan. Working days: Monday to Friday, India time. Milestones update from recorded care events.</p></div><div data-tracker-list></div>`;
     mount.querySelectorAll('[data-tracker-filter]').forEach(button => button.addEventListener('click', () => { filter = button.dataset.trackerFilter; showClosed = false; paint(); }));
     mount.querySelector('[data-tracker-closed]').addEventListener('change', event => { showClosed = event.target.checked; filter = 'all'; paint(); });
     mount.querySelector('#tracker-owner')?.addEventListener('change', event => { ownerFilter = event.target.value; filterNotice = ''; paintRows(); });
@@ -99,6 +103,7 @@ export async function renderNutritionTracker(container) {
       item.querySelector('[data-request-plan]')?.addEventListener('click', () => outcome(row, true));
       item.querySelector('[data-request-attempt]')?.addEventListener('click', () => outcome(row, false));
       item.querySelector('[data-request-history]')?.addEventListener('click', () => openNutritionRequestHistory({ row, isCurrent: current }));
+      item.querySelector('[data-request-call-link]')?.addEventListener('click', () => nutritionCare.openNutritionCallHistoryLink({ row, isCurrent: current, onSaved: async () => { focusAfterSave = row.id; await refreshAll(); } }));
     });
     if (initialHighlight && highlighted) {
       initialHighlight = false;
@@ -116,33 +121,12 @@ export async function renderNutritionTracker(container) {
   function outcome(row, shared) {
     openNutritionPlanOutcome({ row, shared, isCurrent: () => current() && (isManagerOrAdmin() || getUserRole() === 'nutritionist'), onSaved: async data => {
       if (!current()) return;
-      showClosed = data.current_status === 'closed'; filter = 'all';
+      focusAfterSave = row.id; filter = 'all';
       await refreshAll();
     } });
   }
   function closeRequest(row) {
-    const modal = showModal({ title: 'Close nutrition request', content: `<p>Close the request for <strong>${sanitize(row.patient_name || 'this patient')}</strong> raised on ${sanitize(dateLabel(row.raised_at))}?</p><p class="nw-muted">Use this when this need is handled or no longer needed. Nutrition ownership stays in place. You can raise a new request later.</p><p class="nw-error" data-close-error role="alert" hidden></p>`, footer: '<button type="button" class="btn btn-secondary" data-close-cancel>Cancel</button><button type="button" class="btn btn-primary" data-close-confirm>Close request</button>' });
-    modal.querySelector('[data-close-cancel]').addEventListener('click', () => modal.closeOwnedModal());
-    modal.querySelector('[data-close-confirm]').addEventListener('click', async event => {
-      const button = event.currentTarget;
-      button.disabled = true;
-      try {
-        if (!current()) throw new Error('Your session changed. Refresh and try again.');
-        const { data, error } = await getSupabase().rpc('close_nutrition_request', { p_request: row.id });
-        if (!current() || !modal.isCurrentModal()) return;
-        if (error) throw error;
-        if (!data?.ok) throw new Error('The request was not closed. Refresh and try again.');
-        modal.closeOwnedModal();
-        showToast('Nutrition request closed.', 'success');
-        if (current()) await refreshAll();
-      } catch (error) {
-        if (!current() || !modal.isCurrentModal()) return;
-        const message = modal.querySelector('[data-close-error]');
-        message.textContent = 'Could not close this request. Refresh and try again.';
-        message.hidden = false;
-        button.disabled = false;
-      }
-    });
+    nutritionCare.openNutritionResolution({ row, isCurrent: current, onSaved: async () => { focusAfterSave = row.id; filter = 'all'; await refreshAll(); } });
   }
   container.querySelector('[data-tracker-refresh]').addEventListener('click', refreshAll);
   container.querySelector('[data-tracker-settings]')?.addEventListener('click', () => openSettings(settings, refreshAll, current));
@@ -152,15 +136,15 @@ export async function renderNutritionTracker(container) {
 
 function rowHTML(row, index, highlighted) {
   const state = STAGES[row.status] || 'Open';
-  const overdue = OVERDUE[row.overdue_stage];
+  const overdue = OVERDUE[row.overdue_stage] || ((row.pending_followups || []).some(x => x.overdue) ? 'Scheduled follow-up overdue' : '');
   return `<article class="card nw-request-row ${row.id === highlighted ? 'is-highlighted' : ''}" data-request-index="${index}" data-request-id="${sanitize(row.id)}" tabindex="-1">
     <div class="nw-request-patient"><a href="#patients/${encodeURIComponent(row.patient_id)}">${sanitize(row.patient_name || 'Patient')}</a><strong>${sanitize(NUTRITION_REASONS[row.reason] || 'Nutrition support')}</strong>${row.note ? `<p>${sanitize(row.note)}</p>` : ''}${row.latest_attempt ? `<div class="nw-latest-attempt"><strong>Latest attempt: ${sanitize(PLAN_ATTEMPT_REASONS[row.latest_attempt.reason] || 'Recorded attempt')}</strong><span class="nw-muted">${sanitize(dateLabel(row.latest_attempt.created_at))} - ${sanitize(row.latest_attempt.actor_name || 'Care team')}</span>${row.latest_attempt.note ? `<p class="nw-private-note">${sanitize(row.latest_attempt.note)}</p>` : ''}</div>` : ''}<span class="nw-muted">${sanitize(row.pod || 'Care')} pod</span></div>
     <div data-step="Raised">${row.source === 'legacy_support_flag' ? '<span class="nw-muted">Support recorded. Original request time unknown.</span>' : ''}${stamp(row.raised_at)}<span class="nw-muted">${sanitize(row.raised_by_name || 'Care team')}</span></div>
     <div data-step="Assigned">${!row.assigned_at && row.owner_id ? '<span class="nw-muted">Time unknown</span>' : stamp(row.assigned_at)}<span class="nw-muted">${sanitize(row.owner_name || 'Unassigned')}</span>${!row.owner_id && !row.assigned_at ? due(row.assignment_due_at) : ''}</div>
-    <div data-step="First call">${stamp(row.first_call_at)}${row.assigned_at && !row.first_call_at ? due(row.call_due_at) : ''}</div>
+    <div data-step="First call">${stamp(row.first_call_at)}${row.latest_nutrition_call_at ? `<span class="nw-muted">Latest linked completed call</span>${stamp(row.latest_nutrition_call_at)}` : ''}${(row.pending_followups || []).map(x => `<span class="nw-muted">Scheduled follow-up due ${sanitize(x.due_on)}</span>`).join('')}${row.assigned_at && !row.first_call_at ? due(row.call_due_at) : ''}</div>
     <div data-step="Plan shared">${planStamp(row)}${row.first_call_at && !row.plan_shared_on && !row.plan_shared_at ? due(row.plan_due_at) : ''}</div>
-    <div data-step="Status"><span class="badge badge-${overdue ? 'danger' : row.status === 'closed' ? 'neutral' : 'ok'}">${sanitize(state)}</span>${overdue ? `<strong class="nw-error">${overdue}</strong>` : ''}${row.close_reason ? `<span class="nw-muted">${sanitize({ plan_shared: 'Closed after qualifying plan sharing', completed: 'Closed manually', patient_deceased: 'Closed - patient deceased', patient_inactive: 'Closed - patient inactive' }[row.close_reason] || 'Closed')}</span>` : ''}${row.closed_at ? stamp(row.closed_at) : ''}</div>
-    <div class="nw-row-actions"><button type="button" class="btn btn-secondary btn-sm" data-request-raise>Raise again</button>${row.status !== 'closed' && row.can_record_plan_outcome === true ? '<button type="button" class="btn btn-secondary btn-sm" data-request-plan>Record plan shared</button><button type="button" class="btn btn-secondary btn-sm" data-request-attempt>Plan not shared</button>' : ''}<button type="button" class="btn btn-ghost btn-sm" data-request-history>History (${Math.max(0, Number(row.action_count) || 0)})</button>${row.status !== 'closed' ? '<button type="button" class="btn btn-ghost btn-sm" data-request-close>Close request</button>' : ''}</div>
+    <div data-step="Status"><span class="badge badge-${overdue ? 'danger' : row.status === 'closed' ? 'neutral' : 'ok'}">${sanitize(state)}</span>${overdue ? `<strong class="nw-error">${overdue}</strong>` : ''}${row.close_reason ? `<span class="nw-muted">${sanitize({ plan_shared: 'Closed after qualifying plan sharing', completed: 'Closed manually', patient_deceased: 'Closed - patient deceased', patient_inactive: 'Closed - patient inactive' }[row.close_reason] || 'Closed')}</span>` : ''}${row.latest_resolution ? `<span class="nw-muted">${sanitize(nutritionCare.RESOLUTION_REASONS[row.latest_resolution.reason] || 'Documented resolution')}</span><p class="nw-private-note">${sanitize(row.latest_resolution.note || '')}</p>` : ''}${row.closed_at ? stamp(row.closed_at) : ''}</div>
+    <div class="nw-row-actions"><button type="button" class="btn btn-secondary btn-sm" data-request-raise>Raise again</button>${row.status !== 'closed' && row.can_record_plan_outcome === true ? '<button type="button" class="btn btn-secondary btn-sm" data-request-plan>Record plan shared</button><button type="button" class="btn btn-secondary btn-sm" data-request-attempt>Plan not shared</button>' : ''}<button type="button" class="btn btn-ghost btn-sm" data-request-history>History (${Math.max(0, Number(row.action_count) || 0)})</button>${row.can_link_calls ? '<button type="button" class="btn btn-secondary btn-sm" data-request-call-link>Link completed call</button>' : ''}${row.status !== 'closed' && row.can_record_plan_outcome === true ? '<button type="button" class="btn btn-ghost btn-sm" data-request-close>Close request</button>' : ''}</div>
   </article>`;
 }
 function planStamp(row) {

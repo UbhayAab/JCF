@@ -19,7 +19,9 @@ import { DIAL_STATUSES, RECEPTIVENESS, CONDITIONS, REQUIREMENTS, LEVER_GROUPS, M
 // name that file lacks stops the whole app at boot (tools/stale_import_check.mjs).
 // Missing names are undefined here instead, and the recording box waits for the new file.
 import * as recording from './callRecording.js';
-import { CARE_CASE_FIELDS, indiaCallDay, dayPlus, activeCareCase, careCallBounds, normalizeCareCall } from '../utils/careFollowup.js';
+import * as careCalendar217 from '../utils/careFollowup.js?v=nutrition217';
+const { CARE_CASE_FIELDS, indiaCallDay, dayPlus, activeCareCase, careCallBounds, normalizeCareCall } = careCalendar217;
+import * as nutritionCare from './nutritionCare.js';
 
 // Which wellbeing measures each care role captures by default (IMPACT section).
 const ROLE_MEASURES = {
@@ -115,6 +117,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     && getRealProfile()?.is_active === true && ['caller', 'caregiver_mentor', 'nutritionist', 'therapist', 'manager', 'admin'].includes(getRealProfile()?.role)
     && (!getRealProfile()?.ends_on || getRealProfile().ends_on >= indiaCallDay(new Date()));
   if (!freshActor()) { showToast('Exit Open as and use your active signed-in care account to log a call.', 'warning'); return; }
+  const nutritionCall = getUserRole() === 'nutritionist';
   injectCallFormStyle();
 
   // Patient choices when not pre-selected. Care roles (mentors, nutrition,
@@ -298,7 +301,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
         <div class="field" style="width:150px"><label>Duration (min)</label>
           <input class="input" id="lc-duration" type="number" min="0" step="1" value="0" /></div>
         <div class="field" style="flex:1;min-width:170px"><label>Next care call <span class="fu-auto" id="lc-auto" style="display:none">suggested</span></label>
-          <input class="input" id="lc-followup" type="date" /><div class="muted" style="font-size:12px">Doctor appointments and treatment dates belong in Notes.</div></div>
+          <input class="input" id="lc-followup" type="date" /><div class="muted" style="font-size:12px">${nutritionCall ? 'Optional. Leave blank while preparing the plan; set the real date once agreed. No overdue call is created from a blank date.' : 'Doctor appointments and treatment dates belong in Notes.'}</div></div>
       </div>
       <div class="field" style="margin-top:var(--s4)"><label>Notes</label>
         <textarea class="textarea" id="lc-notes" placeholder="Anything worth remembering about this conversation…"></textarea></div>
@@ -322,6 +325,8 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     </form>
   `;
 
+  const nutritionLinkHost = nutritionCall ? document.createElement('div') : null;
+  if (nutritionLinkHost) el.querySelector('#lc-followup').closest('.row').after(nutritionLinkHost);
   // Set by guardSaveReachable() below; every way out of the sheet calls it, so
   // the guard's resize listeners never outlive the form.
   let stopGuard = () => {};
@@ -330,7 +335,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   let recSection = null;
   let consentWritten = false;   // written the moment a waiting recording needed it
   const dropRec = () => { recSection?.dispose(); recSection = null; };
-  let feedbackSection = null, disposed = false, savedCallId = null, callSaving = false, observer, subscription;
+  let feedbackSection = null, disposed = false, savedCallId = null, callSaving = false, nutritionPlanSaved = false, observer, subscription;
   const current = () => !disposed && el.isConnected && modal?.isCurrentModal?.() && freshActor();
   function dispose() {
     if (disposed) return;
@@ -352,10 +357,15 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   const $ = (sel) => el.querySelector(sel);
   const $$ = (sel) => el.querySelectorAll(sel);
   let dateManual = false;
-  const followupRules = (callAt = new Date()) => ({ callDay: indiaCallDay(callAt), outcome: state.dial,
+  const followupRules = (callAt = new Date()) => ({ callDay: indiaCallDay(callAt), outcome: state.dial, team: nutritionCall ? 'nutrition' : 'caregiver',
     active: activeCareCase(carePatient) });
 
   const chosenPatientId = () => patient?.id || $('#lc-patient')?.value || '';
+  const nutritionLink = nutritionLinkHost && nutritionCare.mountNutritionCallLink(nutritionLinkHost, {
+    getPatient: chosenPatientId, isCurrent: current, isConnected: () => state.dial === 'connected',
+  });
+  nutritionLink?.refresh();
+  $('#lc-patient')?.addEventListener('change', () => nutritionLink?.refresh());
   const consentGiven = () => consentWritten || (patient
     ? consentOnFile
     : !!patientOptions.find((p) => p.id === chosenPatientId())?.consent_given);
@@ -428,6 +438,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     const bounds = careCallBounds(rules);
     input.min = bounds.min || ''; input.max = bounds.max || '';
     if (dateManual) return;
+    if (nutritionCall) { input.value = ''; auto.style.display = 'none'; return; }
     let days = null;
     if (state.dial === 'connected') days = RECEPTIVENESS.find(x => x.key === state.recep)?.days ?? null;
     else if (state.dial) days = STATUS_DAYS[state.dial];
@@ -666,6 +677,9 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     if (rec.status === 'uploading') { showToast('The recording is still uploading. Wait a moment, then save.', 'warning', 6000); return; }
     const patientId = patient?.id || $('#lc-patient')?.value;
     const connected = state.dial === 'connected';
+    let nutritionFields = {};
+    try { if (nutritionLink) nutritionFields = nutritionLink.fields(); }
+    catch (error) { showToast(error.message, 'warning'); return; }
 
     callSaving = true;
     const disabledBeforeSave = [...$('#lc-form').querySelectorAll('input,textarea,select,button')].map(control => [control, control.disabled]);
@@ -705,6 +719,8 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
         requirements_noted: reqList.length ? reqList.join(', ') : null,
         follow_up_date: followUp,
         next_followup_date: followUp ? followUp + 'T00:00:00Z' : null,
+        ...(nutritionCall ? { nutrition_followup_mode: followUp ? 'scheduled' : 'unscheduled' } : {}),
+        ...nutritionFields,
         followup_strategy_notes: $('#lc-strategy').value.trim() || null,
         main_request_resolved: state.mainResolved,
         unplanned_interruption: state.interruption,
@@ -780,6 +796,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
       }
 
       stopGuard();
+      nutritionPlanSaved = !!state.levers.nutrition_plan_given && !leverFailures.some(f => f.lever === 'nutrition_plan_given');
       showSavedCall();
       const savedLevers = leverRows.length - leverFailures.length;
       const extras = (savedLevers ? ` · ${savedLevers} support` : '')
@@ -821,10 +838,14 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     const confirmed = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(savedCallId);
     $('#lc-submit').textContent = confirmed ? 'Call saved' : 'Check Call Logs';
     stage.innerHTML = `<h3>${confirmed ? 'Call saved' : 'Check Call Logs'}</h3><p>${note ? sanitize(note) : 'HopeBot usage feedback is a separate answer linked to this saved call. You can add it now or reopen the call from Call Logs.'}</p>
-      <div style="display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="btn btn-primary" data-lc-feedback ${confirmed ? '' : 'disabled'}>Add HopeBot feedback</button><button type="button" class="btn btn-secondary" data-lc-logs>Open Call Logs</button><button type="button" class="btn btn-secondary" data-lc-done>Done</button></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="btn btn-primary" data-lc-feedback ${confirmed ? '' : 'disabled'}>Add HopeBot feedback</button>${nutritionPlanSaved ? '<button type="button" class="btn btn-secondary" data-lc-nutrition>Review nutrition request</button>' : ''}<button type="button" class="btn btn-secondary" data-lc-logs>Open Call Logs</button><button type="button" class="btn btn-secondary" data-lc-done>Done</button></div>
       <div data-lc-feedback-slot style="margin-top:16px;min-width:0" hidden></div><p data-lc-feedback-error role="status"></p>`;
     el.prepend(stage); el.closest('.modal')?.scrollTo({ top: 0 });
     stage.querySelector('[data-lc-done]').onclick = () => { if (current()) closeOwned(); };
+    stage.querySelector('[data-lc-nutrition]')?.addEventListener('click', () => {
+      if (!current()) return;
+      nutritionCare.promptNutritionCompletion({ patientId: chosenPatientId(), isCurrent: freshActor, mayOpen: current, onSaved: async () => { if (freshActor() && typeof onSaved === 'function') await onSaved(); } });
+    });
     stage.querySelector('[data-lc-logs]').onclick = () => { if (current()) { closeOwned(); navigate('calls'); } };
     stage.querySelector('[data-lc-feedback]').onclick = async (event) => {
       if (!current() || !confirmed || feedbackSection) return;

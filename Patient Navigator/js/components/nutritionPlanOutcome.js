@@ -2,10 +2,11 @@ import { getSupabase } from '../supabase.js';
 import { sanitize } from '../utils/validators.js';
 import { showModal } from './modal.js';
 import { showToast } from './toast.js';
+import * as nutritionCare from './nutritionCare.js';
 
 export const PLAN_ATTEMPT_REASONS = { unreachable: 'Unreachable', no_whatsapp: 'No WhatsApp', not_interested: 'Not interested', already_supported_tata: 'Already supported through Tata', awaiting_reports: 'Awaiting reports', other: 'Other' };
 const STATES = { open: 'Open', assigned: 'Assigned', called: 'Called', plan_shared: 'Completion needs confirmation', closed: 'Closed' };
-const KINDS = { not_shared: 'Plan not shared', plan_recorded: 'Plan sharing recorded', plan_corrected: 'Plan sharing corrected' };
+const KINDS = { not_shared: 'Plan not shared', plan_recorded: 'Plan sharing recorded', plan_corrected: 'Plan sharing corrected', request_resolved: 'Request resolved', call_linked: 'Completed call linked' };
 export function nutritionDay(value = new Date()) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -82,6 +83,6 @@ export async function openNutritionRequestHistory({ row, isCurrent }) {
     const { data, error } = await getSupabase().rpc('get_nutrition_request_actions', { p_request: row.id });
     if (!owned()) return;
     if (error || !Array.isArray(data?.items)) throw new Error('unavailable');
-    host.innerHTML = `${data.truncated ? '<p class="nw-muted">Showing the latest 20 actions.</p>' : ''}<p class="nw-muted">${Math.max(Number(data.total) || 0, data.items.length)} recorded actions.</p>${data.items.length ? `<ol class="nw-history">${data.items.map(item => `<li><strong>${sanitize(KINDS[item.kind] || 'Care update')}${PLAN_ATTEMPT_REASONS[item.reason] ? ' - ' + sanitize(PLAN_ATTEMPT_REASONS[item.reason]) : ''}</strong><div class="nw-muted">${sanitize(dateLabel(item.created_at))} - ${sanitize(item.actor_name || 'Care team')}</div>${item.shared_on ? `<p>Shared on ${sanitize(item.shared_on)}. Date recorded; time unknown.</p>` : ''}${item.result_status ? `<p>Result: ${sanitize(STATES[item.result_status] || 'Status not recorded')}</p>` : ''}${item.note ? `<p class="nw-private-note">${sanitize(item.note)}</p>` : ''}</li>`).join('')}</ol>` : '<p class="nw-muted">No recorded actions yet.</p>'}`;
+    host.innerHTML = `${data.truncated ? '<p class="nw-muted">Showing the latest 20 actions.</p>' : ''}<p class="nw-muted">${Math.max(Number(data.total) || 0, data.items.length)} recorded actions.</p>${data.items.length ? `<ol class="nw-history">${data.items.map(item => `<li><strong>${sanitize(KINDS[item.kind] || 'Care update')}${(PLAN_ATTEMPT_REASONS[item.reason] || nutritionCare.RESOLUTION_REASONS[item.reason]) ? ' - ' + sanitize(PLAN_ATTEMPT_REASONS[item.reason] || nutritionCare.RESOLUTION_REASONS[item.reason]) : ''}</strong><div class="nw-muted">${sanitize(dateLabel(item.created_at))} - ${sanitize(item.actor_name || 'Care team')}</div>${item.shared_on ? `<p>Shared on ${sanitize(item.shared_on)}. Date recorded; time unknown.</p>` : ''}${item.result_status ? `<p>Result: ${sanitize(STATES[item.result_status] || 'Status not recorded')}</p>` : ''}${item.note ? `<p class="nw-private-note">${sanitize(item.note)}</p>` : ''}</li>`).join('')}</ol>` : '<p class="nw-muted">No recorded actions yet.</p>'}`;
   } catch { if (owned()) host.innerHTML = '<p class="nw-error" role="alert">Could not load history. Close this dialog and try again.</p>'; }
 }

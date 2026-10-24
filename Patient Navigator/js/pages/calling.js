@@ -38,7 +38,8 @@ import { blankRecording, guardDialLinks, mountRecordingSection, attachRecordingT
 // Names added for Fixboard #36 come through the namespace: a phone holding yesterday's
 // callRecording.js for a few minutes then gets undefined, not an app that never boots.
 import * as recordingNext from '../components/callRecording.js';
-import { CARE_CASE_FIELDS, indiaCallDay, dayPlus, activeCareCase, careCallBounds, normalizeCareCall } from '../utils/careFollowup.js';
+import * as careCalendar217 from '../utils/careFollowup.js?v=nutrition217';
+const { CARE_CASE_FIELDS, indiaCallDay, dayPlus, activeCareCase, careCallBounds, normalizeCareCall } = careCalendar217;
 // sql/172: families who asked HopeBot for a call. Footprint in this file: this
 // import, the #hb-requests div in mountReady() and the one call after it.
 import { mountHopebotRequests } from '../components/hopebotFamily.js';
@@ -2131,7 +2132,7 @@ function openClinicalDetailsModal(p) {
 // cooldown), so a connected outcome floors both the date-picker min and the
 // suggestion at 7 days. Anything earlier would sit in the queue unservable.
 function followupRules(callAt = new Date()) {
-  return { callDay: indiaCallDay(callAt), outcome: form.dialStatus, active: activeCareCase(currentPatientPitches) };
+  return { callDay: indiaCallDay(callAt), outcome: form.dialStatus, active: activeCareCase(currentPatientPitches), team: getUserRole() === 'nutritionist' ? 'nutrition' : 'caregiver' };
 }
 function suggestFollowup() {
   const input = document.getElementById('f-followup'); const autoEl = document.getElementById('fu-auto');
@@ -2139,6 +2140,7 @@ function suggestFollowup() {
   const rules = followupRules(), bounds = careCallBounds(rules);
   if (input) { input.min = bounds.min || ''; input.max = bounds.max || ''; }
   if (form.dateManual) return;
+  if (getUserRole() === 'nutritionist') { form.followupDate = ''; if (input) input.value = ''; if (autoEl) autoEl.style.display = 'none'; return; }
   let days = null;
   if (connected) { const r = RECEPTIVENESS.find(x => x.key === form.receptiveness); days = r ? Math.max(r.days, 7) : null; }
   else if (form.dialStatus) days = STATUS_DAYS[form.dialStatus];

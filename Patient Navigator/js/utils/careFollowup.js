@@ -29,7 +29,10 @@ export function activeCareCase(patient, now = new Date()) {
     && !(patient.disinterest_level != null && hold > time);
 }
 
-export function careCallBounds({ callDay, outcome, active = false }) {
+export function careCallBounds({ callDay, outcome, active = false, team = 'caregiver' }) {
+  // Nutrition preparation/explanation is deliberately scheduled. It is not a
+  // caregiver cooldown, and an initial assessment may have no appointment yet.
+  if (team === 'nutrition') return { min: validDay(callDay) ? callDay : null, max: null };
   return { min: dayPlus(callDay, outcome === 'connected' ? 7 : 3),
     max: active ? dayPlus(callDay, 15) : null };
 }
