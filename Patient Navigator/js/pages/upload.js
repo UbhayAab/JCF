@@ -18,6 +18,7 @@ import { showModal, closeModal } from '../components/modal.js';
 import { loadCallContext } from '../components/callContext.js';
 import { openDocumentViewer, describeDocuments, fmtDayTime, daysAgo } from '../components/docViewer.js';
 import { uploadStatusLabel } from '../utils/docClasses.js';
+import { hasLeadMeasurement, normalizeLeadRows, leadMeasurementFields, readLeadMeasurement } from '../utils/leadMeasurements.js';
 
 const ALLOWED = ['admin', 'manager', 'content', 'ground_poc', 'uploader'];
 const DEFAULT_HOSPITALS = [
@@ -39,6 +40,10 @@ const FIELD_SYNONYMS = {
   age:            ['age'],
   gender:         ['gender', 'sex'],
   notes:          ['notes', 'remark', 'remarks', 'comment', 'comments', 'additional', 'note'],
+  height_cm:      ['height', 'heightcm', 'heightincm', 'heightcentimetres'],
+  weight_kg:      ['weight', 'weightkg', 'weightinkg', 'weightkilograms'],
+  measured_on:    ['measuredon', 'measurementdate', 'datemeasured'],
+  measurement_consent: ['measurementconsent', 'familyconsent'],
 };
 function canonField(h) {
   const k = String(h).toLowerCase().replace(/[^a-z]/g, '');
@@ -198,14 +203,15 @@ async function submitRows(sb, rows, resultEl, after) {
   try { pre = await Promise.all(rows.slice(0, 20).map(r => checkPhoneRPC(sb, r.phone))); }
   catch { pre = []; }
   try {
-    const { data, error } = await sb.rpc('bulk_add_leads', { p_rows: rows });
+    rows = normalizeLeadRows(rows);
+    const { data, error } = await sb.rpc(rows.some(hasLeadMeasurement) ? 'bulk_add_leads_with_measurements' : 'bulk_add_leads', { p_rows: rows });
     if (error) throw error;
     const r = data || {};
     const added = r.added || 0, linked = r.linked || 0, enriched = r.enriched || 0;
     // "0 leads added" used to be the whole headline even when the entry had
     // genuinely done something, which is what made a second visit look like
     // a no-op. Count everything that landed.
-    const done = added + linked + enriched;
+    const done = added + linked + enriched + (r.measurements_saved || 0);
     const head = added
       ? `${added} lead${added === 1 ? '' : 's'} added${linked ? ` · ${linked} linked` : ''}${enriched ? ` · ${enriched} updated` : ''}`
       : done
@@ -220,6 +226,7 @@ async function submitRows(sb, rows, resultEl, after) {
           ${enriched ? `${enriched} ${enriched === 1 ? 'number was' : 'numbers were'} already on the list, and the new details you added (name, hospital, city) have been filled in. ` : ''}
           ${r.duplicates ? `${r.duplicates} already had everything you entered, so nothing changed for ${r.duplicates === 1 ? 'it' : 'them'}. Open the record below to see the calls and messages already on file. ` : ''}${r.invalid ? `${r.invalid} invalid number${r.invalid === 1 ? '' : 's'} skipped (not 10 digits). ` : ''}
           ${!done && !r.duplicates && !r.invalid ? 'The server reported no change. If you just saw an error before this, that first attempt already saved it: check the record below rather than uploading again. ' : ''}
+          ${r.measurements_saved ? `${r.measurements_saved} dated measurement record(s) saved. ` : ''}${r.measurements_unchanged ? `${r.measurements_unchanged} measurement record(s) already match; nothing was replaced. ` : ''}
           New leads wait for the manager's auto-distribute. <a href="#intake" style="color:var(--primary-ink);font-weight:600">See everything you've uploaded →</a>
         </div>
         ${dupeRows.length ? `<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
@@ -306,6 +313,7 @@ export async function renderUpload(container) {
           CSV, TSV, comma, semicolon, pipe, or newline-separated numbers are fine. An optional <strong>header row</strong> lets me read your columns:
           <code>Phone</code> (required), <code>Name</code>, <code>Hospital</code>, <code>City</code>, <code>State</code>,
           <code>Cancer type</code>, <code>Caregiver</code>, <code>Caregiver phone</code>, <code>Caregiver 2</code>, <code>Caregiver phone 2</code>, <code>Age</code>, <code>Gender</code>, <code>Notes</code>.
+          Optional measurements use <code>Height cm</code>, <code>Weight kg</code>, <code>Measurement date</code> (YYYY-MM-DD) and <code>Measurement consent</code> (yes only after the family agrees).
           If a number already belongs to a patient, the row's other numbers get <strong>linked to that same patient</strong> instead of creating a duplicate.
           No header? Paste numbers however you have them; I will extract one lead per 10-digit number.
         </div>
@@ -341,6 +349,7 @@ export async function renderUpload(container) {
         <div class="field" style="flex:1;min-width:180px"><label>Caregiver 2 phone</label><input class="input" id="s-cgphone2" inputmode="tel" /></div>
       </div>
       <span class="form-hint" style="display:block;margin:-6px 0 12px">All numbers stay linked to the same patient. Mentors call the patient first, then caregiver 1, then caregiver 2.</span>
+      ${leadMeasurementFields('s')}
       <div class="field"><label>Notes</label><textarea class="textarea" id="s-notes" rows="4" maxlength="10000" placeholder="Anything else worth noting (up to 10000 characters)"></textarea>
         <span class="form-hint" id="s-notes-count"></span></div>
       <!-- Asked for 26 and 28 Sep 2026 (Aadrika, for the ground team): upload
@@ -718,7 +727,7 @@ export async function renderUpload(container) {
     preview.innerHTML = (parsed.rows.length || parsed.invalid || parsed.dup) ? bits.join(' · ') : 'Paste rows. I\'ll tally them as you type.';
     submit.disabled = parsed.rows.length === 0;
     // mini preview table
-    const show = ['name', 'hospital', 'city', 'cancer_type'].filter(f => parsed.rows.some(r => r[f]));
+    const show = ['name', 'hospital', 'city', 'cancer_type','height_cm','weight_kg','measured_on','measurement_consent'].filter(f => parsed.rows.some(r => r[f]));
     const t = $('#lead-preview-table');
     if (parsed.rows.length && (parsed.hasHeader || show.length)) {
       t.innerHTML = `<div class="table-container"><table class="data-table" style="font-size:12px">
@@ -769,6 +778,7 @@ export async function renderUpload(container) {
       age: $('#s-age').value.trim(), gender: $('#s-gender').value, caregiver_name: $('#s-cgname').value.trim(),
       caregiver_phone: $('#s-cgphone').value.trim(), caregiver_name_2: $('#s-cgname2').value.trim(),
       caregiver_phone_2: $('#s-cgphone2').value.trim(), notes: $('#s-notes').value.trim(),
+      ...readLeadMeasurement(container,'s'),
     };
     const btn = $('#s-submit'); btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:17px;height:17px;border-width:2.5px"></span>Adding…';
     let added = false;

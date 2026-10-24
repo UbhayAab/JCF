@@ -32,6 +32,7 @@ import { beginDocumentTask, DocumentTaskStopped } from './documentReadTasks.js';
 import { showToast } from './toast.js';
 import { icon } from './icons.js';
 import { sanitize } from '../utils/validators.js';
+import { hasLeadMeasurement, normalizeLeadRows, leadMeasurementFields, readLeadMeasurement } from '../utils/leadMeasurements.js';
 
 const BUCKET = 'patient-docs';
 const PART_PAGES = 60;                       // photos per batch; doc-parse sorts up to 80
@@ -133,15 +134,16 @@ async function savePatient(file) {
   const h = file.hospital || {};
   // The notes are not sent here: bulk_add_leads would write them straight onto
   // the record (legacy_notes). save_intake_notes keeps them instead (sql/195).
-  const row = { phone: file.phone, name: file.name,
-                hospital: h.name || '', city: h.city || '', state: h.state || '' };
+  const row = normalizeLeadRows([{ phone: file.phone, name: file.name,
+    hospital: h.name || '', city: h.city || '', state: h.state || '',
+    weight_kg:file.weight_kg,height_cm:file.height_cm,measured_on:file.measured_on,measurement_consent:file.measurement_consent }])[0];
   const before = await withRetry(() => checkPhone(file.phone, file.task), { onWait: () => setState(file, 'waiting') });
   if (before.found && before.patient_id && !(await withRetry(() => canFile(before.patient_id, file.task)))) {
     throw new Blocked(`${before.full_name || 'This number'} was registered by someone else, so their papers go `
       + `through ${before.assigned_mentor ? before.assigned_mentor + ', their mentor' : 'their mentor'}.`);
   }
   await withRetry(async () => {
-    const { error } = await sb.rpc('bulk_add_leads', { p_rows: [row] });
+    const { error } = await sb.rpc(hasLeadMeasurement(row) ? 'bulk_add_leads_with_measurements' : 'bulk_add_leads', { p_rows: [row] });
     if (error) throw error;
   }, { onWait: () => setState(file, 'waiting') });
   const after = await withRetry(() => checkPhone(file.phone, file.task), { onWait: () => setState(file, 'waiting') });
@@ -714,7 +716,8 @@ function renderFiles() {
 
 function resetForm() {
   if (!host?.isConnected) return;
-  ['#ci-phone', '#ci-name', '#ci-notes'].forEach((s) => { const el = host.querySelector(s); if (el) el.value = ''; });
+  ['#ci-phone', '#ci-name', '#ci-notes', '#ci-height', '#ci-weight', '#ci-measured'].forEach((s) => { const el = host.querySelector(s); if (el) el.value = ''; });
+  const measurementConsent=host.querySelector('#ci-measure-consent');if(measurementConsent)measurementConsent.checked=false;
   const agree = host.querySelector('#ci-consent');
   if (agree) agree.checked = false;
   const st = host.querySelector('#ci-phone-status');
@@ -730,11 +733,13 @@ function readForm() {
     name: host.querySelector('#ci-name').value.trim().slice(0, 120),
     notes: host.querySelector('#ci-notes').value.trim().slice(0, 10000),
     agreed: host.querySelector('#ci-consent').checked,
+    ...readLeadMeasurement(host,'ci'),
   };
 }
 
 function newFile(form) {
   const file = { id: ++seq, phone: form.phone, name: form.name, notes: form.notes, hospital: hospitalOf(),
+                 weight_kg:form.weight_kg,height_cm:form.height_cm,measured_on:form.measured_on,measurement_consent:form.measurement_consent,
                  pages: [], batches: [], next: 0, render: Promise.resolve(), state: 'preparing', closed: false,
                  task: beginDocumentTask('Intake documents', null, { visible: false }) };
   file.task.onStop = () => {
@@ -781,6 +786,7 @@ export function mountCameraIntake(el, { hospital } = {}) {
       <div id="ci-phone-status"></div>
       <div class="field"><label for="ci-name">Name</label>
         <input class="input" id="ci-name" autocomplete="off" maxlength="120" placeholder="Optional" /></div>
+      ${leadMeasurementFields('ci')}
       <div class="field"><label for="ci-notes">Anything else</label>
         <textarea class="textarea" id="ci-notes" rows="3" maxlength="10000"
           placeholder="Age, cancer, ward or bed, a family member and their number. Any order, any words."></textarea></div>
@@ -806,7 +812,8 @@ export function mountCameraIntake(el, { hospital } = {}) {
   formTask.onStop = () => {
     clearTimeout(timer);
     if (el.isConnected) {
-      ['#ci-phone', '#ci-name', '#ci-notes'].forEach((selector) => { const input = el.querySelector(selector); if (input) input.value = ''; });
+      ['#ci-phone', '#ci-name', '#ci-notes', '#ci-height', '#ci-weight', '#ci-measured'].forEach((selector) => { const input = el.querySelector(selector); if (input) input.value = ''; });
+      el.querySelector('#ci-measure-consent').checked=false;
       el.querySelector('#ci-consent').checked = false;
       el.querySelector('#ci-next-text').textContent = '';
       el.querySelector('#ci-next').hidden = true;
@@ -849,6 +856,7 @@ export function mountCameraIntake(el, { hospital } = {}) {
     if (!formTask.active()) return;
     const form = readForm();
     if (!form.phone) { showToast('Type the 10 digits of the patient\'s number.', 'warning'); el.querySelector('#ci-phone').focus(); return; }
+    try { normalizeLeadRows([form]); } catch(err) { showToast(err.message,'warning');return; }
     if (!form.agreed) { showToast('Ask the family first, then tick that they agreed.', 'warning'); return; }
     const file = newFile(form);
     renderFiles();
@@ -862,6 +870,7 @@ export function mountCameraIntake(el, { hospital } = {}) {
     const sameForm = () => host === el && el.isConnected && el.querySelector('#ci-form') === initiatingForm;
     const form = readForm();
     const sameDraft = () => sameForm() && Object.entries(form).every(([key, value]) => readForm()[key] === value);
+    try { normalizeLeadRows([form]); } catch(err) { showToast(err.message,'warning');return; }
     if (!form.phone) { showToast('Type the 10 digits of the patient\'s number first.', 'warning'); return; }
     const btn = el.querySelector('#ci-refused');
     btn.disabled = true;
@@ -884,7 +893,7 @@ export function mountCameraIntake(el, { hospital } = {}) {
       const who = form.name || `the number ending ${form.phone.slice(-4)}`;
       if (sameDraft()) {
         resetForm();
-        showNext(`Saved ${who} without photos${notesKept ? ', kept your notes for their mentor,' : ''} and recorded that the family did not agree.`);
+        showNext(`Saved ${who} without photos${notesKept ? ', kept your notes for their mentor,' : ''} and recorded that the family did not agree to document reading.`);
       } else if (sameForm()) showToast('The earlier family\'s answer was saved. Your current draft is kept.', 'success');
     } catch (e) {
       if (formTask.active() && sameForm()) showToast('Could not save the family\'s answer: ' + (e.message || 'check the network and try again'), 'error');
@@ -907,6 +916,8 @@ export function prefillCameraIntake({ phone = '', name = '' } = {}) {
   input.value = tenDigits(phone) || '';
   host.querySelector('#ci-name').value = name;
   host.querySelector('#ci-notes').value = '';
+  ['#ci-height','#ci-weight','#ci-measured'].forEach(s=>{host.querySelector(s).value='';});
+  host.querySelector('#ci-measure-consent').checked=false;
   host.querySelector('#ci-consent').checked = false;
   input.dispatchEvent(new Event('input'));
   host.scrollIntoView({ block: 'start', behavior: 'smooth' });
