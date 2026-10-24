@@ -414,7 +414,9 @@ function cardHTML(r) {
   // The ownership badge is the thing the eye lands on, so the control that
   // changes ownership sits right beside it rather than as a fourth unlabelled
   // glyph in the action row, where it wrapped onto a line of its own.
-  const ownerBadge = isMine
+  const ownerBadge = training
+    ? '<span class="badge badge-primary" style="font-size:11px">Assigned</span>'
+    : isMine
     ? `<span class="badge badge-primary" style="font-size:11px" title="${r.owner_since ? 'Yours since ' + formatDate(r.owner_since) : 'Yours'}">Yours</span>
        ${!training ? '<button class="btn btn-ghost btn-sm" data-act="release" style="padding:2px 7px;font-size:11.5px" title="Hand them back to Unclaimed">Hand back</button>' : ''}`
     : isTheirs
