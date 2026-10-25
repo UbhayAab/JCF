@@ -90,6 +90,7 @@ export function mountSaturdaySession(mount) {
     reminder.hidden = true;
     others.replaceChildren();
     link.textContent = 'Open session page';
+    link.href = GATEWAY;
   }
   fallback();
   detail.textContent = 'Checking the next session and any extra sessions...';
@@ -130,6 +131,7 @@ export function mountSaturdaySession(mount) {
         if (view.moreSessions) others.append(anchor('Check session page', ''));
       }
       link.textContent = view.open ? 'Join session' : 'Open session page';
+      link.href = `${GATEWAY}${view.open ? '/join' : ''}`;
     } catch {
       if (alive() && pending === controller) fallback();
     } finally {
