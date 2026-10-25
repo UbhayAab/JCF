@@ -85,11 +85,11 @@ export async function renderBroadcasts(container) {
     <div class="page-header">
       <div>
         <h1>WhatsApp messages</h1>
-        <p class="header-subtitle" style="margin:4px 0 0">Write one message, choose who gets it and when. HopeBot sends it on WhatsApp at that time.</p>
+        <p class="header-subtitle" style="margin:4px 0 0">Prepare a WhatsApp message and save it as a draft. Scheduled sending is switched off.</p>
       </div>
       <button class="btn btn-primary btn-sm" id="wb-new">${icon('plus')}New message</button>
     </div>
-    <p class="muted" style="margin:0 0 var(--s4);color:var(--ink-2)">A family gets a message only with consent, a valid mobile and no do-not-call or STOP, checked again when it goes out. Until messages to families are switched on, HopeBot sends only to the team's own numbers and shows families as held.</p>
+    <p class="muted" style="margin:0 0 var(--s4);color:var(--ink-2)">Scheduled delivery is switched off for groups, families and team test numbers. Saving a draft does not send it. Before any future delivery, each contact must meet consent, number and STOP checks.</p>
     <div id="wb-list"><div class="card" style="padding:28px;text-align:center;color:var(--ink-3)">Loading messages…</div></div>`;
   container.querySelector('#wb-new').addEventListener('click', () => openBroadcastComposer(container));
   await loadList(container);
@@ -188,21 +188,21 @@ export async function openBroadcastComposer(container, existing = null, preset =
       <p id="wb-template-help" style="margin:8px 0 0;color:var(--ink-2);font-size:13px"></p></div>
     <div id="wb-blanks"></div>
     <div class="form-group" id="wb-session-group"><label class="form-label" for="wb-session">Session starts (India time, optional helper)</label>
-      <input class="form-input" id="wb-session" type="datetime-local"><p class="form-hint">Fills the session date and time above. Delivery time below is when the invitation should go out.</p></div>
+      <input class="form-input" id="wb-session" type="datetime-local"><p class="form-hint">Fills the session date and time above. The planned delivery time below is saved only in this draft.</p></div>
     <div class="form-group"><label class="form-label" for="wb-aud">Who gets it</label>
       <select class="form-select" id="wb-aud">${AUDIENCES.map(a => `<option value="${a.k}"${a.k === state.kind ? ' selected' : ''}>${a.label}</option>`).join('')}</select></div>
     <div id="wb-people" style="margin-bottom:var(--s4)"></div>
     <div class="form-group"><label class="form-label" for="wb-when">When (India time)</label>
-      <input class="form-input" id="wb-when" type="datetime-local" value="${defaultWhen(existing)}"><p class="form-hint">Delivery between 9 AM and before 9 PM IST, at least 2 minutes ahead and within 60 days. HopeBot checks every minute; consent, quiet hours and sending limits can hold delivery.</p></div>
+      <input class="form-input" id="wb-when" type="datetime-local" value="${defaultWhen(existing)}"><p class="form-hint">Planned delivery time for this draft. Scheduled delivery is switched off; saving does not schedule or send a message.</p></div>
     <div class="form-label" style="margin-bottom:6px">What they will see</div>
     <div class="card" id="wb-preview" style="padding:12px 14px;background:var(--surface-2);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)"></div>
     <div id="wb-poster" style="margin-top:16px"></div>
-    <p>Family campaigns remain switched off. A poster saved on a group draft does not enable sending. Use the family page to schedule a permitted individual message.</p>
+    <p>Group and individual scheduled WhatsApp messages remain switched off while consent and delivery costs are reviewed. You can save this group message as a draft, with or without a poster. Saving a draft does not send it.</p>
     <div style="display:flex;justify-content:flex-end;gap:var(--s2);margin-top:var(--s4);flex-wrap:wrap">
       <button class="btn btn-secondary" id="wb-close" type="button">Close</button>
       <button class="btn btn-secondary" id="wb-draft" type="button">Save as draft</button>
-      <p>Schedule each message from the family page under Scheduled WhatsApp. Group campaigns are not enabled.</p>
-      <button class="btn btn-primary" id="wb-schedule" type="button" disabled>${icon('clock')}Schedule from a family page</button>
+      <p>For now, call the family using the Calling Portal. A family's Scheduled WhatsApp panel can explain its permissions, but scheduling there also stays off.</p>
+      <button class="btn btn-primary" id="wb-schedule" type="button" disabled>${icon('clock')}Scheduling switched off</button>
     </div>`;
 
   const tplNow = () => tpls.find(t => t.name === state.tpl);
