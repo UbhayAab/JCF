@@ -663,7 +663,7 @@ async function loadAvailability() {
               <div class="tc-actions">
                 ${!m.available ? `<button class="btn btn-ghost btn-sm cover-btn" data-id="${m.caller_id}" data-name="${sanitize(m.full_name)}">Cover</button>` : ''}
                 <button class="btn ${m.available ? 'btn-secondary' : 'btn-primary'} btn-sm av-toggle" data-id="${m.caller_id}" data-name="${sanitize(m.full_name)}" data-on="${m.available}">${m.available ? 'On' : 'Off'}</button>
-                ${probById[m.caller_id] ? `<button class="btn btn-ghost btn-sm prob-toggle" data-id="${m.caller_id}" data-name="${sanitize(m.full_name)}" data-on="${!!probById[m.caller_id].on_probation}" title="${probById[m.caller_id].on_probation ? 'Take off probation: normal calls and the full menu' : 'Put on probation: no automatic calls apart from her ramp-up, only the families she is given, and a simple menu'}">${probById[m.caller_id].on_probation ? 'End probation' : 'Probation'}</button>` : ''}
+                ${probById[m.caller_id] ? `<button class="btn btn-ghost btn-sm prob-toggle" data-id="${m.caller_id}" data-name="${sanitize(m.full_name)}" data-on="${!!probById[m.caller_id].on_probation}" title="${probById[m.caller_id].on_probation ? 'Take off probation: open the full menu; active ramp-up limits and assignment rules still apply' : 'Put on probation: no automatic calls apart from her ramp-up, only the families she is given, and a simple menu'}">${probById[m.caller_id].on_probation ? 'End probation' : 'Probation'}</button>` : ''}
                 ${rampById[m.caller_id] ? `<button class="btn btn-ghost btn-sm ramp-btn" data-id="${m.caller_id}" data-name="${sanitize(m.full_name)}" data-role="${sanitize(m.role)}" title="Gradual ramp-up for a new intern, and her last day">${canRamp(m.role) ? 'Ramp-up' : 'Last day'}</button>` : ''}
               </div>
             </div>
@@ -695,8 +695,8 @@ async function loadAvailability() {
       btn.disabled = false;
       if (error) { showToast(error.message, 'error'); return; }
       showToast(on
-        ? `${sanitize(btn.dataset.name) || 'They'} is off probation: normal calls and the full menu from now`
-        : `${sanitize(btn.dataset.name) || 'They'} is on probation: give her families by hand with Give patients`, 'success');
+        ? `${sanitize(btn.dataset.name) || 'They'} is off probation: the full menu is open; active ramp-up limits and assignment rules still apply`
+        : `${sanitize(btn.dataset.name) || 'They'} is on probation: only assigned families are visible; an active ramp-up can still provide calls, or stop it for manual handovers`, 'success');
       loadAvailability();
     }));
     content.querySelectorAll('.ramp-btn').forEach(btn => btn.addEventListener('click', () => openRampModal({

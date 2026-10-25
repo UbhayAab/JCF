@@ -38,7 +38,7 @@ export function rampBadges(r) {
   const out = [];
   if (r.ramp_active) {
     const today = r.cap_today ? `up to ${Number(r.cap_today)} call${Number(r.cap_today) === 1 ? '' : 's'} today` : 'regular calls';
-    out.push(`<span class="badge badge-info" title="Ramping up: ${today}, only families already in touch until working day 14. New leads from ${sanitize(fmt(r.new_leads_from))}.">Ramp-up day ${Number(r.ramp_day)} of 14 · ${today}</span>`);
+    out.push(`<span class="badge badge-info" title="Ramping up: ${today}, only families already in touch until working day 14. New leads are possible from ${sanitize(fmt(r.new_leads_from))} only when probation is off and the usual assignment rules allow them.">Ramp-up day ${Number(r.ramp_day)} of 14 · ${today}</span>`);
     if (r.signed_in === false) out.push('<span class="badge badge-warn" title="Nothing is handed to her until she signs in for the first time">Not signed in yet</span>');
   }
   if (r.ends_on) out.push(`<span class="badge badge-warn" title="Her families go to new interns ramping up as her last day comes near">Last day ${sanitize(fmt(r.ends_on))}</span>`);
@@ -53,9 +53,9 @@ export function openRampModal({ id, name, role, ramp }, onDone) {
   const el = document.createElement('div');
   const handed = Number(r.handed_over || 0);
   const status = r.ramp_active
-    ? `Day <strong>${Number(r.ramp_day)}</strong> of 14 of her ramp-up: ${r.cap_today ? `up to <strong>${Number(r.cap_today)}</strong> call${Number(r.cap_today) === 1 ? '' : 's'} today` : 'regular calls'}, families already in touch only. New leads from ${sanitize(fmt(r.new_leads_from))}. ${handed} famil${handed === 1 ? 'y' : 'ies'} handed to her so far.`
-    : r.ramp_started_on ? `Her ramp-up finished (it started ${sanitize(fmt(r.ramp_started_on))}). She gets calls like everyone else.`
-      : 'Not ramping up: she gets calls like everyone else.';
+    ? `Day <strong>${Number(r.ramp_day)}</strong> of 14 of her ramp-up: ${r.cap_today ? `up to <strong>${Number(r.cap_today)}</strong> call${Number(r.cap_today) === 1 ? '' : 's'} today` : 'regular calls'}, families already in touch only. New leads are possible from ${sanitize(fmt(r.new_leads_from))} only when probation is off and the usual assignment rules allow them. ${handed} famil${handed === 1 ? 'y' : 'ies'} handed to her so far.`
+    : r.ramp_started_on ? `Her ramp-up finished (it started ${sanitize(fmt(r.ramp_started_on))}). If she is still on probation, she gets no automatic calls; otherwise her usual assignment rules apply.`
+      : 'Automatic ramp-up is off. If she is on probation, give her assigned families by hand; otherwise her usual assignment rules apply.';
   const notes = [
     r.ramp_active && r.signed_in === false ? 'She has not signed in yet, so nothing is handed to her until she does.' : '',
     r.ramp_active && r.on_probation ? 'She is on probation. The ramp-up gives her calls now, but when it ends she gets no automatic calls until probation is lifted.' : '',
@@ -66,7 +66,7 @@ export function openRampModal({ id, name, role, ramp }, onDone) {
       <div class="form-label">Gradual ramp-up</div>
       <p class="muted" style="margin:0 0 8px">${status}</p>
       ${notes.map((n) => `<p class="muted" style="margin:0 0 8px;color:var(--warn-ink, inherit)">${sanitize(n)}</p>`).join('')}
-      <p class="muted" style="margin:0 0 10px;font-size:13px">Working days 1 to 7: as many calls a day as the day number. Working days 1 to 14: only families already in touch, handed over each day from someone whose last day is near, else from the fullest caseloads. From working day 15: new leads too. A new caregiver mentor starts this the day her account is made; nothing is handed to her until she first signs in.</p>
+      <p class="muted" style="margin:0 0 10px;font-size:13px">Working days 1 to 7: as many calls a day as the day number. Working days 1 to 14: only families already in touch, handed over each day from someone whose last day is near, else from the fullest caseloads. From working day 15: new leads are possible only when probation is off and the usual assignment rules allow them. A new caregiver mentor starts this the day her account is made; nothing is handed to her until she first signs in.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button type="button" class="btn btn-secondary btn-sm" id="ramp-start">${r.ramp_active ? 'Start again from day 1' : 'Start ramp-up today'}</button>
         ${r.ramp_active ? '<button type="button" class="btn btn-ghost btn-sm" id="ramp-stop">Stop ramp-up</button>' : ''}
@@ -94,9 +94,9 @@ export function openRampModal({ id, name, role, ramp }, onDone) {
   };
   const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);   // the day in India
   el.querySelector('#ramp-start')?.addEventListener('click', (e) => run(e.currentTarget, 'set_intern_ramp', { p_user: id, p_start: today },
-    `${sanitize(name) || 'She'} starts her ramp-up today: 1 call today, 2 tomorrow, families already in touch.`));
+    `${sanitize(name) || 'She'} starts her ramp-up today: up to 1 call on working day 1, then up to 2 on the next working day, with families already in touch. Nothing is handed over before her first sign-in.`));
   el.querySelector('#ramp-stop')?.addEventListener('click', (e) => run(e.currentTarget, 'set_intern_ramp', { p_user: id, p_start: null },
-    'Ramp-up stopped: calls like everyone else from the next build.'));
+    'Ramp-up stopped. If she is on probation, give her families by hand. Otherwise the usual assignment rules apply; no calls are handed over by this action.'));
   el.querySelector('#ramp-ends-save')?.addEventListener('click', (e) => {
     const v = el.querySelector('#ramp-ends').value;
     if (!v) { showToast('Pick a day first.', 'warning'); return; }
