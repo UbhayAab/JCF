@@ -9,6 +9,8 @@
 import { icon } from '../components/icons.js';
 import { STAGE_GUIDES, INSTRUMENTS, RECEPTIVENESS, MEASURES, BEREAVEMENT_MEASURES } from '../utils/catalog.js';
 import { getCurrentProfile } from '../auth.js';
+import { sanitize } from '../utils/validators.js';
+import { TAB_GUIDES, guideFromHash } from '../utils/tabGuides.js';
 
 const MINDSET_GUIDE = [
   { key: 'Hopeful', cue: 'Forward-looking words, asks about options', respond: 'Feed the hope with concrete next steps, hope plus a plan.' },
@@ -39,6 +41,15 @@ function section(id, title, iconName, bodyHTML, subtitle = '') {
 export async function renderLearn(container) {
   const me = getCurrentProfile();
   const first = me?.full_name?.split(' ')[0] || 'there';
+  const selectedGuide = guideFromHash(window.location.hash);
+  const guides = selectedGuide
+    ? [selectedGuide, ...TAB_GUIDES.filter(guide => guide !== selectedGuide)] : TAB_GUIDES;
+  const tabGuidesHTML = section('tab-guides', 'Guide to each tab', 'book', guides.map(guide => `
+    <article id="learn-guide-${guide.route}" style="padding:14px 0;border-bottom:1px solid var(--line-2)">
+      <h4 style="margin:0 0 8px">${sanitize(guide.label)}</h4>
+      <p style="font:var(--t-sm);color:var(--ink-2);margin:0 0 8px">${sanitize(guide.what)}</p>
+      <ol style="margin:0 0 0 20px;font:var(--t-sm);color:var(--ink-2)">${guide.steps.map(step => `<li style="margin-bottom:8px">${sanitize(step)}</li>`).join('')}</ol>
+    </article>`).join(''), 'What each tab is for, and where to start. Your existing care permissions still apply.');
 
   const stagesHTML = STAGE_GUIDES.map(g => `
     <div class="lever-row" style="display:block;border-left:3px solid var(--${g.tone === 'clay' ? 'clay' : g.tone === 'info' ? 'info' : 'ok'});padding:14px 16px">
@@ -123,25 +134,27 @@ export async function renderLearn(container) {
 
   const toc = [
     ['ethos', 'Why we call'], ['stages', 'The 3-call playbook'], ['reading', 'Reading the person'],
-    ['instruments', 'The instruments'], ['redflags', 'Red flags'], ['saturday', 'Saturday circles'],
+    ['instruments', 'The instruments'], ['redflags', 'Red flags'], ['saturday', 'Saturday circles'], ['tab-guides', 'Guide to each tab'],
   ];
 
   container.innerHTML = `
     <div class="page-header">
       <div>
         <h1>Learning Hub</h1>
-        <p class="header-subtitle" style="margin:4px 0 0">Hi ${first}, everything you need to run calls that genuinely help, and grow as a clinician doing it.</p>
+        <p class="header-subtitle" style="margin:4px 0 0">Hi ${sanitize(first)}, everything you need to run calls that genuinely help, and grow as a clinician doing it.</p>
       </div>
     </div>
     <div class="chip-row" style="margin-bottom:var(--s5)">
       ${toc.map(([id, label]) => `<button class="fchip" data-jump="${id}">${label}</button>`).join('')}
     </div>
+    ${selectedGuide ? tabGuidesHTML : ''}
     ${section('ethos', 'Why we call: the Jarurat Care way', 'handHeart', ethosHTML, 'Free service. Relationship first. Data because it routes the help.')}
     ${section('stages', 'The 3-call playbook', 'phoneCall', stagesHTML, 'The portal shows you the right focus automatically. This is the thinking behind it')}
     ${section('reading', 'Reading the person', 'heart', `${recepHTML}<div style="height:var(--s5)"></div>${mindsetHTML}`, 'Receptiveness sets the rhythm; mindset sets your tone')}
     ${section('instruments', 'The instruments you administer', 'activity', instrumentsHTML, 'Real, validated tools. The app walks you through them item by item')}
     ${section('redflags', 'Red flags & escalation', 'alertTriangle', redflagHTML, 'When to stop being a caller and start being a colleague')}
     ${section('saturday', 'Saturday circles (WhatsApp groups)', 'users', saturdayHTML, 'Nutrition one week, well-being the next')}
+    ${selectedGuide ? '' : tabGuidesHTML}
   `;
 
   container.querySelectorAll('[data-jump]').forEach(chip => {

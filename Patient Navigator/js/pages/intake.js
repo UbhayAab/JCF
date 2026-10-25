@@ -16,10 +16,11 @@ import { capitalize, exportToCSV } from '../utils/formatters.js';
 
 const READER_ROLES = ['admin', 'manager', 'content'];
 
-let rows = [];          // full report for the selected uploader
-let uploaderName = '';  // for the CSV filename + headline
-
 export async function renderIntake(container) {
+  // Each mounted report owns its result and export identity. An obsolete
+  // page must never replace the data used by another page's controls.
+  let rows = [];
+  let uploaderName = '';
   const role = getUserRole();
   const me = getCurrentProfile();
   const isReader = READER_ROLES.includes(role);
@@ -41,9 +42,9 @@ export async function renderIntake(container) {
     </div>
 
     <div class="card" style="margin-bottom:var(--s4);display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-      <input class="input" id="ir-search" placeholder="Search name, code, phone, city…" style="flex:1;min-width:220px" />
-      <select class="select" id="ir-hospital" style="width:auto;min-width:200px"><option value="">All hospitals</option></select>
-      <select class="select" id="ir-status" style="width:auto;min-width:150px"><option value="">All statuses</option></select>
+      <input class="input" id="ir-search" placeholder="Search name, code, phone, city…" style="flex:1;min-width:220px" disabled />
+      <select class="select" id="ir-hospital" style="width:auto;min-width:200px" disabled><option value="">All hospitals</option></select>
+      <select class="select" id="ir-status" style="width:auto;min-width:150px" disabled><option value="">All statuses</option></select>
     </div>
 
     <div id="ir-table">${Array(5).fill('<div class="skeleton skeleton-row" style="height:48px;margin-bottom:8px"></div>').join('')}</div>
@@ -51,34 +52,61 @@ export async function renderIntake(container) {
 
   const sb = getSupabase();
   const $ = (s) => container.querySelector(s);
+  const tableEl = $('#ir-table');
+  // The app reuses its page container across navigation. Bind async work to
+  // this mounted report, including the uploader-list request before it loads.
+  const currentView = () => container.isConnected && $('#ir-table') === tableEl;
+  const setFiltersDisabled = (disabled) => {
+    ['#ir-search', '#ir-hospital', '#ir-status'].forEach(s => { $(s).disabled = disabled; });
+  };
+  const unavailable = () => {
+    $('#ir-tiles').innerHTML = '<div class="card stat-card" style="grid-column:1/-1" role="status">Report totals unavailable. Try another uploader or reload.</div>';
+  };
 
   // A report that arrives after a newer choice is dropped: picking another
   // uploader while the default one is still loading used to show the first
   // report under the second name (found 2026-10-06 checking Fixboard #11).
   let loadSeq = 0;
   async function loadReport(uploaderId, name) {
+    if (!currentView()) return;
     const mine = ++loadSeq;
-    uploaderName = name || me?.full_name || 'uploader';
-    const tableEl = $('#ir-table');
+    const selectedName = name || me?.full_name || 'uploader';
+    const current = () => mine === loadSeq && currentView();
+    rows = [];
+    uploaderName = '';
+    $('#ir-download').disabled = true;
+    setFiltersDisabled(true);
+    $('#ir-tiles').innerHTML = '<div class="card stat-card" style="grid-column:1/-1" role="status">Loading report totals…</div>';
     tableEl.innerHTML = Array(5).fill('<div class="skeleton skeleton-row" style="height:48px;margin-bottom:8px"></div>').join('');
     try {
       const { data, error } = await sb.rpc('get_intake_report', uploaderId ? { p_uploader: uploaderId } : {});
-      if (mine !== loadSeq) return;
+      if (!current()) return;
       if (error) throw error;
       rows = data || [];
-      renderTiles(container);
-      buildFilters(container);
-      renderTable(container);
+      uploaderName = selectedName;
+      renderTiles(container, rows, uploaderName);
+      buildFilters(container, rows);
+      renderTable(container, rows);
+      setFiltersDisabled(false);
       $('#ir-download').disabled = rows.length === 0;
     } catch (e) {
-      if (mine !== loadSeq) return;
-      tableEl.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Couldn't load the report</h4><p>${e.message}</p></div>`;
+      if (!current()) return;
+      unavailable();
+      tableEl.innerHTML = `<div class="empty" role="alert"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Couldn't load the report</h4><p>${sanitize(e.message || 'Please try again.')}</p></div>`;
     }
   }
+
+  // Bind controls before any initial RPC can wait. The uploader may change
+  // while its first report is pending, and that newer result is usable now.
+  $('#ir-search').addEventListener('input', () => renderTable(container, rows));
+  $('#ir-hospital').addEventListener('change', () => renderTable(container, rows));
+  $('#ir-status').addEventListener('change', () => renderTable(container, rows));
+  $('#ir-download').addEventListener('click', () => downloadCSV(rows, uploaderName));
 
   if (isReader) {
     try {
       const { data, error } = await sb.rpc('get_intake_uploaders');
+      if (!currentView()) return;
       if (error) throw error;
       const ups = data || [];
       const sel = $('#ir-uploader');
@@ -92,18 +120,22 @@ export async function renderIntake(container) {
       // default: the biggest intake contributor who is NOT an admin, else first
       const first = ups.find(u => u.role !== 'admin') || ups[0];
       if (first) { sel.value = first.uploader_id; await loadReport(first.uploader_id, first.full_name); }
-    } catch (e) { showToast('Could not load uploaders: ' + e.message, 'error'); }
+      else {
+        $('#ir-tiles').innerHTML = '<div class="card stat-card" style="grid-column:1/-1" role="status">No uploads yet.</div>';
+        renderTable(container, rows);
+      }
+    } catch (e) {
+      if (!currentView()) return;
+      unavailable();
+      tableEl.innerHTML = '<div class="empty"><h4>Could not load uploaders</h4><p>Reload to try again.</p></div>';
+      showToast('Could not load uploaders: ' + e.message, 'error');
+    }
   } else {
     await loadReport(null, me?.full_name);
   }
-
-  $('#ir-search').addEventListener('input', () => renderTable(container));
-  $('#ir-hospital').addEventListener('change', () => renderTable(container));
-  $('#ir-status').addEventListener('change', () => renderTable(container));
-  $('#ir-download').addEventListener('click', () => downloadCSV());
 }
 
-function renderTiles(container) {
+function renderTiles(container, rows, uploaderName) {
   const total = rows.length;
   const byHospital = {};
   rows.forEach(r => { const h = normHospital(r.treating_hospital); if (h) byHospital[h] = (byHospital[h] || 0) + 1; });
@@ -140,7 +172,7 @@ function normHospital(h) {
   return s.replace(/\s+/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
 }
 
-function buildFilters(container) {
+function buildFilters(container, rows) {
   const hsel = container.querySelector('#ir-hospital');
   const ssel = container.querySelector('#ir-status');
   if (!hsel || !ssel) return;
@@ -156,7 +188,7 @@ function buildFilters(container) {
     Object.entries(st).sort((a, b) => b[1] - a[1]).map(([s, n]) => `<option value="${s}">${capitalize(String(s).replace('_', ' '))} (${n})</option>`).join('');
 }
 
-function filteredRows(container) {
+function filteredRows(container, rows) {
   const q = (container.querySelector('#ir-search')?.value || '').toLowerCase().trim();
   const h = container.querySelector('#ir-hospital')?.value || '';
   const s = container.querySelector('#ir-status')?.value || '';
@@ -169,10 +201,10 @@ function filteredRows(container) {
   });
 }
 
-function renderTable(container) {
+function renderTable(container, rows) {
   const el = container.querySelector('#ir-table');
   if (!el) return;
-  const list = filteredRows(container);
+  const list = filteredRows(container, rows);
   if (!list.length) {
     el.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('inbox')}</div><h4>Nothing here</h4><p>${rows.length ? 'No rows match the current filters.' : 'No patients onboarded yet. They appear the moment an upload lands.'}</p></div>`;
     return;
@@ -206,7 +238,7 @@ function renderTable(container) {
 
 // Uses the shared writer rather than a second hand-rolled one, so the phone
 // column gets the same Excel text treatment as every other export.
-function downloadCSV() {
+function downloadCSV(rows, uploaderName) {
   if (!rows.length) return;
   const day = (x) => (x ? new Date(x).toLocaleDateString('en-IN') : '');
   const v = (x) => (x === null || x === undefined ? '' : x);

@@ -12,6 +12,7 @@ import { navigate } from '../router.js';
 import { showToast } from './toast.js';
 import { confirmModal, showModal, closeModal } from './modal.js';
 import { probationLevel, routeOpen, progressLine, ensureProbation, unlockNews } from '../utils/probation.js';
+import { tabGuide, guideHref } from '../utils/tabGuides.js';
 import { icon } from './icons.js';
 import { roleLabel } from '../utils/formatters.js';
 import { mountInstallButton } from '../pwa.js';
@@ -211,12 +212,20 @@ function showUnlockNews() {
   const news = unlockNews();
   if (!news) return;
   const learn = '<a href="#learn" class="unlock-learn">Learning Hub</a>';
+  const guides = news === 'all'
+    ? NAV_ITEMS.flatMap(section => section.items)
+      .filter(item => item.roles.includes(getUserRole()) && routeOpen(item.route, getUserRole()))
+      .map(item => tabGuide(item.route)).filter(Boolean)
+    : news.map(item => tabGuide(item.route)).filter(Boolean);
+  const guideList = `<ul style="margin:0 0 10px;padding-left:18px">${guides.map(guide =>
+    `<li style="margin-bottom:10px"><strong>${sanitize(guide.label)}</strong>: ${sanitize(guide.what)}
+      <a href="${guideHref(guide.route)}" class="unlock-learn">Read the ${sanitize(guide.label)} guide</a></li>`).join('')}</ul>`;
   const content = news === 'all'
     ? `<p style="margin:0 0 10px">You have finished training: every tab of your role is in the menu now.</p>
-       <p class="due-meta" style="margin:0">Not sure what a tab is for? The ${learn} explains each one.</p>`
+       <p class="due-meta" style="margin:0 0 10px">Quick guides to the tabs in your menu:</p>${guideList}
+       <p class="due-meta" style="margin:0">The ${learn} also has the call playbook.</p>`
     : `<p style="margin:0 0 10px">After your first conversations, ${news.length} more tabs are in the menu:</p>
-       <ul style="margin:0 0 10px;padding-left:18px">${news.map(n => `<li><strong>${n.label}</strong>: ${n.what}.</li>`).join('')}</ul>
-       <p class="due-meta" style="margin:0">The ${learn} has a page on each.</p>`;
+       ${guideList}<p class="due-meta" style="margin:0">The ${learn} also has the call playbook.</p>`;
   showModal({
     title: news === 'all' ? 'Every tab is open' : 'New tabs are open',
     content,
