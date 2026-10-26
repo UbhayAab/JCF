@@ -198,7 +198,15 @@ export function hasUnsavedInput() {
     if (['hidden', 'button', 'submit', 'reset', 'search'].includes(el.type)) return false;
     if (el.type === 'file') return !!el.files?.length;
     if (['checkbox', 'radio'].includes(el.type)) return el.checked !== el.defaultChecked;
-    if (el.tagName === 'SELECT') return [...el.options].some(o => o.selected !== o.defaultSelected);
+    if (el.tagName === 'SELECT') {
+      const options = [...el.options];
+      if (el.multiple) return options.some(o => o.selected !== o.defaultSelected);
+      // With no selected attribute, HTML selects the first available option.
+      // That browser default is not an edit to an unfinished form.
+      const marked = options.findLastIndex(o => o.defaultSelected);
+      const initial = marked >= 0 ? marked : options.findIndex(o => !o.disabled && !o.parentElement?.disabled);
+      return el.selectedIndex !== initial;
+    }
     return el.value !== el.defaultValue;
   });
 }

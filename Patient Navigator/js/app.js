@@ -36,7 +36,7 @@ import { validateEmail, validatePassword } from './utils/validators.js';
 import { CONFIG } from './config.js';
 import { initTheme, renderThemeSwitch } from './theme.js';
 import { initPwa, mountInstallButton, mountInstallBar } from './pwa.js';
-import { startUpdateWatch, mountFreshStart, mountFreshStartHeader } from './freshstart.js?v=20261026f';
+import { startUpdateWatch, mountFreshStart, mountFreshStartHeader } from './freshstart.js?v=20261026g';
 import './components/anim.js';  // premium motion engine (window.AnimKit)
 
 initTheme();  // apply saved light/dark/colorful before the shell renders
@@ -505,7 +505,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261026f';  // bumped on every breaking deploy
+const APP_BUILD = '20261026g';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
