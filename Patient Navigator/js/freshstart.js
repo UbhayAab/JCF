@@ -11,7 +11,7 @@
 // Chrome it is five screens deep, and in the installed PWA there is no menu
 // to do it from at all.
 //
-// So: one button that empties everything this origin owns and reloads.
+// Normal updates refresh app assets only. A separate confirmed reset signs out.
 //
 // THE BUILD NUMBER IS READ FROM THE DOM ON PURPOSE. index.html already carries
 // it on the module script tag as ?v=..., and a deploy already bumps that
@@ -189,6 +189,52 @@ export async function hardReset({ reload = true } = {}) {
   return steps;
 }
 
+// Normal updates never erase credentials, settings, recordings or drafts.
+// Warn before navigating away from edited fields; never persist patient input.
+export function hasUnsavedInput() {
+  const fields = document.querySelectorAll('#page-content input, #page-content textarea, #page-content select, .modal-overlay input, .modal-overlay textarea, .modal-overlay select, [contenteditable="true"]');
+  return [...fields].some((el) => {
+    if (el.isContentEditable) return !!el.textContent.trim();
+    if (['hidden', 'button', 'submit', 'reset', 'search'].includes(el.type)) return false;
+    if (el.type === 'file') return !!el.files?.length;
+    if (['checkbox', 'radio'].includes(el.type)) return el.checked !== el.defaultChecked;
+    if (el.tagName === 'SELECT') return [...el.options].some(o => o.selected !== o.defaultSelected);
+    return el.value !== el.defaultValue;
+  });
+}
+
+export async function updateApp({ reload = true } = {}) {
+  if ((hasUnsavedInput() || unsavedCallDraft()) && !window.confirm(
+    'You have unfinished work. Save or submit it before updating.\n\nUpdate anyway and leave this page? Unsaved fields and selected files will be lost. Your sign-in and saved records will be kept.'
+  )) return { updated: false, steps: [] };
+  const steps = [];
+  const report = s => steps.push(s);
+  // This origin also hosts other applications. Only our exact worker scope
+  // and public asset-cache namespace belong to a normal PN update.
+  try {
+    if ('serviceWorker' in navigator) {
+      const scope = new URL('./', location.href).href;
+      const own = (await navigator.serviceWorker.getRegistrations()).filter(r => r.scope === scope);
+      await Promise.all(own.map(r => r.unregister()));
+      report(`app service workers: ${own.length}`);
+    }
+  } catch { report('app service worker refresh unavailable'); }
+  try {
+    if ('caches' in window) {
+      const keys = (await caches.keys()).filter(k => /^jcf-pwa-v\d+$/.test(k));
+      await Promise.all(keys.map(k => caches.delete(k)));
+      report(`app asset caches: ${keys.length}`);
+    }
+  } catch { report('app asset cache refresh unavailable'); }
+  if (reload) {
+    overlay('Loading the latest version. Keeping your sign-in...');
+    const url = new URL(location.href);
+    url.searchParams.set('fresh', String(Date.now()));
+    location.replace(url.href);
+  }
+  return { updated: true, steps };
+}
+
 // Boot helper: take the ?fresh= marker off the address bar so it is not
 // bookmarked or shared.
 export function tidyFreshMarker() {
@@ -318,7 +364,7 @@ function unsavedCallDraft() {
 async function confirmAndReset(btn) {
   const draft = unsavedCallDraft();
   const ok = window.confirm(
-    'Refresh this app from scratch?\n\n'
+    'Reset this device and sign out?\n\n'
     + 'This deletes everything Patient Navigator has stored on this device: cached files, '
     + 'cookies, saved settings and your sign-in. Then it reloads the newest version.\n\n'
     + (draft
@@ -341,12 +387,14 @@ export function mountFreshStart(el) {
   el.innerHTML = `
     <div class="fs-block">
       <button class="fs-btn" type="button" id="${el.id}-reset"
-              title="Clear this device and load the newest version">
-        ${ICON_REFRESH}<span>Update / Reset app</span>
+              title="Load the newest version and keep your sign-in" data-update>
+        ${ICON_REFRESH}<span>Update app</span>
       </button>
+      <button class="fs-btn" type="button" data-reset title="Erase local data and sign out">Reset device and sign out</button>
       <div class="fs-build">Build ${runningBuild()}</div>
     </div>`;
-  el.querySelector(`#${el.id}-reset`)?.addEventListener('click', (e) => confirmAndReset(e.currentTarget));
+  el.querySelector('[data-update]')?.addEventListener('click', () => updateApp());
+  el.querySelector('[data-reset]')?.addEventListener('click', (e) => confirmAndReset(e.currentTarget));
 }
 
 /**
@@ -358,10 +406,10 @@ export function mountFreshStartHeader(el) {
   injectStyle();
   el.innerHTML = `
     <button class="fs-hdr" type="button" id="fs-hdr-btn"
-            title="Something not working or out of date? Delete everything stored on this device and reload the newest version. You will need to sign in again.">
+            title="Load the newest version and keep your sign-in. Save unfinished work first.">
       ${ICON_REFRESH}<span>Refresh<span class="fs-hdr-long"> app</span></span>
     </button>`;
-  el.querySelector('#fs-hdr-btn')?.addEventListener('click', (e) => confirmAndReset(e.currentTarget));
+  el.querySelector('#fs-hdr-btn')?.addEventListener('click', () => updateApp());
 }
 
 let barShown = false;
@@ -385,8 +433,7 @@ function showUpdateBar(deployed) {
   // Push the app down rather than covering its header.
   const pad = () => { document.body.style.paddingTop = `${bar.offsetHeight}px`; };
   bar.querySelector('.fs-now').addEventListener('click', async () => {
-    overlay('Updating to the latest version...');
-    await hardReset({ reload: true });
+    await updateApp();
   });
   bar.querySelector('.fs-later').addEventListener('click', () => {
     bar.remove();

@@ -6,6 +6,12 @@ import { CONFIG } from './config.js';
 
 let supabase = null;
 
+// Same default namespace as supabase-js, bound to this configured project.
+// Shared GitHub Pages origins may contain sessions for several other apps.
+export function getAuthStorageKey() {
+  return `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+}
+
 export function getSupabase() {
   if (supabase) return supabase;
 

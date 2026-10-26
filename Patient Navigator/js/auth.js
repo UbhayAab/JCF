@@ -3,8 +3,12 @@
 // Login, logout, session management
 // ============================================================
 
-import { getSupabase } from './supabase.js';
+import * as backend from './supabase.js';
+const { getSupabase } = backend;
 
+let authEpoch = 0;
+let initPending = null;
+let observingAuth = false;
 let currentUser = null;
 let currentProfile = null;
 let impersonatedProfile = null;            // manager/admin "open as user"
@@ -44,105 +48,81 @@ export function stopImpersonation() {
   try { sessionStorage.removeItem(IMPERSONATE_KEY); } catch {}
 }
 
-// ---- Helper: wrap a promise with a hard timeout ----
-function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
-    ),
-  ]);
+// SDK callbacks stay synchronous: no SDK calls while its auth lock is held.
+function forgetAuth() {
+  authEpoch++;
+  initPending = null;
+  currentUser = null;
+  currentProfile = null;
+  stopImpersonation();
+}
+function observeAuth() {
+  if (observingAuth) return;
+  observingAuth = true;
+  getSupabase().auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_OUT' || (session?.user && currentUser && session.user.id !== currentUser.id)) forgetAuth();
+  });
 }
 
-// ---- Read the Supabase session directly from localStorage ----
-// Supabase JS persists sessions at key "sb-{project-ref}-auth-token".
-// If getSession() hangs on its network refresh, we still want to honor the
-// session that's already stored locally. The user logged in successfully,
-// the access_token is right there, we should let them into the app.
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+  })]).finally(() => clearTimeout(timer));
+}
+
 function readSessionFromStorage() {
-  if (typeof localStorage === 'undefined') return null;
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (!key || !key.startsWith('sb-') || !key.endsWith('-auth-token')) continue;
-    try {
-      const raw = localStorage.getItem(key);
-      if (!raw) continue;
-      const value = JSON.parse(raw);
-      // Some Supabase versions wrap the session under a "currentSession" key.
-      const session = value?.currentSession || value;
-      if (session?.access_token && session?.user) {
-        // A token that expired long ago is a zombie: booting with it renders
-        // an unauthenticated shell where RLS rejects everything and there is
-        // no way back to the login screen. Within 48h we still accept it.
-        // getSession() may refresh it once the network cooperates.
-        const expiresAt = Number(session.expires_at || 0);   // epoch seconds
-        if (expiresAt && Date.now() / 1000 - expiresAt > 48 * 3600) {
-          console.warn('[auth] stored session expired long ago, ignoring it');
-          continue;
-        }
-        return session;
-      }
-    } catch (e) {
-      console.warn('[auth] could not parse stored session at', key, e);
-    }
-  }
+  try {
+    // An older cached factory has no key helper: fail closed, never scan all
+    // sb-* keys and accidentally select another project's identity.
+    const key = backend.getAuthStorageKey?.();
+    if (!key) return null;
+    const value = JSON.parse(localStorage.getItem(key) || 'null');
+    const session = value?.currentSession || value;
+    if (session?.access_token && session?.user?.id && Number(session.expires_at) > Date.now() / 1000) return session;
+  } catch { /* blocked, malformed or expired storage is not a session */ }
   return null;
 }
 
-// ---- Initialize auth (check existing session) ----
-// Two-stage: try the official getSession (which can hit the network to
-// refresh the token), and if it times out OR errors, fall back to whatever
-// Supabase already wrote to localStorage. RLS will reject any stale token
-// at the DB layer, but the user reaches the app shell instead of being
-// stranded on the login screen.
-export async function initAuth() {
+// Concurrent startup and SIGNED_IN events share one profile request. A late
+// request cannot restore an identity cleared by sign-out or an account change.
+export function initAuth() {
+  observeAuth();
+  if (initPending) return initPending;
+  const epoch = authEpoch;
+  const pending = initialize(epoch).finally(() => { if (initPending === pending) initPending = null; });
+  initPending = pending;
+  return pending;
+}
+
+async function initialize(epoch) {
   const sb = getSupabase();
-  if (!sb) return null;
-
   let session = null;
-
-  // Stage 1: try the official client (fast path)
   try {
     const { data, error } = await withTimeout(sb.auth.getSession(), 4000, 'getSession');
-    if (!error && data?.session?.user) {
-      session = data.session;
-    } else if (error) {
-      console.warn('[auth] getSession returned error:', error.message);
-    }
-  } catch (timeoutErr) {
-    console.warn('[auth] ' + timeoutErr.message + ', falling back to localStorage');
+    if (error) {
+      // Only transient transport/server failure may use a still-valid local
+      // session. A successful null session or an auth rejection is final.
+      if (!error.status || error.status >= 500) session = readSessionFromStorage();
+    } else session = data?.session || null;
+  } catch (error) {
+    if (!error?.status || error.status >= 500) session = readSessionFromStorage();
   }
-
-  // Stage 2: localStorage fallback
-  if (!session) {
-    session = readSessionFromStorage();
-    if (session) console.log('[auth] using cached session from localStorage');
-  }
-
-  if (!session?.user) {
-    currentUser = null;
+  if (epoch !== authEpoch) return null;
+  if (!session?.user) { forgetAuth(); return null; }
+  if (currentUser?.id !== session.user.id) {
     currentProfile = null;
-    return null;
+    stopImpersonation();
   }
-
   currentUser = session.user;
-  // Profile load MUST be awaited now that we have RBAC, otherwise the
-  // sidebar renders empty, but never let a hung request strand the
-  // user on the boot screen: time out, boot anyway, retry in background.
-  let profileStatus = 'error';
-  try {
-    profileStatus = await withTimeout(loadProfile(), 6000, 'loadProfile');
-  } catch (err) {
-    console.warn('[auth] loadProfile failed:', err);
-    setTimeout(() => loadProfile().catch(() => {}), 1500);
-  }
-  // Definitively unusable session (profile row gone, or token rejected):
-  // tear it down and land on the login screen, never boot a broken shell.
-  if (profileStatus === 'missing' || profileStatus === 'invalid') {
-    console.warn('[auth] session has no usable profile (' + profileStatus + '), signing out');
-    await clearSession();
-    return null;
-  }
+  let status = 'error';
+  try { status = await withTimeout(loadProfile(epoch, session.user.id), 6000, 'loadProfile'); }
+  catch { /* Account recovery offers Retry without deleting a valid sign-in. */ }
+  if (epoch !== authEpoch) return null;
+  if (status === 'missing') { await clearSession(); return null; }
+  // JWT query rejection is not evidence that every device should be logged
+  // out. Do not mount a role-less shell; gateAndBoot offers account recovery.
+  if (status === 'invalid') currentProfile = null;
   return session;
 }
 
@@ -153,22 +133,24 @@ export async function initAuth() {
 //               or never created). The session is unusable, sign it out.
 //   'invalid':  the token itself was rejected (expired / bad JWT).
 //   'error':    transient failure (network, RLS hiccup); worth retrying.
-async function loadProfile() {
-  if (!currentUser) return 'error';
+async function loadProfile(epoch = authEpoch, userId = currentUser?.id) {
+  if (!userId) return 'error';
   const sb = getSupabase();
   const { data, error } = await sb
     .from('profiles')
     .select('*')
-    .eq('id', currentUser.id)
+    .eq('id', userId)
     .maybeSingle();
+
+  if (epoch !== authEpoch || currentUser?.id !== userId) return 'stale';
 
   if (error) {
     console.error('Failed to load profile:', error);
-    return /jwt|token|expired|invalid/i.test(error.message || '') ? 'invalid' : 'error';
+    return ['PGRST301', 'PGRST303'].includes(error.code) ? 'invalid' : 'error';
   }
 
   if (!data) {
-    console.error('Profile not found for user ID:', currentUser.id);
+    console.error('[auth] account profile unavailable');
     return 'missing';
   }
 
@@ -189,18 +171,16 @@ async function loadProfile() {
 // best-effort server sign-out, then guarantee the local tokens are gone so
 // the next boot lands cleanly on the login screen instead of a broken shell.
 export async function clearSession() {
-  stopImpersonation();
-  try { await withTimeout(getSupabase().auth.signOut(), 3000, 'signOut'); } catch (e) { console.warn('[auth] signOut during teardown failed:', e.message); }
+  const key = backend.getAuthStorageKey?.();
+  let prior;
+  try { prior = key ? localStorage.getItem(key) : null; } catch { /* blocked */ }
+  forgetAuth();
+  try { await withTimeout(getSupabase().auth.signOut({ scope: 'local' }), 3000, 'signOut'); }
+  catch { console.warn('[auth] local session teardown unavailable'); }
   try {
-    const stale = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) stale.push(key);
-    }
-    stale.forEach(k => localStorage.removeItem(k));
-  } catch {}
-  currentUser = null;
-  currentProfile = null;
+    // Do not erase a newer sign-in that finished while the SDK was pending.
+    if (key && !currentUser && localStorage.getItem(key) === prior) localStorage.removeItem(key);
+  } catch { /* SDK still owns its local teardown */ }
 }
 
 // ---- Sign In ----
@@ -213,9 +193,12 @@ export async function signIn(email, password) {
   stopImpersonation();                 // a fresh sign-in is never an "open as" session
   const { data, error } = await sb.auth.signInWithPassword({ email, password });
   if (error) throw new Error(error.message);
+  forgetAuth();
   currentUser = data.user;
+  const epoch = authEpoch;
   try {
-    const status = await loadProfile();
+    const status = await loadProfile(epoch, data.user.id);
+    if (epoch !== authEpoch) throw new Error('Sign-in changed. Please try again.');
     // We JUST authenticated, so 'missing' here is definitive, not a network
     // blip: the account exists in auth but has no profile row. Block it with
     // a clear message instead of letting it into a half-broken app.
@@ -224,7 +207,7 @@ export async function signIn(email, password) {
       throw new Error('This account has no user profile in the system. Please contact your administrator.');
     }
   } catch (err) {
-    if (/no user profile/.test(err.message || '')) throw err;
+    if (/no user profile|Sign-in changed/.test(err.message || '')) throw err;
     console.warn('[auth] loadProfile failed:', err);
   }
   return data;
@@ -257,8 +240,7 @@ export async function signOut() {
   try { if ('caches' in window) await caches.delete('jcf-shared-recording'); } catch { /* none kept */ }
   const { error } = await sb.auth.signOut();
   if (error) throw new Error(error.message);
-  currentUser = null;
-  currentProfile = null;
+  forgetAuth();
 }
 
 // ---- Update own profile ----

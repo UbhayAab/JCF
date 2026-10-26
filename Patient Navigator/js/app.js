@@ -36,7 +36,7 @@ import { validateEmail, validatePassword } from './utils/validators.js';
 import { CONFIG } from './config.js';
 import { initTheme, renderThemeSwitch } from './theme.js';
 import { initPwa, mountInstallButton, mountInstallBar } from './pwa.js';
-import { startUpdateWatch, mountFreshStart, mountFreshStartHeader } from './freshstart.js';
+import { startUpdateWatch, mountFreshStart, mountFreshStartHeader } from './freshstart.js?v=20261026f';
 import './components/anim.js';  // premium motion engine (window.AnimKit)
 
 initTheme();  // apply saved light/dark/colorful before the shell renders
@@ -505,7 +505,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261025e';  // bumped on every breaking deploy
+const APP_BUILD = '20261026f';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -642,17 +642,26 @@ async function init() {
   // deadlocks the whole client (boot screen forever after a reload).
   // Defer ALL work to the next tick so the lock is released first.
   const { getSupabase } = await import('./supabase.js');
+  let authEventVersion = 0;
   getSupabase().auth.onAuthStateChange((event, session) => {
+    if (!['SIGNED_IN', 'SIGNED_OUT'].includes(event)) return;
+    const version = ++authEventVersion;
     setTimeout(async () => {
+      if (version !== authEventVersion) return;
       if (event === 'SIGNED_OUT') {
         appBooted = false;
         renderLoginPage();
-      } else if (event === 'SIGNED_IN' && session && !appBooted) {
+      } else if (event === 'SIGNED_IN' && session && (!appBooted || getCurrentUser()?.id !== session.user?.id)) {
+        if (appBooted) {
+          document.getElementById('app').innerHTML = '<div class="boot-screen"><p class="boot-msg">Loading your account...</p></div>';
+        }
+        appBooted = false;
         // Wait for BOTH user and profile. Booting before the profile
         // loads renders role-gated pages wrong for a moment.
         if (!getCurrentUser() || !getCurrentProfile()) {
           const s = await initAuth();
           // initAuth tears down sessions with no usable profile, respect that.
+          if (version !== authEventVersion) return;
           if (!s) { renderLoginPage(); return; }
         }
         gateAndBoot();

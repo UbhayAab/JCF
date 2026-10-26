@@ -57,10 +57,10 @@ export function goBack(fallback = 'dashboard') {
 export function getCurrentRoute() { return currentRoute; }
 
 // Get route params from hash (e.g., #patients/abc-123 → { id: 'abc-123' })
-export function getRouteParams() {
+export function getRouteParams(requestHash = window.location.hash) {
   // A route may carry a query string (analytics uses ?f=<encoded filters> so a
   // filtered view can be shared as a link). It is never part of the path.
-  const hash = (window.location.hash.slice(1).split('?')[0]) || 'login';
+  const hash = (requestHash.slice(1).split('?')[0]) || 'login';
   const parts = hash.split('/');
   const params = {};
 
@@ -94,53 +94,52 @@ function getBasePath(hash) {
   return 'dashboard'; // fallback
 }
 
-// Handle route change
+// A navigation owns a connected page element. Local async handler writes to
+// an obsolete page then remain detached instead of blanking a newer form.
+let routeGeneration = 0;
+function showRouteError(container, retry) {
+  container.innerHTML = '<section class="card" role="alert"><h2>This page could not load</h2><p>Your sign-in has been kept. Check your connection and try again.</p><button class="btn btn-primary" type="button" data-route-retry>Try again</button></section>';
+  container.querySelector('[data-route-retry]')?.addEventListener('click', retry, { once: true });
+}
+
 async function handleRouteChange() {
+  const generation = ++routeGeneration;
   const hash = window.location.hash || '#login';
+  const active = () => generation === routeGeneration && (window.location.hash || '#login') === hash;
   if (hash !== currentHash) { previousHash = currentHash; currentHash = hash; }
   const basePath = getBasePath(hash);
   const route = routes[basePath];
-
-  if (!route) {
-    navigate('dashboard');
-    return;
-  }
-
-  // Auth guard
-  if (route.requiresAuth !== false && authGuard) {
-    const isAuthed = await authGuard();
-    if (!isAuthed) {
-      navigate('login');
-      return;
+  let container;
+  try {
+    if (!route) { if (active()) navigate('dashboard'); return; }
+    if (route.requiresAuth !== false && authGuard) {
+      const allowed = await authGuard();
+      if (!active()) return;
+      if (!allowed) { navigate('login'); return; }
     }
-  }
-
-  // Role guard
-  if (route.roles && roleGuard) {
-    const hasRole = await roleGuard(route.roles);
-    if (!hasRole) {
-      navigate('dashboard');
-      return;
+    if (route.roles && roleGuard) {
+      const allowed = await roleGuard(route.roles);
+      if (!active()) return;
+      if (!allowed) { navigate('dashboard'); return; }
     }
-  }
-
-  // Route gate (on probation): closed to a saved link too, not just hidden.
-  if (routeGate && route.requiresAuth !== false) {
-    const to = await routeGate(hash.slice(1));
-    if (to && to !== basePath) {
-      navigate(to);
-      return;
+    if (routeGate && route.requiresAuth !== false) {
+      const to = await routeGate(hash.slice(1));
+      if (!active()) return;
+      if (to && to !== basePath) { navigate(to); return; }
     }
-  }
-
-  currentRoute = basePath;
-
-  // Call the route handler
-  const container = document.getElementById('page-content');
-  if (container && route.handler) {
-    await route.handler(container, getRouteParams());
-    // Page transition + auto-staggered reveals for every route render.
-    window.AnimKit?.enter?.(container);
+    if (!active()) return;
+    currentRoute = basePath;
+    const old = document.getElementById('page-content');
+    if (old && route.handler) {
+      container = old.cloneNode(false);
+      old.replaceWith(container); // connected BEFORE any handler ID lookup
+      await route.handler(container, getRouteParams(hash));
+      if (active()) window.AnimKit?.enter?.(container);
+    }
+  } catch {
+    if (!active()) return; // obsolete failures cannot overwrite the new page
+    container ||= document.getElementById('page-content');
+    if (container?.isConnected) showRouteError(container, () => { if (active()) handleRouteChange(); });
   }
 }
 

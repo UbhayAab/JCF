@@ -11,7 +11,7 @@
 // rename is the only thing that guarantees a stale index.html - and with it
 // the old ?v= asset URLs it points at - is thrown away rather than served on
 // the next slow connection. v3 -> v4 on 2026-09-10.
-const CACHE = 'jcf-pwa-v93';
+const CACHE = 'jcf-pwa-v94';
 // A call recording shared into the app (manifest share_target, Fixboard #22):
 // Google's Phone app keeps recordings inside itself, so Share is the only way
 // out. Kept in its own cache, which activate() leaves alone; the calling page
@@ -32,7 +32,7 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== SHARE_CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => /^jcf-pwa-v\d+$/.test(k) && k !== CACHE).map((k) => caches.delete(k))))
       .then(dropStaleShare)
       .then(() => self.clients.claim()),
   );
