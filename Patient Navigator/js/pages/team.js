@@ -18,6 +18,7 @@ import { DIAL_STATUSES, CONDITIONS, statusBadge } from '../utils/catalog.js';
 import { withMvp, mvpBand, median } from '../utils/performance.js';
 import { renderCircleMessages } from '../components/circleMessages.js';
 import { loadTeamRamp, rampBadges, canRamp, openRampModal } from '../components/rampUp.js';
+import { beginTeamRoster, probationRoster, bindProbationControls, captureTeamActor } from '../utils/teamRoster.js';
 
 // The one palette (js/utils/avatar.js); same hash, so nobody changes colour.
 const avColor = (n) => avatarColor(n);
@@ -382,42 +383,44 @@ async function loadBlockedPatients() {
 // call target and no off-today rota, so borrowing get_team_caseload would
 // have shown three columns of zeroes and one real number.
 async function loadNutritionRoster() {
-  const sb = getSupabase(); const content = document.getElementById('team-content');
+  const view = beginTeamRoster('nutrition');
+  if (!view) return;
+  const { content, isCurrent } = view, sb = getSupabase();
   content.innerHTML = Array(4).fill('<div class="sk skeleton-row"></div>').join('');
   try {
-    const { data, error } = await sb.rpc('get_nutrition_caseload');
-    if (error) throw error;
-    const rows = data || [];
-    if (!rows.length) {
-      content.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('leaf')}</div><h4>No active nutritionists</h4><p>Invite one from the Admin page and they will show up here.</p></div>`;
-      return;
-    }
-    const total = rows.reduce((a, r) => a + (r.in_care || 0), 0);
-    const avg = total / rows.length;
+    const [caseload, probation] = await Promise.allSettled([
+      sb.rpc('get_nutrition_caseload'), sb.rpc('team_probation'),
+    ]);
+    if (!isCurrent()) return;
+    if (caseload.status !== 'fulfilled' || caseload.value.error || !Array.isArray(caseload.value.data)) throw new Error('roster unavailable');
+    const rows = caseload.value.data;
+    const prob = probationRoster(probation.status === 'fulfilled' ? probation.value : null);
+    const missing = !prob.ok || rows.some(r => !prob.byId[r.nutritionist_id]);
+    const total = rows.reduce((a, r) => a + (Number(r.in_care) || 0), 0);
+    const avg = rows.length ? total / rows.length : 0;
     const held = rows.filter(r => r.in_care > 0).length;
-    // Bottom third by caseload gets the same gentle nudge the mentor roster uses.
     const byLoad = rows.slice().sort((a, b) => (a.in_care || 0) - (b.in_care || 0));
     const needy = new Set(byLoad.slice(0, Math.max(1, Math.floor(rows.length / 3))).map(r => r.nutritionist_id));
-
     content.innerHTML = `
-      <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:var(--s4)">
-        <div style="display:flex;align-items:center;gap:12px">
-          <span class="stat-ico ok">${icon('handHeart')}</span>
-          <div><div class="info-value"><strong>${total}</strong> patients held across <strong>${held}</strong> of ${rows.length} nutritionists</div>
-          <div class="due-meta">Whoever holds a patient is the one who calls them. Average caseload ${avg.toFixed(1)}. Least-loaded first.</div></div>
+      <div class="card" style="margin-bottom:var(--s4)">
+        <div class="info-value"><strong>${total}</strong> patients held across <strong>${held}</strong> of ${rows.length} nutritionists</div>
+        <p class="due-meta wraps">Whoever holds a patient is the one who calls them. Average caseload ${avg.toFixed(1)}. Least-loaded first.</p>
+        <div class="flex gap-2" style="flex-wrap:wrap;margin-top:12px">
+          <button class="btn btn-primary btn-sm" id="nut-assign-btn">${icon('userPlus')}Assign nutrition patients</button>
+          <button class="btn btn-secondary btn-sm" id="nut-invite-btn">${icon('users')}Invite nutrition intern</button>
+          <button class="btn btn-ghost btn-sm" id="prob-steps">${icon('book')}Probation steps</button>
         </div>
-        <button class="btn btn-primary btn-sm" id="nut-assign-btn">${icon('userPlus')}Assign nutrition patients</button>
+        <p class="due-meta wraps" style="margin:12px 0 0">New nutrition accounts start on probation. They begin with Nutrition, Learning Hub and their profile; more tabs open after answered calls. Patient access is checked by the server. After changing probation, ask an already signed-in intern to use Refresh app to update their menu.</p>
       </div>
+      ${missing ? '<div class="card" role="status" style="margin-bottom:var(--s4)"><p class="wraps">Some probation details are unavailable. No status has been assumed. Patient assignment is still available.</p><button class="btn btn-secondary btn-sm" id="nut-prob-retry">Retry probation details</button></div>' : ''}
+      ${!rows.length ? '<div class="empty"><h4>No active nutritionists</h4><p>Use Invite nutrition intern to add someone.</p></div>' : ''}
       <div class="team-grid">${rows.map(r => {
-        const stale = r.unworked_60d || 0;
-        return `
-        <div class="card team-card">
-          <div style="display:flex;align-items:center;gap:11px;margin-bottom:10px">
+        const stale = r.unworked_60d || 0, p = prob.byId[r.nutritionist_id];
+        return `<div class="card team-card" data-nutrition-member="${sanitize(r.nutritionist_id)}">
+          <div style="display:flex;align-items:center;gap:11px;margin-bottom:10px;flex-wrap:wrap">
             <span class="avatar" style="background:${avColor(r.full_name)}">${sanitize(inits(r.full_name))}</span>
-            <div style="flex:1;min-width:0">
-              <div class="info-value">${sanitize(r.full_name)}</div>
-              <div class="due-meta">${r.last_nutrition_touch ? 'last worked ' + formatRelativeTime(r.last_nutrition_touch) : 'no nutrition work logged yet'}</div>
-            </div>
+            <div style="flex:1;min-width:0"><div class="info-value">${sanitize(r.full_name)}</div>
+              <div class="due-meta">${r.last_nutrition_touch ? 'last worked ' + formatRelativeTime(r.last_nutrition_touch) : 'no nutrition work logged yet'}</div></div>
             ${needy.has(r.nutritionist_id) ? '<span class="badge badge-gold">Needs patients</span>' : ''}
           </div>
           <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px">
@@ -426,16 +429,24 @@ async function loadNutritionRoster() {
             <div><div class="stat-num tnum">${r.checkins_30d}</div><div class="stat-lbl">Check-ins 30d</div></div>
             <div><div class="stat-num tnum">${r.sessions_30d}</div><div class="stat-lbl">1:1s 30d</div></div>
           </div>
+          <div style="margin-bottom:12px">${p ? `<span class="badge badge-${p.on_probation ? 'info' : 'neutral'}">${p.on_probation ? 'On probation · ' + p.answered + ' answered calls' : 'Off probation'}</span>` : '<span class="badge badge-warn">Probation status unavailable</span>'}</div>
           ${stale ? `<div class="due-meta" style="color:var(--warn);margin-bottom:8px">${stale} held with no nutrition work in 60 days</div>` : ''}
-          <button class="btn btn-secondary btn-sm give-nut" data-id="${r.nutritionist_id}">${icon('userPlus')}Give patients</button>
+          <div class="flex gap-2" style="flex-wrap:wrap">
+            <button class="btn btn-secondary btn-sm give-nut" data-id="${sanitize(r.nutritionist_id)}">${icon('userPlus')}Give patients</button>
+            ${p ? `<button class="btn btn-secondary btn-sm prob-toggle" data-id="${sanitize(r.nutritionist_id)}" data-on="${p.on_probation}">${p.on_probation ? 'End probation' : 'Probation'}</button>` : ''}
+          </div>
         </div>`;
       }).join('')}</div>`;
-
-    document.getElementById('nut-assign-btn')?.addEventListener('click', () => showAssignPatientsModal(null, { team: 'nutrition' }));
-    content.querySelectorAll('.give-nut').forEach(b =>
-      b.addEventListener('click', () => showAssignPatientsModal(b.dataset.id, { team: 'nutrition' })));
-  } catch (err) {
-    content.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Couldn't load the nutrition team</h4><p>${sanitize(err.message)}</p></div>`;
+    content.querySelector('#nut-assign-btn')?.addEventListener('click', () => { if (isCurrent()) showAssignPatientsModal(null, { team: 'nutrition' }); });
+    content.querySelector('#nut-invite-btn')?.addEventListener('click', () => { if (isCurrent()) showInviteTeamMemberModal('nutritionist'); });
+    content.querySelector('#prob-steps')?.addEventListener('click', () => { if (isCurrent()) openProbationSteps(); });
+    content.querySelector('#nut-prob-retry')?.addEventListener('click', () => { if (isCurrent()) loadNutritionRoster(); });
+    content.querySelectorAll('.give-nut').forEach(b => b.addEventListener('click', () => { if (isCurrent()) showAssignPatientsModal(b.dataset.id, { team: 'nutrition' }); }));
+    bindProbationControls(view, sb, loadNutritionRoster);
+  } catch {
+    if (!isCurrent()) return;
+    content.innerHTML = '<div class="empty"><h4>Could not load the nutrition team</h4><p>No changes have been made. Check your connection and try again.</p><button class="btn btn-secondary" id="nut-retry">Retry</button></div>';
+    content.querySelector('#nut-retry')?.addEventListener('click', () => { if (isCurrent()) loadNutritionRoster(); });
   }
 }
 
@@ -499,12 +510,15 @@ async function buildAssignments() {
 // (probation_policy, sql/163). The database checks the same limits.
 const PROBATION_TEAMS = [['caregiver_mentor', 'CGMP'], ['nutritionist', 'Nutrition']];
 async function openProbationSteps() {
+  const ownsActor = captureTeamActor();
+  if (!ownsActor()) return;
   const sb = getSupabase();
   const el = document.createElement('div');
   el.innerHTML = '<div class="sk skeleton-row"></div>';
   showModal({ title: 'Probation steps', content: el });
   const { data, error } = await sb.from('probation_policy').select('role, unlock_some, unlock_all');
-  if (error) { el.innerHTML = `<p class="muted">Could not read the steps: ${sanitize(error.message)}</p>`; return; }
+  if (!el.isConnected || !ownsActor()) return;
+  if (error) { el.innerHTML = '<p class="muted">Could not read the steps. Close and try again.</p>'; return; }
   const byRole = Object.fromEntries((data || []).map(r => [r.role, r]));
   const field = (role, k, v) => `<input class="form-input" type="number" inputmode="numeric" min="0" max="500" step="1" data-role="${role}" data-k="${k}" value="${v}">`;
   el.innerHTML = `
@@ -522,6 +536,7 @@ async function openProbationSteps() {
   el.querySelector('#ps-cancel').addEventListener('click', () => closeModal());
   const save = el.querySelector('#ps-save');
   save.addEventListener('click', async () => {
+    if (save.disabled || !el.isConnected || !ownsActor()) return;
     const val = (role, k) => Number(el.querySelector(`input[data-role="${role}"][data-k="${k}"]`).value);
     for (const [role, label] of PROBATION_TEAMS) {
       const some = val(role, 'some'); const all = val(role, 'all');
@@ -532,16 +547,20 @@ async function openProbationSteps() {
     }
     save.disabled = true;
     for (const [role, label] of PROBATION_TEAMS) {
+      if (!el.isConnected || !ownsActor()) return;
       const { error: err } = await sb.rpc('set_probation_policy', { p_role: role, p_unlock_some: val(role, 'some'), p_unlock_all: val(role, 'all') });
-      if (err) { save.disabled = false; showToast(`${label}: ${err.message}`, 'error'); return; }
+      if (!el.isConnected || !ownsActor()) return;
+      if (err) { save.disabled = false; showToast(`${label}: could not save. Reopen the steps to check the current values.`, 'error'); return; }
     }
     closeModal();
-    showToast('Probation steps saved. Interns on probation see them within a minute.', 'success');
+    showToast('Probation steps saved. Ask signed-in interns to Refresh app to update their menu.', 'success');
   });
 }
 
 async function loadAvailability() {
-  const sb = getSupabase(); const content = document.getElementById('team-content');
+  const view = beginTeamRoster('availability');
+  if (!view) return;
+  const { content, isCurrent } = view, sb = getSupabase();
   try {
     const [{ data, error }, restoresR, caseloadR, perfR, probR] = await Promise.all([
       sb.rpc('get_team_availability'),
@@ -555,8 +574,10 @@ async function loadAvailability() {
     ]);
     // Fixboard #21 (sql/185): who is ramping up, which day, last days. Not
     // there yet (an older database) or refused: the cards simply carry none.
+    if (!isCurrent()) return;
     let rampById = {};
     try { rampById = await loadTeamRamp(); } catch (e) { console.warn('[team] ramp-up:', e.message); }
+    if (!isCurrent()) return;
     if (error) throw error;
     if (!data || data.length === 0) { content.innerHTML = '<div class="empty"><h4>No team members</h4></div>'; return; }
     const restores = restoresR.data || [];
@@ -566,7 +587,7 @@ async function loadAvailability() {
     // logged in 30 days), so it scores 0 rather than being hidden.
     const perf = withMvp(perfR.data || []);
     const perfById = {}; perf.forEach(p => perfById[p.caller_id] = p);
-    const probById = {}; (probR?.data || []).forEach(p => probById[p.member_id] = p);
+    const probById = probationRoster(probR).byId;
     const medianMvp = median(perf.map(p => p.mvp));
     // Bottom third of the team by callable caseload → gentle "needs patients" nudge.
     const byOwned = caseload.slice().sort((a, b) => (a.owned_callable || 0) - (b.owned_callable || 0));
@@ -676,29 +697,21 @@ async function loadAvailability() {
         }).join('')}
       </div>`;
     content.querySelectorAll('.av-toggle').forEach(btn => btn.addEventListener('click', async () => {
+      if (!isCurrent()) return;
       const on = btn.dataset.on === 'true';
       // sb.rpc() resolves with { error } instead of throwing, so the old
       // try/catch never fired: a refused toggle just silently repainted the
       // old state. That is why managers reported the button doing nothing.
       btn.disabled = true;
       const { error } = await sb.rpc('mark_availability_for', { p_caller_id: btn.dataset.id, p_available: !on, p_day: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) });
+      if (!isCurrent()) return;
       btn.disabled = false;
       if (error) { showToast(error.message, 'error'); return; }
       // dataset decodes the escaped name: escape it again before it is HTML
       showToast(`${sanitize(btn.dataset.name) || 'They'} marked ${on ? 'off' : 'on'} for today`, 'success');
       loadAvailability();
     }));
-    content.querySelectorAll('.prob-toggle').forEach(btn => btn.addEventListener('click', async () => {
-      const on = btn.dataset.on === 'true';
-      btn.disabled = true;
-      const { error } = await sb.rpc('set_probation', { p_user: btn.dataset.id, p_on: !on });
-      btn.disabled = false;
-      if (error) { showToast(error.message, 'error'); return; }
-      showToast(on
-        ? `${sanitize(btn.dataset.name) || 'They'} is off probation: the full menu is open; active ramp-up limits and assignment rules still apply`
-        : `${sanitize(btn.dataset.name) || 'They'} is on probation: only assigned families are visible; an active ramp-up can still provide calls, or stop it for manual handovers`, 'success');
-      loadAvailability();
-    }));
+    bindProbationControls(view, sb, loadAvailability);
     content.querySelectorAll('.ramp-btn').forEach(btn => btn.addEventListener('click', () => openRampModal({
       id: btn.dataset.id, name: btn.dataset.name, role: btn.dataset.role, ramp: rampById[btn.dataset.id],
     }, loadAvailability)));
@@ -720,7 +733,7 @@ async function loadAvailability() {
         } catch (e) { showToast(e.message, 'error'); } },
         { title: 'Cover caseload', confirmLabel: 'Reassign', danger: false });
     }));
-  } catch (err) { showToast('Failed to load availability: ' + err.message, 'error'); }
+  } catch (err) { if (isCurrent()) showToast('Could not load availability. Please retry.', 'error'); }
 }
 
 // ---- Team members ----
@@ -1567,7 +1580,7 @@ function showBulkLeadModal() {
 }
 
 // ---- Invite team member (server-side, org default password) ----
-async function showInviteTeamMemberModal() {
+async function showInviteTeamMemberModal(presetRole) {
   if (!isManagerOrAdmin()) {
     showToast('Only admins and managers can add users.', 'warning');
     return;
@@ -1581,7 +1594,7 @@ async function showInviteTeamMemberModal() {
   const el = document.createElement('div');
   el.innerHTML = `
     <form id="invite-team-form">
-      <div class="consent-banner" style="margin-bottom:var(--s4)">${icon('key')}<p style="margin:0">Only admins can create accounts. New accounts start on the team default password and set their own on first sign-in.</p></div>
+      <div class="consent-banner" style="margin-bottom:var(--s4)">${icon('key')}<p style="margin:0">Admins and managers can create accounts. New nutrition accounts start on probation. New accounts start on the team default password and set their own on first sign-in.</p></div>
       <div class="form-group"><label class="form-label">Email <span class="required">*</span></label><input class="input" id="tm-email" type="email" placeholder="firstname@carcinome.org" required /></div>
       <div class="form-group"><label class="form-label">Full name <span class="required">*</span></label><input class="input" id="tm-name" placeholder="Full name" required /></div>
       <div class="form-row">
@@ -1590,6 +1603,7 @@ async function showInviteTeamMemberModal() {
       </div>
       <div class="form-actions"><button type="button" class="btn btn-secondary" id="tm-cancel">Cancel</button><button type="submit" class="btn btn-primary" id="tm-submit">Create account</button></div>
     </form>`;
+  if (typeof presetRole === 'string' && allRoles.some(r => r.value === presetRole)) el.querySelector('#tm-role').value = presetRole;
   showModal({ title: 'Invite team member', content: el, size: 'lg' });
   try { const { data: managers } = await sb.rpc('get_available_managers'); const opts = (managers || []).map(m => `<option value="${m.id}">${sanitize(m.full_name)} (${m.role})</option>`).join(''); const sel = el.querySelector('#tm-manager'); if (sel) sel.innerHTML += opts; } catch {}
   el.querySelector('#tm-cancel').addEventListener('click', () => closeModal());

@@ -15,7 +15,7 @@ import { renderCalls } from './pages/calls.js';
 import { renderAdmin } from './pages/admin.js';
 import { renderAnalytics } from './pages/analytics.js';
 import { renderCalling } from './pages/calling.js';
-import { renderTeam } from './pages/team.js';
+import { renderTeam } from './pages/team.js?v=20261027c';
 import { renderProfile } from './pages/profile.js';
 import { renderLearn } from './pages/learn.js';
 import { renderUpload } from './pages/upload.js';
@@ -505,7 +505,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261027b';  // bumped on every breaking deploy
+const APP_BUILD = '20261027c';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
