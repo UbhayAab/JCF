@@ -9,7 +9,7 @@ import { renderSidebar, bindSidebarSync } from './components/sidebar.js';
 import { showToast } from './components/toast.js';
 import { maybeAskForPhone } from './components/phonePrompt.js';
 import { maybeShowFeatureUpdate, renderFeatureUpdates } from './components/featureUpdates.js';
-import { renderDashboard } from './pages/dashboard.js?v=20261024e';
+import { renderDashboard } from './pages/dashboard.js?v=20261027b';
 import { renderPatients } from './pages/patients.js';
 import { renderCalls } from './pages/calls.js';
 import { renderAdmin } from './pages/admin.js';
@@ -505,7 +505,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261027a';  // bumped on every breaking deploy
+const APP_BUILD = '20261027b';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];

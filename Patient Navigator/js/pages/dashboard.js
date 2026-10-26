@@ -53,6 +53,14 @@ export async function renderDashboard(container) {
 
   // Managers and admins: the v11 action-first dashboard.
   if (isAdmin) return renderAdminDashboard(container, { firstName, subtitle, today, role });
+  if (isIntake) {
+    const { renderIntakeDashboard } = await import('../components/intakeDashboard.js');
+    return renderIntakeDashboard(container, { mountNotices: () => Promise.all([
+      mountCareNotifications(container.querySelector('#care-notifications')),
+      loadSaturdayCard(role), loadResourceReplies(), loadDocsWaitingCard(),
+    ]) });
+  }
+
 
   container.innerHTML = `
     <div class="dash">
