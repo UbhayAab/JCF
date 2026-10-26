@@ -134,7 +134,17 @@ async function handleRouteChange() {
       container = old.cloneNode(false);
       old.replaceWith(container); // connected BEFORE any handler ID lookup
       await route.handler(container, getRouteParams(hash));
-      if (active()) window.AnimKit?.enter?.(container);
+      if (active()) {
+        window.AnimKit?.enter?.(container);
+        // Explicit, read-only patient intents. The existing bound controls
+        // retain their own consent/RLS write path; URL data is never code.
+        const focus = new URLSearchParams(hash.split('?')[1] || '').get('focus');
+        if (basePath === 'patients' && focus === 'edit') container.querySelector('#edit-patient-btn')?.click();
+        if (basePath === 'patients' && focus === 'measurements') {
+          const target = container.querySelector('#measurements-mount');
+          if (target) { target.style.scrollMarginTop = '84px'; target.scrollIntoView({ block: 'start' }); }
+        }
+      }
     }
   } catch {
     if (!active()) return; // obsolete failures cannot overwrite the new page

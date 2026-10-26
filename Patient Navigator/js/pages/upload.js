@@ -10,7 +10,8 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
-import { getUserRole } from '../auth.js';
+import { getUserRole, getCurrentUser } from '../auth.js';
+import { existingPatientHTML, singleIntakeDecision, mountExistingPatients } from '../components/existingIntake.js';
 import { showToast } from '../components/toast.js';
 import { icon } from '../components/icons.js';
 import { sanitize } from '../utils/validators.js';
@@ -195,7 +196,9 @@ function phoneStatusHTML(st) {
   </div>`;
 }
 
-async function submitRows(sb, rows, resultEl, after) {
+async function submitRows(sb, rows, resultEl, after, { single = false, isCurrent = () => true } = {}) {
+  const owner = getCurrentUser()?.id;
+  const active = () => resultEl.isConnected && !!owner && getCurrentUser()?.id === owner && isCurrent();
   // Per-phone status BEFORE the insert, so "already exists" is answered with
   // the actual record (name, code, calls, last contact) instead of a bare
   // count. Checked first, then the insert runs.
@@ -203,9 +206,22 @@ async function submitRows(sb, rows, resultEl, after) {
   try { pre = await Promise.all(rows.slice(0, 20).map(r => checkPhoneRPC(sb, r.phone))); }
   catch { pre = []; }
   try {
+    if (!active()) return { kind: 'stale' };
+    if (single) {
+      const decision = await singleIntakeDecision(sb, pre[0], { allowed: active });
+      if (!active()) return { kind: 'stale' };
+      if (decision.kind !== 'new') {
+        resultEl.innerHTML = decision.kind === 'existing'
+          ? existingPatientHTML(decision.patient, { keepForm: true })
+          : '<div class="card" role="status"><h3>This number is already on file</h3><p>The record is not available to this account. Ask its coordinator or a manager to update it; do not add another copy. Your form and files have not been submitted.</p><a class="btn btn-secondary" href="#upload?mode=existing">Find an existing record</a></div>';
+        showToast('Already on file. Update the existing patient record.', 'info');
+        return decision;
+      }
+    }
     rows = normalizeLeadRows(rows);
     const { data, error } = await sb.rpc(rows.some(hasLeadMeasurement) ? 'bulk_add_leads_with_measurements' : 'bulk_add_leads', { p_rows: rows });
     if (error) throw error;
+    if (!active()) return { kind: 'stale' };
     const r = data || {};
     const added = r.added || 0, linked = r.linked || 0, enriched = r.enriched || 0;
     // "0 leads added" used to be the whole headline even when the entry had
@@ -237,6 +253,7 @@ async function submitRows(sb, rows, resultEl, after) {
     showToast(done ? head : 'Nothing new to save', done ? 'success' : 'info');
     if (after) after();
   } catch (err) {
+    if (!active()) return { kind: 'stale' };
     // Say whether it landed. A failed insert saves nothing, so retrying is
     // safe; a "duplicate" AFTER an error means the first attempt actually
     // saved and the retry is the no-op. That distinction is the whole fix.
@@ -295,10 +312,12 @@ export async function renderUpload(container) {
       <button class="tab" data-mode="camera">${icon('camera')}Camera</button>
       <button class="tab active" data-mode="paste">Paste a list</button>
       <button class="tab" data-mode="single">Add one (detailed)</button>
+      <button class="tab" data-mode="existing">Update existing</button>
       <button class="tab" data-mode="docs">${icon('fileText')}Upload documents</button>
     </div>
 
     <div id="mode-camera" style="display:none"></div>
+    <div class="card" id="mode-existing" style="max-width:760px;display:none"></div>
 
     <div class="card" id="mode-paste" style="max-width:760px">
       <div class="field" style="margin-bottom:var(--s3)">
@@ -330,6 +349,7 @@ export async function renderUpload(container) {
         <div class="field" style="flex:1;min-width:180px"><label>Phone <span class="req">*</span></label><input class="input" id="s-phone" inputmode="tel" placeholder="9876543210" /></div>
         <div class="field" style="flex:1;min-width:180px"><label>Patient name</label><input class="input" id="s-name" placeholder="Optional" /></div>
       </div>
+      <div id="s-phone-status" aria-live="polite" style="margin-bottom:12px"></div>
       <div class="row" style="display:flex;gap:16px;flex-wrap:wrap">
         <div class="field" style="flex:1;min-width:140px"><label>City override</label><input class="input" id="s-city" /></div>
         <div class="field" style="flex:1;min-width:120px"><label>State override</label><input class="input" id="s-state" /></div>
@@ -367,7 +387,6 @@ export async function renderUpload(container) {
         </div>
         <span class="form-hint" id="s-docs-list" style="display:block;margin-top:6px">Photograph the hospital papers now, while the family is with you. Take a photo once per page. They are attached to this patient and read as soon as you add them, after the family agrees.</span>
       </div>
-      <div id="s-phone-status"></div>
       <div class="form-actions" style="justify-content:flex-start"><button type="submit" class="btn btn-primary" id="s-submit">${icon('plus')}Add this lead</button></div>
     </form>
 
@@ -528,8 +547,11 @@ export async function renderUpload(container) {
   refreshWaiting();
 
   // tab switching
+  let existingMount;
   const showMode = (mode) => {
     container.querySelectorAll('#upload-tabs .tab').forEach(x => x.classList.toggle('active', x.dataset.mode === mode));
+    $('#mode-existing').style.display = mode === 'existing' ? '' : 'none';
+    if (mode === 'existing' && !existingMount) existingMount = mountExistingPatients($('#mode-existing'), { sb });
     $('#mode-single').style.display = mode === 'single' ? '' : 'none';
     $('#mode-paste').style.display = mode === 'paste' ? '' : 'none';
     $('#mode-docs').style.display = mode === 'docs' ? '' : 'none';
@@ -570,7 +592,9 @@ export async function renderUpload(container) {
     if (typeof prefillCameraIntake === 'function') prefillCameraIntake({ phone, name });
   }
   // The Ground POC's job at the hospital is the camera loop, so the page opens on it.
-  if (['ground_poc', 'uploader'].includes(role)) showMode('camera');
+  const requestedMode = new URLSearchParams(window.location.hash.split('?')[1] || '').get('mode');
+  if (requestedMode === 'existing') showMode('existing');
+  else if (['ground_poc', 'uploader'].includes(role)) showMode('camera');
 
   // ---- Documents, for patients this person added -------------------------
   // The ground team meets the family at the hospital, papers in hand. Until
@@ -750,9 +774,10 @@ export async function renderUpload(container) {
   // Live phone check: typing the number answers "already registered or new"
   // BEFORE the insert, with the record behind it. Same check bulk submit
   // runs, just earlier.
-  let phoneTimer = null;
+  let phoneTimer = null, phoneCheck = 0;
   $('#s-phone')?.addEventListener('input', () => {
     clearTimeout(phoneTimer);
+    const mine = ++phoneCheck, owner = getCurrentUser()?.id;
     const mount = $('#s-phone-status');
     phoneTimer = setTimeout(async () => {
       const raw = $('#s-phone').value;
@@ -760,7 +785,8 @@ export async function renderUpload(container) {
       if (digits.length !== 10) { if (mount) mount.innerHTML = ''; return; }
       if (mount) mount.innerHTML = '<div class="due-meta">Checking…</div>';
       const st = await checkPhoneRPC(sb, digits);
-      if (mount) mount.innerHTML = phoneStatusHTML(st);
+      if (mine !== phoneCheck || !container.isConnected || getCurrentUser()?.id !== owner || normPhone($('#s-phone').value) !== digits) return;
+      if (mount) mount.innerHTML = phoneStatusHTML(st) + (st.found ? '<p class="due-meta">Use <strong>Update existing</strong> to update this patient’s consent, details, height and weight. Adding the same person again is unnecessary.</p>' : '');
     }, 450);
   });
   $('#s-notes')?.addEventListener('input', () => {
@@ -787,9 +813,10 @@ export async function renderUpload(container) {
       // The number check runs 450 ms after the last keystroke. A quick Add
       // let it land AFTER the insert and call the patient just added
       // "Already registered", right above "1 lead added".
-      clearTimeout(phoneTimer);
+      clearTimeout(phoneTimer); ++phoneCheck;
       const st = $('#s-phone-status'); if (st) st.innerHTML = '';
-    });
+    }, { single: true, isCurrent: () => container.isConnected && normPhone($('#s-phone').value) === phone });
+    if (!container.isConnected) return;
     btn.disabled = false; btn.innerHTML = `${icon('plus')}Add this lead`;
     if (added) await afterSingleAdd(phone);
   });

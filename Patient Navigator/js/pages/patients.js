@@ -568,7 +568,7 @@ function showPatientForm(existing = null, onSaved = null) {
       consent_given: true,
       consent_method: v('pf-consent-method'),
     };
-    if (!isEdit) patientData.consent_date = new Date().toISOString();
+    if (!isEdit || existing.consent_given !== true) patientData.consent_date = new Date().toISOString();
 
     const submitBtn = el.querySelector('#pf-submit');
     submitBtn.disabled = true; submitBtn.innerHTML = '<div class="spinner"></div>';
