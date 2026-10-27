@@ -7,7 +7,7 @@
 // and either mark contacted or convert by hand into a real patient record.
 // Since sql/172 HopeBot also pushes what each family wrote, the sorter's
 // tags and a short summary (hopebot_family_digest, calling roles only), and
-// the families who asked for a call sit on top (components/hopebotFamily.js).
+// callback requests remain available in a compact disclosure below search.
 // Since sql/182 (Fixboard #31) a family that is not a PN family has ONE
 // caller: a caller reads only their own (row security), a manager reads all
 // and gives a family to someone with the Caller select.
@@ -35,6 +35,8 @@ let searchQ = '';
 const LEAD_LANGS = new Map([['en', 'English'], ['hi', 'Hindi'], ['bn', 'Bengali']]);
 
 export async function renderLeads(container) {
+  filter = 'new';
+  searchQ = '';
   container.innerHTML = `
     <div class="page-header">
       <div>
@@ -45,7 +47,6 @@ export async function renderLeads(container) {
       </div>
       <button class="btn btn-secondary btn-sm" id="wl-refresh">${icon('refresh')}Refresh</button>
     </div>
-    <div id="wl-requests" style="margin-bottom:var(--s4)"></div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:var(--s2)">
       <div class="chip-row" id="wl-filter">
         <button type="button" class="fchip" data-f="new">New</button>
@@ -60,6 +61,7 @@ export async function renderLeads(container) {
           placeholder="Name, phone, city, cancer type…" aria-label="Search leads" />
       </div>
     </div>
+    <div id="wl-requests" style="margin-bottom:var(--s3)"></div>
     <div id="wl-body"><div class="card" style="padding:28px;text-align:center;color:var(--ink-3)">Loading leads…</div></div>`;
 
   // A bare `load` here received the click EVENT as its container and threw on

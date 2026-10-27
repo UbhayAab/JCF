@@ -263,10 +263,18 @@ export async function mountHopebotRequests(el, { mode = 'calling' } = {}) {
     el.hidden = false;
     const nLate = open.filter(late).length;
     const nFree = open.filter((x) => x.unassigned).length;
+    // On the leads page this long queue must not push search/new families
+    // below the fold. Native details keeps keyboard/touch access and counts.
+    const compact = mode === 'leads';
+    const expanded = compact && el.querySelector('details')?.open === true;
+    const outer = compact ? 'details' : 'div';
+    const heading = compact ? 'summary' : 'div';
     el.innerHTML = `
-      <div class="card card-flush" style="${nLate ? 'border-color:var(--danger)' : ''}">
-        <div class="card-head"><h3>${mgr ? 'Asked HopeBot for a call' : 'Your HopeBot call requests'}</h3>
-          <span class="badge ${nLate ? 'badge-danger' : 'badge-info'}">${open.length} waiting${nLate ? ` · ${nLate} now` : ''}${mgr && nFree ? ` · ${nFree} not assigned` : ''}</span></div>
+      <${outer} class="card card-flush" ${expanded ? 'open' : ''} style="${nLate ? 'border-color:var(--danger)' : ''}">
+        <${heading} class="card-head" ${compact ? 'style="display:list-item;cursor:pointer;min-height:44px;box-sizing:border-box"' : ''}>
+          ${compact ? `<span aria-hidden="true" style="display:inline-flex;vertical-align:middle;margin-right:6px">${icon('chevronDown')}</span>` : ''}
+          ${compact ? '<strong>' : '<h3>'}${mgr ? 'Asked HopeBot for a call' : 'Your HopeBot call requests'}${compact ? '</strong>' : '</h3>'}
+          <span class="badge ${nLate ? 'badge-danger' : 'badge-info'}" style="white-space:normal;max-width:100%;box-sizing:border-box">${open.length} waiting${nLate ? ` · ${nLate} now` : ''}${mgr && nFree ? ` · ${nFree} not assigned` : ''}</span></${heading}>
         <div style="padding:0 var(--s5) var(--s4)">
           <div class="due-meta wraps" style="margin-bottom:10px">${mgr
             ? "HopeBot promised these families a call within 4 hours, 9 am to 9 pm. Each one goes to one caller: the family's own caregiver, else whoever is on shift with the fewest. Use Assign to change it."
@@ -280,7 +288,7 @@ export async function mountHopebotRequests(el, { mode = 'calling' } = {}) {
           ${closed.length ? `<div class="due-meta" style="margin:14px 0 6px">${mgr ? 'Closed in the last 7 days' : 'Closed in the last day'}</div>
             <div style="display:flex;flex-direction:column;gap:8px">${closed.map((x) => requestCardHTML(x, null)).join('')}</div>` : ''}
         </div>
-      </div>`;
+      </${outer}>`;
     wire();
   };
   const act = async (btn, fn, args, done) => {
