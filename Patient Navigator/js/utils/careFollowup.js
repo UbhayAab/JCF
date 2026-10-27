@@ -57,7 +57,12 @@ export function verifiedCareCallDate(s, callDay) {
 // The actual recording-component boundary, kept pure so the independent
 // source day cannot be lost between the API reply and any of the three forms.
 export function recordingResultForForm(res, durationS = null) {
-  return { summary: res.summary, note: res.note || null, points: res.points || [], turns: (res.transcript || []).length,
-    suggestions: res.suggestions || {}, call_day: res.call_day, dropped: res.dropped || 0,
-    quality: res.quality, language: res.language, durationS };
+  const auto_apply = res.transcription_complete === true && res.review?.required !== true && res.quality === 'clear';
+  return { summary: auto_apply ? res.summary : '', note: !auto_apply && res.draft_note ? res.draft_note : res.note || null,
+    points: !auto_apply && Array.isArray(res.draft_points) ? res.draft_points : res.points || [], turns: (res.transcript || []).length,
+    suggestions: auto_apply ? res.suggestions || {} : {}, call_day: res.call_day, dropped: res.dropped || 0,
+    quality: res.quality, language: res.language, durationS, auto_apply,
+    transcription_complete: res.transcription_complete === true,
+    review: {required:!auto_apply, reasons:res.review?.reasons||[]},
+    draft_summary: res.draft_summary || res.summary || '' };
 }

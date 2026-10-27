@@ -106,17 +106,22 @@ function noteDay(iso) {
 export function noteHTML(r) {
   const n = r?.note;
   // A red flag whose quote was not exact stays (guard.ts safety exception), marked, with where to listen.
-  const unverified = (l) => (l.unverified
+  const unverified = (l) => l.review_reason
+    ? ` <span style="color:var(--danger);font-weight:600">(needs review: ${esc(l.review_reason)}${l.at ? ` Listen at ${esc(l.at)}.` : ''})</span>` : (l.unverified
     ? ` <span style="color:var(--danger);font-weight:600">(red flag, quote not exact: listen to the recording${l.at ? ` at ${esc(l.at)}` : ''})</span>` : '');
-  const li = (l) => `<li style="margin-bottom:3px">${esc(l.text)}${l.date ? ` <span style="color:var(--ink-3)">(${esc(noteDay(l.date))})</span>` : ''}${unverified(l)}</li>`;
+  const li = (l) => `<li style="margin-bottom:3px;overflow-wrap:anywhere">${l.status && !['ongoing','not_applicable'].includes(l.status) ? `<strong>${esc(l.status)}:</strong> ` : ''}${esc(l.text)}${l.date ? ` <span style="color:var(--ink-3)">(${esc(noteDay(l.date))})</span>` : ''}${unverified(l)}${l.evidence ? `<details style="margin:3px 0 5px"><summary>Source quote${l.at ? ` at ${esc(l.at)}` : ''}</summary><blockquote style="margin:4px 0 4px 10px;overflow-wrap:anywhere">${esc(l.evidence)}</blockquote></details>` : ''}</li>`;
   const ul = (items) => `<ul style="list-style:disc;margin:0 0 8px 18px;padding:0;color:var(--ink-2);font:var(--t-xs)">${items.map(li).join('')}</ul>`;
   const head = (t, color = 'var(--ink)') => `<p style="font:var(--t-xs);font-weight:700;color:${color};margin:8px 0 3px">${t}</p>`;
-  if (!n) return r?.points?.length ? ul(r.points) : '';
+  if (!n) return r?.points?.length ? ul(r.points) : r?.draft_summary ? `<p style="white-space:pre-line">${esc(r.draft_summary)}</p>` : '';
   return [
     n.red_flags?.length ? `<div class="rec-flags" style="border-left:3px solid var(--danger);padding:2px 0 2px 10px;margin:6px 0">${head('Red flags', 'var(--danger)')}${ul(n.red_flags)}</div>` : '',
     n.spoke_with ? `<p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 0"><strong>Spoke with:</strong> ${esc(n.spoke_with.value)}</p>` : '',
     ...NOTE_HEADS.map(([k, t]) => (n[k]?.length ? head(t) + ul(n[k]) : '')),
   ].join('');
+}
+
+export function recordingReviewHTML(r) {
+  return r?.review?.required ? `<div role="status" style="border:1px solid var(--gold);border-radius:8px;padding:10px;margin:8px 0"><strong>Review needed - draft notes</strong><p style="margin:4px 0 0">Processing may be incomplete or some proposed facts need checking. Use the source quotes, transcript and recording before using these notes.</p>${r.review.reasons?.length ? `<ul>${r.review.reasons.map(reason=>`<li>${esc(reason)}</li>`).join('')}</ul>` : ''}</div>` : '';
 }
 
 // Today plus n days in the phone's own calendar, YYYY-MM-DD. (toISOString is
@@ -474,7 +479,7 @@ export function mountRecordingSection(el, ctx) {
           <span style="font:var(--t-xs);color:var(--ink-2)" role="status">${rec.status === 'uploading' ? `Uploading ${esc(rec.fileName)}...` : 'Listening to the call. This takes about 10 to 40 seconds; you can keep filling the form.'}</span></div>`);
     } else if (rec.status === 'done' && rec.result) {
       const r = rec.result;
-      const filled = (rec.applied || []).length ? `Filled in below: ${esc(rec.applied.join(', '))}. Check them before you save.` : 'Nothing new to fill in: the form already had your answers.';
+      const filled = r.auto_apply === false ? 'Nothing was filled automatically. Listen, check the transcript and write the verified notes in the form.' : (rec.applied || []).length ? `Filled in below: ${esc(rec.applied.join(', '))}. Check them before you save.` : 'Nothing new to fill in: the form already had your answers.';
       const note = noteHTML(r);
       // Only when it was actually filled: a condition she had already chosen is never replaced.
       const critical = r.suggestions?.condition?.value === 'critical' && r.suggestions.condition.unverified
@@ -482,14 +487,15 @@ export function mountRecordingSection(el, ctx) {
         ?`<p style="font:var(--t-xs);color:var(--danger);font-weight:600;margin:6px 0 4px">"Critical" was filled in from words the AI could not match exactly. Listen to the recording before you save: a critical call alerts a supervisor.</p>` : '';
       el.innerHTML = card(`
         <p style="font:var(--t-xs);color:var(--ink-3);margin:6px 0 4px">Written by AI from the recording, not checked by a person.</p>${critical}
+        ${recordingReviewHTML(r)}
         ${note || `<p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">${r.quality === 'no_speech' ? 'No conversation was heard in this recording.' : 'No call note could be made from this recording.'}</p>`}
-        <p style="font:var(--t-xs);color:var(--ok);margin:0 0 8px">${filled}</p>
+        <p style="font:var(--t-xs);color:var(${r.auto_apply === false ? '--ink-2' : '--ok'});margin:0 0 8px">${filled}</p>
         ${transcripts.has(rec.recordingId)
           ? `<details><summary style="cursor:pointer;font:var(--t-xs);color:var(--ink-2)">Show the transcript (${transcripts.get(rec.recordingId).length} turns${r.language ? `, ${esc(r.language)}` : ''})</summary>
           <div style="max-height:260px;overflow-y:auto;margin-top:6px">${transcripts.get(rec.recordingId).map((t) => `<p style="font:var(--t-xs);margin:0 0 4px"><strong>${t.speaker === 'caller' ? 'You' : t.speaker === 'family' ? 'Family' : 'Someone'}:</strong> ${esc(t.text)}</p>`).join('')}</div></details>`
           : btn('rec-read', 'Read the transcript', 'btn-ghost', 'fileText')}
         <div id="rec-measurements"></div>
-        ${btn('rec-remove', 'Remove recording', 'btn-ghost', 'trash')}`, 'ok');
+        ${btn('rec-remove', 'Remove recording', 'btn-ghost', 'trash')}`, r.review?.required ? 'warn' : 'ok');
     } else if (rec.status === 'saved') {
       el.innerHTML = card(`
         <p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 8px"><strong>Recording saved.</strong> ${esc(rec.error || 'No transcript was made; fill the log by hand.')}</p>
@@ -647,7 +653,7 @@ export function mountRecordingSection(el, ctx) {
       // note: the full call note by section (prompt v3); summary: the same note as the text the log keeps.
       const result = recordingResultForForm(res, ctx.get().durationS || null);
       let applied = [];
-      try { applied = ctx.apply(result) || []; } catch (e) { console.warn('[recording] could not fill the form:', e); }
+      try { if(result.auto_apply !== false) applied = ctx.apply(result) || []; } catch (e) { console.warn('[recording] could not fill the form:', e); }
       update({ status: 'done', result, applied });
       return;
     }
@@ -890,11 +896,13 @@ export async function mountLogRecording(el, { log, meId, consentOnFile, callSeco
 async function renderRecordingViewer(container, recordingId) {
   const sb = getSupabase();
   const { data: r, error } = await sb.from('call_recordings')
-    .select('id, patient_id, storage_path, status, summary, suggestions, transcript, duration_seconds, audio_deleted_at, audio_delete_reason, delete_audio_after_transcription, created_at, language, uploaded_by')
+    .select('id, patient_id, storage_path, status, summary, suggestions, transcript, duration_seconds, audio_deleted_at, audio_delete_reason, delete_audio_after_transcription, created_at, language, uploaded_by, transcription_complete, audio_quality, dropped')
     .eq('id', recordingId).maybeSingle();
   if (error || !r) { showToast('This recording is not open to you.', 'warning'); return null; }
   const turns = Array.isArray(r.transcript) ? r.transcript : [];
   const n = r.suggestions?.note || null;
+  const review = {required:r.transcription_complete!==true || r.audio_quality!=='clear' || r.suggestions?.note_review?.required===true
+    || Array.isArray(r.dropped)&&r.dropped.some(d=>String(d?.field||'').startsWith('note.')),reasons:[]};
   container.innerHTML = `
       <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">${r.delete_audio_after_transcription
         ? 'This recording uses the new cleanup policy: cloud audio is deleted after a complete clear transcript and a saved call. Incomplete processing or review keeps it for at most 90 days.'
@@ -904,6 +912,7 @@ async function renderRecordingViewer(container, recordingId) {
         : ['kept90days', 'kept 90 days'].includes(r.audio_delete_reason) ? 'The cloud audio was deleted after 90 days.' : 'The cloud audio has been deleted.'} The transcript stays with the call.</p>`
         : '<audio id="rec-audio" class="rec-audio" controls preload="none" style="width:100%;margin-bottom:10px"></audio>'}
       <p style="font:var(--t-xs);color:var(--ink-3);margin:0 0 8px">Recorded ${esc(fmtWhen(new Date(r.created_at).getTime()))}${r.duration_seconds ? ` · ${fmtDur(r.duration_seconds)}` : ''}${r.language ? ` · ${esc(r.language)}` : ''}. Only the caller, their managers and admins can open it.</p>
+      ${recordingReviewHTML({review})}
       ${n ? `<div style="margin:0 0 10px"><p style="font:var(--t-xs);color:var(--ink-3);margin:0">Call note (AI, not checked by a person):</p>${noteHTML({ note: n })}</div>`
         : r.summary ? `<p style="margin:0 0 10px;color:var(--ink-2);white-space:pre-line"><strong>Summary (AI, not checked by a person):</strong> ${esc(r.summary)}</p>` : ''}
       ${turns.length ? `<details ${n ? '' : 'open'}><summary style="cursor:pointer;font:var(--t-xs);color:var(--ink-2)">The transcript (${turns.length} turns)</summary>
