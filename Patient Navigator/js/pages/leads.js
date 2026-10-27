@@ -27,6 +27,7 @@ let rows = [];
 let digests = new Map(); // lead_id -> what they wrote, tags, summary (sql/172)
 let filter = 'new'; // new | contacted | all | nocaller (managers) | team
 let roster = null;  // managers: who can take a family (hopebot_assignable)
+let requestsKnown = false; // Never offer a journal action while callback state is unknown.
 let openReqs = new Map(); // lead_id -> open HopeBot request ids this person may log
 let searchQ = '';
 // The family's HopeBot language (sql/208 keeps 'bn'). A local copy, not an
@@ -61,6 +62,7 @@ export async function renderLeads(container) {
           placeholder="Name, phone, city, cancer type…" aria-label="Search leads" />
       </div>
     </div>
+    <p class="due-meta" style="margin:0 0 14px;overflow-wrap:anywhere;white-space:normal">Assigned WhatsApp-only leads stay here. Registered families are in <a href="#patients">Patients</a>. Each account sees its authorised records, so its total can differ from a manager's. Choose All to include Contacted leads. For an assigned lead without a requested callback, use Log follow-up after the conversation.</p>
     <div id="wl-requests" style="margin-bottom:var(--s3)"></div>
     <div id="wl-body"><div class="card" style="padding:28px;text-align:center;color:var(--ink-3)">Loading leads…</div></div>`;
 
@@ -84,6 +86,7 @@ export async function renderLeads(container) {
 
 async function load(container) {
   const body = container.querySelector('#wl-body');
+  requestsKnown = false;
   try {
     // Newest ACTIVITY first, not newest signup: when someone asks HopeBot for a
     // volunteer call, their lead is reopened with the request in `notes`, and
@@ -108,8 +111,9 @@ async function load(container) {
     // security returns only the requests this person may act on.
     openReqs = new Map();
     // A deletion request is a person's other job (sql/173), never "a call".
-    const { data: rq } = await getSupabase().from('hopebot_requests')
+    const { data: rq, error: requestError } = await getSupabase().from('hopebot_requests')
       .select('id, lead_id, team').neq('state', 'closed').neq('team', 'admin').order('due_at').limit(1000);
+    requestsKnown = !requestError;
     (rq || []).forEach((x) => openReqs.set(x.lead_id, [...(openReqs.get(x.lead_id) || []), x.id]));
     if (isManagerOrAdmin()) {
       try { roster = await loadRoster('cgmp'); } catch (e) { roster = null; console.warn('[leads] roster:', e.message); }
@@ -164,6 +168,7 @@ function paint(container) {
             ${r.contacted ? 'Reopen' : 'Mark contacted'}
           </button>`}
         </div>
+        ${!r.is_team && !r.patient_id && !openReqs.has(r.id) && (isManagerOrAdmin() || r.assigned_to === getCurrentProfile()?.id) ? `<div style="margin-top:8px"><button type="button" class="btn btn-secondary btn-sm" data-log-followup="${sanitize(r.id)}" ${requestsKnown ? '' : 'disabled'} title="${requestsKnown ? 'Record a follow-up already completed with this assigned lead' : 'Refresh to check existing callback requests first'}">Log follow-up</button></div>` : ''}
         ${r.is_team ? '' : callerLine(r)}
         <div class="due-meta" style="margin-top:4px">${[
           r.role === 'caregiver' ? 'Caregiver' : r.role === 'patient' ? 'Patient' : null,
@@ -182,12 +187,25 @@ function paint(container) {
       const { error } = await getSupabase().rpc('hopebot_lead_assign', { p_lead: sel.dataset.leadAssign, p_to: sel.value || null });
       if (error) throw error;
       forgetRoster();
-      showToast(sel.value ? 'Given to them. Their open call requests went with it.' : 'No caller now.', 'success', 2500);
+      showToast(sel.value ? 'Assigned under WhatsApp leads. Their open call requests went with it.' : 'No caller now.', 'success', 2500);
     } catch (e) {
       showToast(e.message || 'Could not assign.', 'error');
     }
     await load(container);
     mountHopebotRequests(container.querySelector('#wl-requests'), { mode: 'leads' });
+  }));
+  body.querySelectorAll('[data-log-followup]').forEach(b => b.addEventListener('click', async () => {
+    const r = rows.find(x => x.id === b.dataset.logFollowup);
+    const actor = getCurrentProfile()?.id, route = window.location.hash;
+    const current = () => container.isConnected && getCurrentProfile()?.id === actor && window.location.hash === route;
+    b.disabled = true;
+    try {
+      const journal = await import('../components/leadFollowup.js?v=assigned102');
+      if (!current()) return;
+      if (typeof journal.openLeadFollowup !== 'function') throw new Error('Reload to get the follow-up form.');
+      journal.openLeadFollowup(r, { isCurrent: current, onSaved: async () => { if (current()) { filter = 'all'; await load(container); } } });
+    } catch (e) { if (current()) showToast(e.message || 'Could not open follow-up. Reload and try again.', 'error'); }
+    finally { if (b.isConnected && current()) b.disabled = false; }
   }));
   body.querySelectorAll('[data-log-call]').forEach(b => b.addEventListener('click', () => {
     const r = rows.find(x => x.id === b.dataset.logCall);

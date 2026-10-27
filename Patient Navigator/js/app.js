@@ -24,7 +24,7 @@ import { renderNutrition } from './pages/nutrition.js?v=20261024e';
 import { renderNutritionTracker } from './pages/nutritionTracker.js';
 import { renderLeaderboard } from './pages/leaderboard.js';
 import { renderConcerns } from './pages/concerns.js';
-import { renderLeads } from './pages/leads.js';
+import { renderLeads } from './pages/leads.js?v=20261028a';
 import { renderDocReads } from './pages/docreads.js';
 import { renderBrief } from './pages/brief.js';
 import { renderSessions } from './pages/sessions.js';
@@ -505,7 +505,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261027c';  // bumped on every breaking deploy
+const APP_BUILD = '20261028a';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
