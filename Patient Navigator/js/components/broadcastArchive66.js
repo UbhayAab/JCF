@@ -36,7 +36,7 @@ export async function mountBroadcastArchive66(container, { onEdit }) {
 }
 function current(s) {return !s.disposed&&mounts.get(s.container)===s&&s.root.isConnected&&s.container.contains(s.root)&&identity()===s.identity&&location.hash===s.hash&&allowed();}
 function controls(s,loading=false) {
-  s.root.querySelectorAll('[data-view]').forEach(b=>{b.disabled=s.busy;b.setAttribute('aria-pressed',String((b.dataset.view==='archived')===s.archived));});
+  s.root.querySelectorAll('[data-view]').forEach(b=>{const selected=(b.dataset.view==='archived')===s.archived;b.disabled=s.busy;b.setAttribute('aria-pressed',String(selected));b.className='btn btn-sm '+(selected?'btn-secondary':'btn-ghost');});
   s.root.querySelector('[data-prev]').disabled=s.busy||loading||s.offset===0;
   s.root.querySelector('[data-next]').disabled=s.busy||loading||!s.more;
   s.root.querySelector('[data-explanation]').textContent=s.archived?'Restoring only returns a message to the current list. It does not schedule or send it. Delivery history is preserved.':'Archive hides a draft, stopped or completed message from this list. Delivery history stays available.';
