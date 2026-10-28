@@ -6,7 +6,7 @@ import { formatRelativeTime } from '../utils/formatters.js';
 const mounts = new WeakMap();
 const KINDS = { patient_assigned: 'New patient assigned', session_request: '1:1 session requested', nutrition_request: 'Nutrition request raised', nutrition_plan_not_shared: 'Plan not shared', nutrition_plan_shared: 'Nutrition plan shared', nutrition_plan_corrected: 'Nutrition plan corrected' };
 const STAGES = { assignment: 'Assignment pending', call: 'First call pending', plan: 'Plan preparation pending', confirm_plan: 'Completion needs confirmation', followup: 'Scheduled nutrition follow-up' };
-export async function mountCareNotifications(mount) {
+export async function mountCareNotifications(mount, { showPending = true } = {}) {
   if (!mount) return;
   const token = {}; mounts.set(mount, token);
   if (isImpersonating()) { mount.innerHTML = '<section class="card nw-notifications"><h3>For you</h3><p class="nw-muted">Exit Open as to view notifications for your signed-in account.</p></section>'; return; }
@@ -61,6 +61,7 @@ export async function mountCareNotifications(mount) {
   }
   async function loadPending() {
     if (!current()) return;
+    if (!showPending) { pending.replaceChildren(); return; }
     const generation = ++pendingGeneration;
     pending.innerHTML = '<h3>Nutrition follow-ups</h3><p class="nw-muted" role="status">Loading pending work...</p>';
     try {
