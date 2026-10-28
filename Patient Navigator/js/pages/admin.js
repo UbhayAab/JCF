@@ -374,7 +374,7 @@ async function loadUsers() {
             <select class="form-select urow-role" data-user-id="${u.id}" data-action="role" title="Role">${roleOpts(u.role)}</select>
             <button class="btn btn-ghost btn-sm" data-user-id="${u.id}" data-action="managers">Managers</button>
             <button class="btn btn-ghost btn-sm" data-user-id="${u.id}" data-user-name="${sanitize(u.full_name)}" data-action="resetpw">Reset</button>
-            <button class="btn btn-ghost btn-sm" data-user-id="${u.id}" data-action="impersonate">Open as</button>
+            <button class="btn btn-ghost btn-sm" data-user-id="${u.id}" data-action="impersonate" ${!u.is_active || u.id === getCurrentUser()?.id ? 'disabled' : ''}>Open as</button>
             <button class="btn btn-ghost btn-sm" data-user-id="${u.id}" data-action="toggle" data-active="${u.is_active}">${u.is_active ? 'Deactivate' : 'Activate'}</button>
           </div>`).join('')}
       </div>
@@ -447,7 +447,13 @@ async function loadUsers() {
       btn.addEventListener('click', () => {
         if (!current()) return;
         const u = (profiles || []).find(p => p.id === btn.dataset.userId);
-        if (u && startImpersonation(u)) location.reload();
+        if (!u) return;
+        if (!startImpersonation(u)) {
+          showToast('Could not open that view. Check that the account is active and this browser allows site data, then try again.', 'error');
+          return;
+        }
+        location.hash = 'dashboard';
+        location.reload();
       });
     });
   } catch (err) {

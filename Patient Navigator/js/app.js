@@ -2,7 +2,7 @@
 // Patient Navigator: Main App Controller
 // ============================================================
 
-import { initAuth, getCurrentUser, getCurrentProfile, getRealProfile, getUserRole, signIn, isImpersonating, stopImpersonation } from './auth.js';
+import { initAuth, getCurrentUser, getCurrentProfile, getRealProfile, getUserRole, signIn, isImpersonating, stopImpersonation, takeOpenAsProblem } from './auth.js';
 import { sanitize } from './utils/validators.js';
 import { registerRoute, initRouter, navigate, setAuthGuard, setRoleGuard } from './router.js';
 import { renderSidebar, bindSidebarSync } from './components/sidebar.js';
@@ -344,7 +344,11 @@ function renderAppShell() {
   document.getElementById('header-profile-btn')?.addEventListener('click', () => navigate('profile'));
 
   // Exit "open as user" (master access) impersonation → reload as the real account.
-  document.getElementById('imp-exit')?.addEventListener('click', () => { stopImpersonation(); location.reload(); });
+  document.getElementById('imp-exit')?.addEventListener('click', () => {
+    stopImpersonation();
+    location.hash = 'admin';
+    location.reload();
+  });
 
   // Sidebar/bottom-nav active state self-syncs from location.hash,
   // a single module-level listener, registered once.
@@ -356,7 +360,9 @@ function renderAppShell() {
 // profiles.must_change_password = true. Until they set their own,
 // the only screen they see is this one.
 function gateAndBoot() {
-  const prof = getCurrentProfile();
+  // A manager preview is not the target's Auth session. Only the actual
+  // signed-in person's password gate may lead to changing that password.
+  const prof = getRealProfile();
   // A session without a profile must never mount the shell: with a null role
   // the sidebar filters to zero items, every page errors, and there is no
   // sign-out anywhere, the exact "stranded on my phone" bug. Give the user
@@ -505,7 +511,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261028j';  // bumped on every breaking deploy
+const APP_BUILD = '20261029a';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -527,6 +533,8 @@ function bootApp() {
   }
   try {
     renderAppShell();
+    const openAsProblem = takeOpenAsProblem();
+    if (openAsProblem) showToast(openAsProblem, 'error');
     console.log('[boot] app shell mounted');
     initRouter();
     console.log('[boot] router initialized');

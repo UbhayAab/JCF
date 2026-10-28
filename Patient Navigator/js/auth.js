@@ -12,7 +12,10 @@ let observingAuth = false;
 let currentUser = null;
 let currentProfile = null;
 let impersonatedProfile = null;            // manager/admin "open as user"
+let openAsProblem = null;
 const IMPERSONATE_KEY = 'jcf_impersonate';
+const VIEW_VERSION = 1;
+const PROFILE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SIGNUP_DISABLED_MESSAGE = 'Sign up is currently disabled. Only admins can add new users manually as of now.';
 const PASSWORD_RESET_DISABLED_MESSAGE = 'Password reset is currently disabled. Only an admin can reset it.';
 
@@ -24,6 +27,7 @@ export function getCurrentUser() { return currentUser; }
 export function getCurrentProfile() { return impersonatedProfile || currentProfile; }
 export function getRealProfile() { return currentProfile; }
 export function isImpersonating() { return !!impersonatedProfile; }
+export function takeOpenAsProblem() { const problem = openAsProblem; openAsProblem = null; return problem; }
 
 export function getUserRole() {
   return (impersonatedProfile || currentProfile)?.role || null;
@@ -36,15 +40,67 @@ export function isManagerOrAdmin() { return ['admin', 'manager'].includes(getUse
 // No password needed. The manager is already signed in; this just scopes the
 // app to the target user. Writes still happen under the real session, which the
 // audit log + the "on-behalf" RLS policies permit. Returns true if it started.
+function canOwnView() {
+  return typeof currentUser?.id === 'string' && PROFILE_ID.test(currentUser.id) && currentProfile?.id === currentUser.id
+    && ['admin', 'manager'].includes(currentProfile.role)
+    && currentProfile.is_active === true && currentProfile.must_change_password !== true;
+}
+
+// This is only a UI selection, never an Auth identity or a permission grant.
+// Copy a closed set of fields; do not persist the full profile or credentials.
+function viewProfile(profile) {
+  if (typeof profile?.id !== 'string' || !PROFILE_ID.test(profile.id) || profile.is_active !== true
+      || typeof profile.role !== 'string' || !/^[a-z][a-z0-9_]{0,63}$/.test(profile.role)) return null;
+  const id = profile.id.toLowerCase();
+  if (id === currentUser?.id?.toLowerCase()) return null;
+  const full_name = typeof profile.full_name === 'string' ? profile.full_name.trim().slice(0, 200) : '';
+  return { id, full_name: full_name || 'Team member', role: profile.role, is_active: true };
+}
+
+async function restoreImpersonation(epoch, ownerId) {
+  impersonatedProfile = null;
+  let raw;
+  try {
+    raw = sessionStorage.getItem(IMPERSONATE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    const profile = viewProfile(saved?.profile);
+    if (canOwnView() && saved?.version === VIEW_VERSION && saved.owner_id === currentUser.id && profile) {
+      // The stored name/role is a small selection envelope, not authoritative
+      // profile data. Reload the real row so probation, role changes and account
+      // deactivation cannot be hidden by an old browser snapshot.
+      const { data, error } = await withTimeout(getSupabase().from('profiles').select('*').eq('id', profile.id).maybeSingle(), 3000, 'Open as profile');
+      if (epoch !== authEpoch || currentUser?.id !== ownerId || sessionStorage.getItem(IMPERSONATE_KEY) !== raw) return;
+      if (error || !viewProfile(data) || data.id !== profile.id) throw new Error('Selected profile unavailable');
+      impersonatedProfile = { ...data, _impersonated: true };
+      return;
+    }
+  } catch {
+    if (epoch !== authEpoch || currentUser?.id !== ownerId) return;
+    try { if (raw !== undefined && sessionStorage.getItem(IMPERSONATE_KEY) !== raw) return; } catch {}
+    openAsProblem = 'The selected dashboard could not be loaded. Please try Open as again.';
+  }
+  try { sessionStorage.removeItem(IMPERSONATE_KEY); } catch {}
+}
+
 export function startImpersonation(profile) {
-  if (!['admin', 'manager'].includes(currentProfile?.role)) return false;
-  if (!profile?.id || profile.id === currentProfile.id) return false;
-  impersonatedProfile = { id: profile.id, full_name: profile.full_name, role: profile.role, is_active: true, _impersonated: true };
-  try { sessionStorage.setItem(IMPERSONATE_KEY, JSON.stringify(impersonatedProfile)); } catch {}
+  if (!canOwnView()) return false;
+  const selected = viewProfile(profile);
+  if (!selected) return false;
+  const saved = JSON.stringify({ version: VIEW_VERSION, owner_id: currentUser.id, profile: selected });
+  try {
+    sessionStorage.setItem(IMPERSONATE_KEY, saved);
+    if (sessionStorage.getItem(IMPERSONATE_KEY) !== saved) throw new Error('View storage unavailable');
+  } catch {
+    try { sessionStorage.removeItem(IMPERSONATE_KEY); } catch {}
+    return false;
+  }
+  impersonatedProfile = { ...selected, _impersonated: true };
   return true;
 }
 export function stopImpersonation() {
   impersonatedProfile = null;
+  openAsProblem = null;
   try { sessionStorage.removeItem(IMPERSONATE_KEY); } catch {}
 }
 
@@ -112,7 +168,10 @@ async function initialize(epoch) {
   if (!session?.user) { forgetAuth(); return null; }
   if (currentUser?.id !== session.user.id) {
     currentProfile = null;
-    stopImpersonation();
+    // A fresh module has no user yet: preserve its record until the actual
+    // owner's profile can validate it. A real account switch still clears it.
+    if (currentUser) stopImpersonation();
+    else impersonatedProfile = null;
   }
   currentUser = session.user;
   let status = 'error';
@@ -123,6 +182,12 @@ async function initialize(epoch) {
   // JWT query rejection is not evidence that every device should be logged
   // out. Do not mount a role-less shell; gateAndBoot offers account recovery.
   if (status === 'invalid') currentProfile = null;
+  // Keep the selected-profile lookup outside loadProfile's timeout race. Its
+  // own bounded request must finish before a shell can mount for this boot.
+  if (status === 'ok') {
+    await restoreImpersonation(epoch, session.user.id);
+    if (epoch !== authEpoch || currentUser?.id !== session.user.id) return null;
+  }
   return session;
 }
 
@@ -156,13 +221,6 @@ async function loadProfile(epoch = authEpoch, userId = currentUser?.id) {
 
   currentProfile = data;
 
-  // Restore an in-progress "open as user" session, but ONLY if the real
-  // account is a manager/admin (a plain user must never inherit it).
-  try {
-    const raw = sessionStorage.getItem(IMPERSONATE_KEY);
-    if (raw && ['admin', 'manager'].includes(currentProfile.role)) impersonatedProfile = JSON.parse(raw);
-    else if (raw) sessionStorage.removeItem(IMPERSONATE_KEY);
-  } catch {}
   return 'ok';
 }
 
