@@ -67,6 +67,7 @@ import { showToast } from '../components/toast.js';
 import { showModal, closeModal } from '../components/modal.js';
 import { icon } from '../components/icons.js';
 import { RESOURCE_CATEGORIES } from '../utils/catalog.js';
+import { openResourcePublication73 } from '../components/resourcePublication73.js';
 import { reasonLabels } from '../utils/matchReasons.js';
 import { navigate } from '../router.js';
 import { exportToCSV } from '../utils/formatters.js';
@@ -87,13 +88,15 @@ const SHELVES = [
   { key: 'scheme',          label: 'Govt schemes', sub: 'State and central' },
   { key: 'paid_stay',       label: 'Rooms to rent', sub: 'Hotels and dormitories, by the night' },
   { key: 'guidance',        label: 'Advice only',  sub: 'Guidance, no money and no bed' },
-  { key: 'all',             label: 'Everything',   sub: 'Both shelves, nothing hidden' },
+  { key: 'palliative',      label: 'Palliative care', sub: 'Home care, clinics and advice' },
+  { key: 'all',             label: 'Everything',   sub: 'All resource categories' },
 ];
 // Which category a shelf implies. `null` means both.
 const SHELF_CATEGORY = {
   charitable_stay: null, paid_stay: 'accommodation',
   grant: 'financial_aid', scheme: 'financial_aid', guidance: 'financial_aid',
   help_only: null, all: null,
+  palliative: 'palliative',
 };
 
 // Route keys that mean a shelf rather than a single aid_kind.
@@ -212,7 +215,7 @@ export async function renderResources(container, params = {}) {
   S.view = shelfKey === 'recheck' ? 'recheck' : 'shelf';
   if (shelfKey && COMBO[shelfKey]) { S.category = COMBO[shelfKey].category; S.aid = COMBO[shelfKey].aid; }
   else if (shelfKey && SHELVES.some(s => s.key === shelfKey)) {
-    S.aid = shelfKey === 'all' ? null : shelfKey;
+    S.aid = ['all','palliative'].includes(shelfKey) ? null : shelfKey;
     S.category = SHELF_CATEGORY[shelfKey] ?? null;
   }
   else if (shelfKey && RESOURCE_CATEGORIES.some(c => c.key === shelfKey)) S.category = shelfKey;
@@ -376,7 +379,7 @@ function paint() {
     <div class="rs-chips" id="rs-shelves">
       ${SHELVES.map(s => {
         const n = shelfCount(s.key, f);
-        return `<button class="rs-shelf ${((s.key === 'all' && !S.aid) || S.aid === s.key) ? 'on' : ''}" data-shelf="${s.key}">
+        return `<button class="rs-shelf ${((s.key === 'all' && !S.aid && !S.category) || (s.key==='palliative'&&S.category==='palliative') || S.aid === s.key) ? 'on' : ''}" data-shelf="${s.key}">
           <b>${s.label}${n == null ? '' : ` &middot; ${n}`}</b><span>${s.sub}</span></button>`;
       }).join('')}
     </div>
@@ -455,6 +458,8 @@ function tagCount(key) {
 
 function shelfCount(key, f) {
   if (!f) return null;
+  // Facets group aid_kind, not category. Palliative has no aid_kind count.
+  if (key === 'palliative') return null;
   const by = f.by_aid_kind || {};
   if (key === 'all') return f.eligible;
   // "Real help" is everything that is not a room with a nightly rate. The
@@ -536,7 +541,7 @@ function card(r, isOut) {
         <span class="badge badge-${badge.tone}">${badge.label}</span>
         <span class="rs-price">${priceLine(r)}</span>
         <span style="flex:1"></span>
-        ${isManagerOrAdmin() ? `<button class="btn btn-ghost btn-sm" data-edit="${r.resource_id}" title="Edit" style="padding:4px 7px">${icon('edit')}</button>` : ''}
+        ${isManagerOrAdmin() ? `<button class="btn btn-ghost btn-sm" data-publication73="${r.resource_id}" style="padding:4px 7px">HopeBot publication</button><button class="btn btn-ghost btn-sm" data-edit="${r.resource_id}" title="Edit" style="padding:4px 7px">${icon('edit')}</button>` : ''}
       </div>
 
       <div>
@@ -623,7 +628,7 @@ function freshLine(r) {
 function wire(body) {
   body.querySelectorAll('#rs-shelves .rs-shelf').forEach(b => b.addEventListener('click', () => {
     const k = b.dataset.shelf;
-    S.aid = (k === 'all') ? null : k;
+    S.aid = ['all','palliative'].includes(k) ? null : k;
     // Picking a shelf picks its category too, so the state dropdown stops
     // describing a shelf nobody is looking at.
     S.category = SHELF_CATEGORY[k] ?? null;
@@ -663,6 +668,8 @@ function wire(body) {
     const { data } = await getSupabase().from('resources').select('*').eq('id', b.dataset.edit).maybeSingle();
     if (data) openResourceModal(data);
   }));
+  body.querySelectorAll('[data-publication73]').forEach(b => b.addEventListener('click',()=>
+    openResourcePublication73(b.dataset.publication73)));
   body.querySelectorAll('[data-check]').forEach(b => b.addEventListener('click', () => {
     const row = S.rows.find(r => r.resource_id === b.dataset.check);
     if (row) openCheckModal(row);
@@ -898,8 +905,12 @@ function openResourceModal(existing, prefill = null) {
       <div class="form-group"><label class="form-label">Category <span class="req">*</span></label>
         <select class="select" id="rm-cat">${RESOURCE_CATEGORIES.map(c => `<option value="${c.key}" ${r.category === c.key ? 'selected' : ''}>${c.label}</option>`).join('')}</select></div>
       <div class="form-group"><label class="form-label">Verified on</label>
-        <input class="input" type="date" id="rm-verified" value="${r.verified_on || new Date().toISOString().slice(0, 10)}" /></div>
+        <input class="input" type="date" id="rm-verified" value="${r.verified_on || ''}" /></div>
     </div>
+    <div class="form-group" id="rm-palliative-type" ${r.category==='palliative'?'':'hidden'}><label class="form-label" for="rm-subtype">Palliative service type</label>
+      <select class="select" id="rm-subtype"><option value="">Choose a service type</option>${[['home_based','Home care'],['inpatient_hospice','Inpatient hospice'],['opd_clinic','Outpatient clinic'],['helpline','Helpline'],['network_organisation','Care network']].map(([k,l])=>`<option value="${k}" ${r.subtype===k?'selected':''}>${l}</option>`).join('')}</select>
+    </div>
+    <div class="form-group"><label class="form-checkbox"><input type="checkbox" id="rm-ready" ${r.match_ready===true?'checked':''}><span>Ready for matching. Source review and HopeBot publication are separate.</span></label></div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">State</label>
         <input class="input" id="rm-state" value="${attr(r.state)}" placeholder="e.g., Maharashtra (or All India)" /></div>
@@ -970,6 +981,7 @@ function openResourceModal(existing, prefill = null) {
       <button class="btn btn-primary" id="rm-save">${icon('check')}${existing ? 'Save changes' : 'Add to the shelf'}</button>
     </div>`;
   showModal({ title: existing ? 'Edit resource' : 'Add a resource', content: el, size: 'xl' });
+  el.querySelector('#rm-cat').addEventListener('change',e=>{el.querySelector('#rm-palliative-type').hidden=e.target.value!=='palliative';});
 
   el.querySelector('#rm-cancel').addEventListener('click', () => closeModal());
   el.querySelector('#rm-retire')?.addEventListener('click', async () => {
@@ -987,6 +999,8 @@ function openResourceModal(existing, prefill = null) {
     const amount = el.querySelector('#rm-amount').value.trim();
     const patch = {
       title, category: v('rm-cat') || 'other', state: v('rm-state'), city: v('rm-city'),
+      subtype: v('rm-cat')==='palliative'?v('rm-subtype'):(r.category==='palliative'?null:r.subtype||null),
+      match_ready: el.querySelector('#rm-ready').checked,
       summary: v('rm-summary'), eligibility: v('rm-elig'), contact_phone: v('rm-phone'),
       link: v('rm-link'), address: v('rm-address'), verified_on: v('rm-verified'),
       // sql/121 keeps documents_needed and documents_required in step, and
