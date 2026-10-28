@@ -29,7 +29,6 @@ export async function renderNutritionTracker(container) {
   let ownerFilter = '';
   let filterNotice = '';
   let search = '';
-  let showClosed = false;
   let generation = 0;
   let initialHighlight = true;
   let focusAfterSave = null;
@@ -58,7 +57,7 @@ export async function renderNutritionTracker(container) {
       }
       settings = settingsResult.data;
       const focused = requests.find(row => row.id === (focusAfterSave || (initialHighlight ? highlighted : null)));
-      if (focused) showClosed = focused.status === 'closed' && !(focused.pending_followups || []).length;
+      if (focused) view = focused.status === 'closed' ? 'closed' : 'requests';
       focusAfterSave = null;
       paint();
     } catch (error) {
@@ -70,7 +69,9 @@ export async function renderNutritionTracker(container) {
   function visibleRows() {
     const seen = new Set();
     return requests.filter(row => {
-      if ((row.status === 'closed' && !(row.pending_followups || []).length) !== showClosed) return false;
+      if (view === 'requests' && row.status === 'closed') return false;
+      if (view === 'closed' && row.status !== 'closed') return false;
+      if (view === 'overdues' && row.status === 'closed' && !(row.pending_followups || []).length) return false;
       if (filter === 'mine' && !row.is_mine) return false;
       if (view === 'overdues' && (row.contact_overdue !== true || seen.has(row.patient_id))) return false;
       if (filter === 'unassigned' && row.owner_id) return false;
@@ -83,15 +84,29 @@ export async function renderNutritionTracker(container) {
   }
   function paint() {
     if (!current()) return;
-    const open = requests.filter(row => row.status !== 'closed' || (row.pending_followups || []).length);
-    const overdue = open.filter(row => row.contact_overdue === true).filter((row, index, rows) => rows.findIndex(other => other.patient_id === row.patient_id) === index);
-    const pool = view === 'overdues' ? overdue : open;
+    const open = requests.filter(row => row.status !== 'closed');
+    const closed = requests.filter(row => row.status === 'closed');
+    const actionable = requests.filter(row => row.status !== 'closed' || (row.pending_followups || []).length);
+    const overdue = actionable.filter(row => row.contact_overdue === true).filter((row, index, rows) => rows.findIndex(other => other.patient_id === row.patient_id) === index);
+    const pool = view === 'overdues' ? overdue : view === 'closed' ? closed : open;
     const pods = [...new Set(requests.map(row => row.pod).filter(Boolean))].sort();
     const owners = [...new Map(requests.filter(row => row.owner_id).map(row => [row.owner_id, row.owner_name || 'Nutrition intern'])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
-    mount.innerHTML = `<div class="chip-row" role="tablist" aria-label="Nutrition tracker views">${[['requests', 'Requests'], ['overdues', 'Overdues']].map(([key, label]) => `<button type="button" role="tab" id="nutrition-view-${key}" aria-controls="nutrition-tracker-panel" aria-selected="${view === key}" class="fchip ${view === key ? 'on' : ''}" data-tracker-view="${key}">${label}${key === 'overdues' ? ' - ' + overdue.length : ''}</button>`).join('')}</div><div class="card nw-tracker-controls"><div class="nw-section-head"><div class="chip-row" data-tracker-filters>${[['all', view === 'overdues' ? 'Overdue contacts' : 'All open', pool.length], ['mine', 'Mine', pool.filter(row => row.is_mine).length], ['unassigned', 'Unassigned', pool.filter(row => !row.owner_id).length]].map(([key, label, count]) => `<button type="button" class="fchip ${filter === key ? 'on' : ''}" data-tracker-filter="${key}">${label} - ${count}</button>`).join('')}</div>${view === 'requests' ? `<label class="nw-closed-toggle"><input type="checkbox" data-tracker-closed ${showClosed ? 'checked' : ''}> Closed requests</label>` : ''}</div><div class="nw-filter-inputs">${isManagerOrAdmin() ? `<div><label class="form-label" for="tracker-owner">Intern</label><select id="tracker-owner" class="form-select"><option value="">All interns</option><option value="__unassigned__" ${ownerFilter === '__unassigned__' ? 'selected' : ''}>Unassigned</option>${owners.map(([id, name]) => `<option value="${sanitize(id)}" ${ownerFilter === id ? 'selected' : ''}>${sanitize(name)}</option>`).join('')}</select><span class="nw-muted">Interns with accessible requests, including closed history.</span></div>` : ''}<div><label class="form-label" for="tracker-pod">Raised by pod</label><select id="tracker-pod" class="form-select"><option value="">All pods</option>${pods.map(value => `<option value="${sanitize(value)}" ${pod === value ? 'selected' : ''}>${sanitize(value)}</option>`).join('')}</select></div><div><label class="form-label" for="tracker-search">Find a request</label><input type="search" class="form-input" id="tracker-search" value="${sanitize(search)}" placeholder="Patient, staff member or note"></div></div>${filterNotice ? `<p class="nw-muted" role="status">${sanitize(filterNotice)}</p>` : ''}<p class="nw-muted">Overdues shows patients with pending nutrition work and no recorded completed patient contact for at least 21 days. Recent connected calls count, regardless of a separately scheduled follow-up date. Calls that were not answered do not reset contact.</p><p class="nw-muted">Workflow stage dates remain ${Number(settings?.assignment_days)} working days for assignment, ${Number(settings?.call_days)} for the first call, and ${Number(settings?.plan_days)} for the plan. These dates keep pending work visible without independently marking a patient overdue.</p></div><div id="nutrition-tracker-panel" role="tabpanel" aria-labelledby="nutrition-view-${view}" data-tracker-list></div>`;
-    mount.querySelectorAll('[data-tracker-view]').forEach(button => button.addEventListener('click', () => { view = button.dataset.trackerView; filter = 'all'; showClosed = false; void refreshAll(); }));
-    mount.querySelectorAll('[data-tracker-filter]').forEach(button => button.addEventListener('click', () => { filter = button.dataset.trackerFilter; showClosed = false; paint(); }));
-    mount.querySelector('[data-tracker-closed]')?.addEventListener('change', event => { showClosed = event.target.checked; filter = 'all'; paint(); });
+    mount.innerHTML = `<div class="chip-row" role="tablist" aria-label="Nutrition tracker views">${[['requests', 'Open Requests'], ['closed', 'Closed Requests'], ['overdues', 'Overdues']].map(([key, label]) => `<button type="button" role="tab" id="nutrition-view-${key}" aria-controls="nutrition-tracker-panel" aria-selected="${view === key}" tabindex="${view === key ? 0 : -1}" class="fchip ${view === key ? 'on' : ''}" data-tracker-view="${key}">${label}${key === 'overdues' ? ' - ' + overdue.length : ''}</button>`).join('')}</div><div class="card nw-tracker-controls"><div class="nw-section-head"><div class="chip-row" data-tracker-filters>${[['all', view === 'overdues' ? 'Overdue contacts' : view === 'closed' ? 'All closed' : 'All open', pool.length], ['mine', 'Mine', pool.filter(row => row.is_mine).length], ['unassigned', 'Unassigned', pool.filter(row => !row.owner_id).length]].map(([key, label, count]) => `<button type="button" class="fchip ${filter === key ? 'on' : ''}" data-tracker-filter="${key}">${label} - ${count}</button>`).join('')}</div></div><div class="nw-filter-inputs">${isManagerOrAdmin() ? `<div><label class="form-label" for="tracker-owner">Intern</label><select id="tracker-owner" class="form-select"><option value="">All interns</option><option value="__unassigned__" ${ownerFilter === '__unassigned__' ? 'selected' : ''}>Unassigned</option>${owners.map(([id, name]) => `<option value="${sanitize(id)}" ${ownerFilter === id ? 'selected' : ''}>${sanitize(name)}</option>`).join('')}</select><span class="nw-muted">Interns with accessible requests, including closed history.</span></div>` : ''}<div><label class="form-label" for="tracker-pod">Raised by pod</label><select id="tracker-pod" class="form-select"><option value="">All pods</option>${pods.map(value => `<option value="${sanitize(value)}" ${pod === value ? 'selected' : ''}>${sanitize(value)}</option>`).join('')}</select></div><div><label class="form-label" for="tracker-search">Find a request</label><input type="search" class="form-input" id="tracker-search" value="${sanitize(search)}" placeholder="Patient, staff member or note"></div></div>${filterNotice ? `<p class="nw-muted" role="status">${sanitize(filterNotice)}</p>` : ''}<p class="nw-muted">Open Requests contains active requests. Closed Requests keeps completed needs, recorded outcomes and history. A closed request may still have a separately scheduled follow-up; closing the request does not cancel it. Outstanding follow-ups remain eligible for Overdues.</p><p class="nw-muted">Overdues shows patients with pending nutrition work and no recorded completed patient contact for at least 21 days. Recent connected calls count, regardless of a separately scheduled follow-up date. Calls that were not answered do not reset contact.</p><p class="nw-muted">Workflow stage dates remain ${Number(settings?.assignment_days)} working days for assignment, ${Number(settings?.call_days)} for the first call, and ${Number(settings?.plan_days)} for the plan. These dates keep pending work visible without independently marking a patient overdue.</p></div><div id="nutrition-tracker-panel" role="tabpanel" aria-labelledby="nutrition-view-${view}" data-tracker-list></div>`;
+    const tabs = [...mount.querySelectorAll('[data-tracker-view]')];
+    const selectView = async next => {
+      view = next; filter = 'all';
+      await refreshAll();
+      if (current()) mount.querySelector(`[data-tracker-view="${view}"]`)?.focus({ preventScroll: true });
+    };
+    tabs.forEach((button, index) => {
+      button.addEventListener('click', () => { void selectView(button.dataset.trackerView); });
+      button.addEventListener('keydown', event => {
+        const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
+        if (next < 0) return;
+        event.preventDefault(); void selectView(tabs[next].dataset.trackerView);
+      });
+    });
+    mount.querySelectorAll('[data-tracker-filter]').forEach(button => button.addEventListener('click', () => { filter = button.dataset.trackerFilter; paint(); }));
     mount.querySelector('#tracker-owner')?.addEventListener('change', event => { ownerFilter = event.target.value; filterNotice = ''; paintRows(); });
     mount.querySelector('#tracker-pod').addEventListener('change', event => { pod = event.target.value; paintRows(); });
     mount.querySelector('#tracker-search').addEventListener('input', event => { search = event.target.value; paintRows(); });
@@ -101,10 +116,10 @@ export async function renderNutritionTracker(container) {
     const list = mount.querySelector('[data-tracker-list]');
     if (!list || !current()) return;
     const shown = visibleRows();
-    list.innerHTML = `<p class="nw-muted" role="status">${shown.length} ${view === 'overdues' ? 'overdue patient' : showClosed ? 'closed request' : 'open request'}${shown.length === 1 ? '' : 's'} shown. Mine includes requests you raised and patients assigned to you.</p>${shown.length ? `<div class="nw-request-head" aria-hidden="true"><span>Patient and need</span><span>Raised</span><span>Assigned</span><span>First call</span><span>Plan shared</span><span>Status</span><span>Actions</span></div><div class="nw-request-list">${shown.map((row, index) => rowHTML(row, index, highlighted)).join('')}</div>` : '<div class="card"><h3>No requests match</h3><p class="nw-muted">Change the filters, or raise a nutrition request from the patient Overview.</p></div>'}`;
+    list.innerHTML = `<p class="nw-muted" role="status">${shown.length} ${view === 'overdues' ? 'overdue patient' : view === 'closed' ? 'closed request' : 'open request'}${shown.length === 1 ? '' : 's'} shown. Mine includes requests you raised and patients assigned to you.</p>${shown.length ? `<div class="nw-request-head" aria-hidden="true"><span>Patient and need</span><span>Raised</span><span>Assigned</span><span>First call</span><span>Plan shared</span><span>Status</span><span>Actions</span></div><div class="nw-request-list">${shown.map((row, index) => rowHTML(row, index, highlighted)).join('')}</div>` : `<div class="card"><h3>No ${view === 'closed' ? 'closed requests' : view === 'overdues' ? 'overdue patients' : 'open requests'} match</h3><p class="nw-muted">${view === 'closed' ? 'Completed requests and their history appear here after closure. Change the filters to find earlier work.' : 'Change the filters, or raise a nutrition request from the patient Overview.'}</p></div>`}`;
     list.querySelectorAll('[data-request-index]').forEach(item => {
       const row = shown[Number(item.dataset.requestIndex)];
-      item.querySelector('[data-request-raise]')?.addEventListener('click', () => openNutritionRequest({ patient: { id: row.patient_id, full_name: row.patient_name }, onSaved: load }));
+      item.querySelector('[data-request-raise]')?.addEventListener('click', () => openNutritionRequest({ patient: { id: row.patient_id, full_name: row.patient_name }, onSaved: async () => { if (!current()) return; view = 'requests'; filter = 'all'; initialHighlight = false; await refreshAll(); } }));
       item.querySelector('[data-request-close]')?.addEventListener('click', () => closeRequest(row));
       item.querySelector('[data-request-plan]')?.addEventListener('click', () => outcome(row, true));
       item.querySelector('[data-request-attempt]')?.addEventListener('click', () => outcome(row, false));
@@ -142,7 +157,7 @@ export async function renderNutritionTracker(container) {
 
 function rowHTML(row, index, highlighted) {
   const state = STAGES[row.status] || 'Open';
-  const overdue = row.contact_overdue === true ? 'No patient contact for at least 21 days' : '';
+  const overdue = row.contact_overdue === true && (row.status !== 'closed' || (row.pending_followups || []).length) ? 'No patient contact for at least 21 days' : '';
   return `<article class="card nw-request-row ${row.id === highlighted ? 'is-highlighted' : ''}" data-request-index="${index}" data-request-id="${sanitize(row.id)}" tabindex="-1">
     <div class="nw-request-patient"><a href="#patients/${encodeURIComponent(row.patient_id)}">${sanitize(row.patient_name || 'Patient')}</a><strong>${sanitize(NUTRITION_REASONS[row.reason] || 'Nutrition support')}</strong>${row.note ? `<p>${sanitize(row.note)}</p>` : ''}${row.latest_attempt ? `<div class="nw-latest-attempt"><strong>Latest attempt: ${sanitize(PLAN_ATTEMPT_REASONS[row.latest_attempt.reason] || 'Recorded attempt')}</strong><span class="nw-muted">${sanitize(dateLabel(row.latest_attempt.created_at))} - ${sanitize(row.latest_attempt.actor_name || 'Care team')}</span>${row.latest_attempt.note ? `<p class="nw-private-note">${sanitize(row.latest_attempt.note)}</p>` : ''}</div>` : ''}<span class="nw-muted">${sanitize(row.pod || 'Care')} pod</span></div>
     <div data-step="Raised">${row.source === 'legacy_support_flag' ? '<span class="nw-muted">Support recorded. Original request time unknown.</span>' : ''}${stamp(row.raised_at)}<span class="nw-muted">${sanitize(row.raised_by_name || 'Care team')}</span></div>
