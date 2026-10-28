@@ -4,7 +4,7 @@
 
 import { getSupabase } from '../supabase.js';
 import { avatarColor } from '../utils/avatar.js';
-import { isAdmin, isManagerOrAdmin, startImpersonation } from '../auth.js';
+import { isAdmin, isManagerOrAdmin, startImpersonation, getCurrentUser, getCurrentProfile } from '../auth.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, confirmModal } from '../components/modal.js';
 import { formatDateTime, getRoleBadge } from '../utils/formatters.js';
@@ -15,14 +15,34 @@ import { icon } from '../components/icons.js';
 const avColor = (n) => avatarColor(n);
 function inits(n) { return n ? n.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) : '?'; }
 
+let selectedAdminTab = 'users';
+let usersGeneration = 0;
+
+// Account state and the actual host matter as well as the selected tab. An
+// earlier request must not repaint a new route, a re-render or another account.
+function beginUserView() {
+  if (!['users', 'inactive'].includes(selectedAdminTab) || !isManagerOrAdmin()) return null;
+  const content = document.getElementById('admin-content');
+  if (!content) return null;
+  const generation = ++usersGeneration, tab = selectedAdminTab;
+  const user = getCurrentUser()?.id, profile = getCurrentProfile()?.id;
+  const current = () => !!user && !!profile && generation === usersGeneration && selectedAdminTab === tab
+    && content.isConnected && document.getElementById('admin-content') === content
+    && getCurrentUser()?.id === user && getCurrentProfile()?.id === profile && isManagerOrAdmin();
+  return { content, active: tab === 'users', current };
+}
+
 export async function renderAdmin(container, params) {
+  ++usersGeneration;
   if (!isManagerOrAdmin()) {
     container.innerHTML = '<div class="empty-state"><h3>Access Denied</h3><p>Only admins and managers can view this page.</p></div>';
     return;
   }
 
-  const isAudit = (params?.id === 'audit' || window.location.hash.includes('audit'));
+  const isAudit = isAdmin() && (params?.id === 'audit' || window.location.hash.includes('audit'));
   const isFiles = isAdmin() && (params?.id === 'files' || window.location.hash.includes('admin/files'));
+  const isInactive = params?.id === 'inactive' || window.location.hash === '#admin/inactive';
+  selectedAdminTab = isAudit ? 'audit' : isFiles ? 'files' : isInactive ? 'inactive' : 'users';
   container.innerHTML = `
     <div class="page-header">
       <h1>Administration</h1>
@@ -33,25 +53,51 @@ export async function renderAdmin(container, params) {
         </button>
       </div>
     </div>
-    <div class="tabs" id="admin-tabs">
-      <button class="tab ${!isAudit && !isFiles ? 'active' : ''}" data-tab="users">User Management</button>
+    <div class="tabs" id="admin-tabs" role="tablist" aria-label="Administration views">
+      <button class="tab ${selectedAdminTab === 'users' ? 'active' : ''}" data-tab="users">User Management</button>
+      <button class="tab ${selectedAdminTab === 'inactive' ? 'active' : ''}" data-tab="inactive">Inactive Profiles</button>
       ${isAdmin() ? `<button class="tab" data-tab="assignment">Assignment policy</button>` : ''}
       ${isAdmin() ? `<button class="tab ${isAudit ? 'active' : ''}" data-tab="audit">Audit Log</button>` : ''}
       ${isAdmin() ? `<button class="tab ${isFiles ? 'active' : ''}" data-tab="files">Stored files</button>` : ''}
     </div>
-    <div id="admin-content"></div>
+    <div id="admin-content" role="tabpanel"></div>
   `;
 
   document.getElementById('invite-user-btn')?.addEventListener('click', showInviteModal);
 
-  document.querySelectorAll('#admin-tabs .tab').forEach(tab => {
+  const tabs = [...container.querySelectorAll('#admin-tabs .tab')];
+  const syncTabs = () => tabs.forEach(tab => {
+    const selected = tab.dataset.tab === selectedAdminTab;
+    tab.id = 'admin-tab-' + tab.dataset.tab;
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-controls', 'admin-content');
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    tab.classList.toggle('active', selected);
+    if (selected) document.getElementById('admin-content').setAttribute('aria-labelledby', tab.id);
+  });
+  syncTabs();
+  tabs.forEach((tab, index) => {
     tab.addEventListener('click', () => {
-      document.querySelectorAll('#admin-tabs .tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
+      selectedAdminTab = tab.dataset.tab;
+      ++usersGeneration;
+      syncTabs();
       if (tab.dataset.tab === 'audit') loadAuditLog();
       else if (tab.dataset.tab === 'assignment') loadAssignmentPolicy();
       else if (tab.dataset.tab === 'files') loadStoredFiles();
       else loadUsers();
+    });
+    tab.addEventListener('keydown', event => {
+      let next;
+      if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+      else if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = tabs.length - 1;
+      else return;
+      event.preventDefault();
+      tabs[next].focus();
+      tabs[next].scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      tabs[next].click();
     });
   });
 
@@ -271,8 +317,10 @@ function showCredentialsModal(name, email, password, role) {
 
 // ---- Load Users (with manager column) ----
 async function loadUsers() {
+  const view = beginUserView();
+  if (!view || !view.current()) return;
   const sb = getSupabase();
-  const content = document.getElementById('admin-content');
+  const { content, active, current } = view;
   content.innerHTML = Array(5).fill('<div class="skeleton skeleton-row"></div>').join('');
 
   try {
@@ -280,13 +328,16 @@ async function loadUsers() {
     const { data: profiles, error } = await sb
       .from('profiles')
       .select('*, manager:manager_id(id, full_name, role)')
+      .eq('is_active', active)
       .order('created_at', { ascending: true });
 
+    if (!current()) return;
     if (error) throw error;
 
     // Load available managers + the many-to-many manager tags (profile_managers).
     const { data: managers } = await sb.rpc('get_available_managers');
     const { data: pmRows } = await sb.from('profile_managers').select('profile_id, manager_id');
+    if (!current()) return;
     const mgrById = new Map((managers || []).map(m => [m.id, m]));
     const managersOf = new Map();
     (pmRows || []).forEach(r => {
@@ -311,7 +362,10 @@ async function loadUsers() {
     const roleOpts = (cur) => [['caregiver_mentor','Caregiver Mentor'],['ground_poc','Ground POC'],['therapist','Therapist'],['nutritionist','Nutritionist'],['content','Content'],['uploader','Intake / Uploader'],['manager','Manager'],...(isAdmin()?[['admin','Admin']]:[])]
       .map(([v,l]) => `<option value="${v}" ${cur===v?'selected':''}>${l}</option>`).join('');
     content.innerHTML = `
+      <h2>${active ? 'Active profiles' : 'Inactive Profiles'}</h2>
+      <p class="text-muted" role="status" style="margin:0 0 var(--s3)">${(profiles || []).length} ${active ? 'active' : 'inactive'} profile${profiles?.length === 1 ? '' : 's'} shown.</p>
       <p class="muted" style="margin:0 0 var(--s4);color:var(--ink-3);font:var(--t-sm)">Change a role, assign managers, reset a password, open an account, or deactivate one. For day-to-day “off today”, use Team &amp; Queue → Availability.</p>
+      ${!profiles?.length ? `<div class="empty-state"><h3>No ${active ? 'active' : 'inactive'} profiles</h3><p>${active ? 'Previous interns are in Inactive Profiles.' : 'Deactivated accounts will appear here. Active accounts remain in User Management.'}</p></div>` : ''}
       <div class="user-list">
         ${(profiles || []).map(u => `
           <div class="urow">
@@ -329,11 +383,14 @@ async function loadUsers() {
     // Role change handlers
     content.querySelectorAll('select[data-action="role"]').forEach(sel => {
       sel.addEventListener('change', async () => {
+        if (!current()) return;
         try {
           const { error } = await sb.rpc('update_user_role', { target_user_id: sel.dataset.userId, new_role: sel.value });
           if (error) throw error;
+          if (!current()) return;
           showToast('Role updated', 'success');
         } catch (err) {
+          if (!current()) return;
           showToast(err.message, 'error');
           loadUsers();
         }
@@ -343,6 +400,7 @@ async function loadUsers() {
     // Multi-manager handlers: open a checkbox modal; save via set_user_managers.
     content.querySelectorAll('button[data-action="managers"]').forEach(btn => {
       btn.addEventListener('click', () => {
+        if (!current()) return;
         const u = (profiles || []).find(p => p.id === btn.dataset.userId);
         if (u) openManagersModal(u, managers || [], assignedManagerIds(u), () => loadUsers());
       });
@@ -351,25 +409,31 @@ async function loadUsers() {
     // Toggle active handlers
     content.querySelectorAll('button[data-action="toggle"]').forEach(btn => {
       btn.addEventListener('click', async () => {
+        if (!current() || btn.disabled) return;
+        btn.disabled = true;
         const newStatus = btn.dataset.active !== 'true';
         try {
           const { error } = await sb.rpc('toggle_user_active', { target_user_id: btn.dataset.userId, active_status: newStatus });
           if (error) throw error;
+          if (!current()) return;
           showToast(`User ${newStatus ? 'activated' : 'deactivated'}`, 'success');
           loadUsers();
-        } catch (err) { showToast(err.message, 'error'); }
+        } catch (err) { if (current()) { showToast(err.message, 'error'); btn.disabled = false; } }
       });
     });
 
     // Reset-password handlers (back to the team default + forced change)
     content.querySelectorAll('button[data-action="resetpw"]').forEach(btn => {
       btn.addEventListener('click', () => {
+        if (!current()) return;
         confirmModal(
           `Reset <strong>${btn.dataset.userName}</strong>'s password to the team default? They'll set a new personal password on their next sign-in.`,
           async () => {
+            if (!current()) return;
             try {
               const { data, error } = await sb.rpc('admin_reset_password', { p_user_id: btn.dataset.userId });
               if (error) throw error;
+              if (!current()) return;
               showCredentialsModal(btn.dataset.userName, '(their email)', data.default_password, 'reset');
             } catch (err) { showToast(err.message, 'error'); }
           },
@@ -381,13 +445,15 @@ async function loadUsers() {
     // "Open as user": managers/admins open any account (master access).
     content.querySelectorAll('button[data-action="impersonate"]').forEach(btn => {
       btn.addEventListener('click', () => {
+        if (!current()) return;
         const u = (profiles || []).find(p => p.id === btn.dataset.userId);
         if (u && startImpersonation(u)) location.reload();
       });
     });
   } catch (err) {
-    console.error('Load users error:', err);
-    showToast('Failed to load users', 'error');
+    if (!current()) return;
+    content.innerHTML = `<div class="empty-state"><h3>Could not load ${active ? 'active' : 'inactive'} profiles</h3><p>Please try again. Your accounts have not been changed.</p><button class="btn btn-secondary" id="users-retry">Retry profiles</button></div>`;
+    content.querySelector('#users-retry')?.addEventListener('click', () => loadUsers());
   }
 }
 
