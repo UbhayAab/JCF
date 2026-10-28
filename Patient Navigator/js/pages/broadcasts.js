@@ -13,9 +13,10 @@ import { showToast } from '../components/toast.js';
 import { icon } from '../components/icons.js';
 import { sanitize } from '../utils/validators.js';
 import { formatRelativeTime } from '../utils/formatters.js';
-import { showModal, closeModal, confirmModal } from '../components/modal.js';
+import { showModal, closeModal } from '../components/modal.js';
 import { CIRCLE_FIELDS, indiaInput, indiaISO } from '../utils/circleMessage.js';
 import { mountPosterControl } from '../components/whatsappPoster.js';
+import { mountBroadcastArchive66, reloadBroadcastArchive66 } from '../components/broadcastArchive66.js';
 
 const AUDIENCES = [
   { k: 'connected_week', label: 'Families we spoke to this week' },
@@ -30,11 +31,6 @@ const WHY = {
   no_consent: 'no consent yet', do_not_call: 'marked do not call', blacklisted: 'blocked',
   opted_out: 'said STOP on WhatsApp', bad_number: 'no valid mobile', inactive: 'not active',
   number_not_confirmed: 'number not confirmed', not_on_a_calling_team: 'not on a calling team', not_found: 'not found',
-};
-const STATUS = {
-  draft: ['Draft', 'neutral'], scheduled: ['Scheduled', 'info'], sending: ['Sending', 'warn'],
-  sent: ['Sent', 'ok'], cancelled: ['Stopped', 'neutral'],
-  awaiting_approval: ['Waiting for WhatsApp approval', 'warn'], missed: ['Missed: approval was not ready', 'warn'],
 };
 const NAME_TOKEN = '{first_name}';
 const SHOW_MAX = 400;
@@ -92,58 +88,10 @@ export async function renderBroadcasts(container) {
     <p class="muted" style="margin:0 0 var(--s4);color:var(--ink-2)">Scheduled delivery is switched off for groups, families and team test numbers. Saving a draft does not send it. Before any future delivery, each contact must meet consent, number and STOP checks.</p>
     <div id="wb-list"><div class="card" style="padding:28px;text-align:center;color:var(--ink-3)">Loading messages…</div></div>`;
   container.querySelector('#wb-new').addEventListener('click', () => openBroadcastComposer(container));
-  await loadList(container);
+  await mountBroadcastArchive66(container, { onEdit: openBroadcastComposer });
 }
 
-async function loadList(container) {
-  const box = container.querySelector('#wb-list');
-  if (!box) return;
-  const { data, error } = await getSupabase().rpc('broadcasts_list', { p_limit: 50 });
-  if (!box.isConnected) return;
-  if (error) { box.innerHTML = `<div class="card" style="padding:20px">Could not load the messages: ${sanitize(error.message)}</div>`; return; }
-  if (!data?.length) {
-    box.innerHTML = '<div class="card" style="padding:28px;text-align:center"><p style="margin:0">No WhatsApp messages yet. Tap <strong>New message</strong> to write the first one.</p></div>';
-    return;
-  }
-  box.innerHTML = data.map(rowHTML).join('');
-  box.querySelectorAll('[data-wb-edit]').forEach(b => b.addEventListener('click', () =>
-    openBroadcastComposer(container, data.find(x => x.id === b.dataset.wbEdit))));
-  box.querySelectorAll('[data-wb-stop]').forEach(b => b.addEventListener('click', () => {
-    const row = data.find(x => x.id === b.dataset.wbStop);
-    confirmModal(`Stop <strong>${sanitize(row.title)}</strong>? Nobody who has not had it yet will get it.`, async () => {
-      const { data: res, error: err } = await getSupabase().rpc('broadcast_cancel', { p_id: row.id });
-      if (err) { showToast(err.message, 'error'); return; }
-      showToast(`Stopped. ${res?.stopped ?? 0} ${res?.stopped === 1 ? 'person' : 'people'} will not get it.`, 'success');
-      loadList(container);
-    }, { title: 'Stop this message', confirmLabel: 'Stop it' });
-  }));
-}
-
-function rowHTML(b) {
-  const [label, tone] = STATUS[b.status] || [b.status, 'neutral'];
-  const editable = b.status === 'draft' || ['scheduled','awaiting_approval'].includes(b.status) && new Date(b.scheduled_for) - Date.now() > 60000;
-  const stoppable = ['draft', 'scheduled', 'sending','awaiting_approval'].includes(b.status);
-  const counts = [
-    b.audience_kind === HOPEBOT_LIST ? "HopeBot's list" : `${b.total} ${b.total === 1 ? 'person' : 'people'}`,
-    b.waiting && `${b.waiting} waiting`, b.sent && `${b.sent} sent`, b.delivered && `${b.delivered} delivered`,
-    b.read && `${b.read} read`, b.failed && `${b.failed} failed`, b.held && `${b.held} held`,
-    b.skipped && `${b.skipped} skipped`, b.cancelled && `${b.cancelled} stopped`,
-  ].filter(Boolean);
-  return `
-    <div class="card" style="padding:14px 18px;margin-bottom:var(--s3);display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
-      <div style="flex:1 1 260px;min-width:0">
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <strong>${sanitize(b.title)}</strong><span class="badge badge-${tone}">${label}</span>
-        </div>
-        <div style="margin-top:4px;color:var(--ink-2)">${sanitize(fmtWhen(b.scheduled_for))} · ${sanitize(AUD[b.audience_kind] || b.audience_kind)} · ${sanitize(humanTpl(b.template_name))}</div>
-        <div style="margin-top:2px;color:var(--ink-3);font-size:12.5px">${counts.map(c => sanitize(c)).join(' · ')}${b.created_by_name ? ` · by ${sanitize(b.created_by_name)}` : ''}</div>
-      </div>
-      <div style="display:flex;gap:6px">
-        ${editable ? `<button class="btn btn-secondary btn-sm" data-wb-edit="${b.id}">${icon('edit')}Edit</button>` : ''}
-        ${stoppable ? `<button class="btn btn-ghost btn-sm" data-wb-stop="${b.id}">Stop</button>` : ''}
-      </div>
-    </div>`;
-}
+async function loadList(container) { await reloadBroadcastArchive66(container); }
 
 export async function openBroadcastComposer(container, existing = null, preset = {}) {
   const sb = getSupabase();

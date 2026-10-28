@@ -19,7 +19,7 @@ export function mountPosterControl(mount, { patientId = null, existing = null, o
     <input class="form-input" type="file" accept="image/jpeg,image/png" data-poster-file></label>
     <p class="form-hint">JPG or PNG, up to 5 MB. Review the poster before scheduling.</p>
     <img data-poster-preview alt="Selected WhatsApp poster" hidden style="display:none;max-width:100%;max-height:320px;object-fit:contain;border-radius:8px">
-    <button type="button" class="btn btn-ghost btn-sm" data-poster-remove hidden>Remove poster</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-poster-remove hidden style="display:none">Remove poster</button>
     <p data-poster-status role="status" aria-live="polite"></p>
     <p data-poster-counts role="status" aria-live="polite"></p>`;
   const sb = getSupabase();
@@ -30,13 +30,13 @@ export function mountPosterControl(mount, { patientId = null, existing = null, o
   const remove = mount.querySelector('[data-poster-remove]');
   let poster = existing; let busy = false; let failed = false; let localUrl = null; let generation = 0; let estimateGeneration = 0;
   const release = () => { if (localUrl) URL.revokeObjectURL(localUrl); localUrl = null; };
-  const show = (url) => { image.src = url; image.hidden = false; image.style.display = 'block'; remove.hidden = false; };
+  const show = (url) => { image.src = url; image.hidden = false; image.style.display = 'block'; remove.hidden = false; remove.style.display = ''; };
   if (existing?.storage_path) sb.storage.from('wa-posters').createSignedUrl(existing.storage_path, 1800).then(({ data, error }) => {
     if (poster === existing && !error && data?.signedUrl) show(data.signedUrl);
   });
   input.onchange = async () => {
     const version = ++generation; const file = input.files?.[0]; release(); poster = null; failed = false; counts.textContent = '';
-    image.removeAttribute('src'); image.hidden = true; image.style.display = 'none'; remove.hidden = !file;
+    image.removeAttribute('src'); image.hidden = true; image.style.display = 'none'; remove.hidden = !file; remove.style.display = file ? '' : 'none';
     if (!file) { busy = false; status.textContent = ''; onChange(); return; }
     busy = true; status.textContent = 'Checking poster...'; onChange();
     try {
@@ -61,7 +61,7 @@ export function mountPosterControl(mount, { patientId = null, existing = null, o
   };
   remove.onclick = () => {
     generation += 1; estimateGeneration += 1; release(); poster = null; failed = false; busy = false;
-    input.value = ''; image.removeAttribute('src'); image.hidden = true; image.style.display = 'none'; remove.hidden = true;
+    input.value = ''; image.removeAttribute('src'); image.hidden = true; image.style.display = 'none'; remove.hidden = true; remove.style.display = 'none';
     status.textContent = 'Poster removed from this message.'; counts.textContent = ''; onChange();
   };
   return {
