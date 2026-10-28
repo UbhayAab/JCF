@@ -18,7 +18,9 @@
 // Everything a family wrote goes through sanitize() before innerHTML.
 // ============================================================
 import { getSupabase } from '../supabase.js';
-import { getUserRole, isImpersonating } from '../auth.js';
+import { getCurrentUser, getUserRole, isImpersonating } from '../auth.js';
+import { callbackTriage } from '../utils/leadTriage.js';
+const requestMounts = new WeakMap();
 import { showToast } from './toast.js';
 import { confirmModal } from './modal.js';
 import { icon } from './icons.js';
@@ -236,23 +238,35 @@ function requestCardHTML(x, roster) {
  * The requests block. opts.mode 'calling' hides itself when nothing is open;
  * 'leads' also lists the last day's closed ones.
  */
-export async function mountHopebotRequests(el, { mode = 'calling' } = {}) {
+export async function mountHopebotRequests(el, { mode = 'calling', excludeTeamTests = false } = {}) {
   if (!el) return;
-  let all = []; let filter = 'all'; const rosters = new Map();
+  const token={};requestMounts.set(el,token);const actor=getCurrentUser()?.id;const routeAtMount=window.location.hash;
+  const current=()=>!!actor&&window.location.hash===routeAtMount&&el.isConnected&&requestMounts.get(el)===token&&getCurrentUser()?.id===actor;
+  let all = []; let filter = 'all'; const rosters = new Map();let generation=0,classificationUnavailable=false;
   const load = async () => {
+    if(!current())return;
+    const pending=++generation;
     // Managers read the last week of closed ones on the leads page: the history.
     const hours = mode === 'leads' ? (isManager() ? 168 : 24) : 0;
     const { data, error } = await getSupabase().rpc('hopebot_requests_open', { p_closed_hours: hours });
+    if(!current()||pending!==generation)return;
     if (error) throw error;
-    all = Array.isArray(data) ? data : [];
+    let incoming=Array.isArray(data)?data:[];classificationUnavailable=false;
+    if(excludeTeamTests){
+      const ids=[...new Set(incoming.map(x=>x.family?.lead_id||x.lead_id).filter(x=>typeof x==='string'&&/^[0-9a-f-]{36}$/i.test(x)))];
+      let flags=new Map();
+      if(ids.length){try{const result=await getSupabase().from('hopebot_leads').select('id, is_team').in('id',ids);if(!current()||pending!==generation)return;if(result.error||!Array.isArray(result.data))throw new Error('unavailable');flags=new Map(result.data.map(x=>[x.id,x.is_team]));}catch{if(!current()||pending!==generation)return;}}
+      const triage=callbackTriage(incoming,flags);incoming=triage.items;classificationUnavailable=triage.unavailable;
+    }
+    all=incoming;
     if (isManager()) {
       for (const team of new Set(all.filter((x) => !x.closed).map((x) => x.team))) {
-        try { rosters.set(team, await loadRoster(team)); } catch (e) { console.warn('[hopebot] roster:', e.message); }
+        try { const roster=await loadRoster(team);if(!current()||pending!==generation)return;rosters.set(team,roster); } catch { if(!current()||pending!==generation)return; }
       }
     }
   };
   const paint = () => {
-    if (!el.isConnected) return;
+    if (!current()) return;
     const mgr = isManager();
     const open = all.filter((x) => !x.closed);
     const late = (x) => x.safety || x.overdue || (x.overdue == null && Date.parse(x.due_at) < Date.now());
@@ -276,6 +290,7 @@ export async function mountHopebotRequests(el, { mode = 'calling' } = {}) {
           ${compact ? '<strong>' : '<h3>'}${mgr ? 'Asked HopeBot for a call' : 'Your HopeBot call requests'}${compact ? '</strong>' : '</h3>'}
           <span class="badge ${nLate ? 'badge-danger' : 'badge-info'}" style="white-space:normal;max-width:100%;box-sizing:border-box">${open.length} waiting${nLate ? ` · ${nLate} now` : ''}${mgr && nFree ? ` · ${nFree} not assigned` : ''}</span></${heading}>
         <div style="padding:0 var(--s5) var(--s4)">
+          ${classificationUnavailable ? '<p class="due-meta wraps" role="status">Some ordinary callbacks are withheld until team classification is confirmed. Refresh to retry. Safety and deletion requests remain available.</p>' : ''}
           <div class="due-meta wraps" style="margin-bottom:10px">${mgr
             ? "HopeBot promised these families a call within 4 hours, 9 am to 9 pm. Each one goes to one caller: the family's own caregiver, else whoever is on shift with the fewest. Use Assign to change it."
             : 'HopeBot promised these families a call within 4 hours, 9 am to 9 pm. They are yours: call, then tap what happened. No answer and Call back later set the next time; Reached closes it, here and in HopeBot.'}</div>
@@ -292,13 +307,16 @@ export async function mountHopebotRequests(el, { mode = 'calling' } = {}) {
     wire();
   };
   const act = async (btn, fn, args, done) => {
+    if(!current()||isImpersonating())return;
     btn.disabled = true;
     try {
       const { error } = await getSupabase().rpc(fn, args);
+      if(!current())return;
       if (error) throw error;
       if (done) showToast(done, 'success', 2500);
     } catch (e) {
-      showToast(e.message || 'That did not work. Try again.', 'error');
+      if(!current())return;
+      showToast('That did not work. Refresh and try again.', 'error');
     }
     try { await load(); } catch {}
     paint();
@@ -325,6 +343,7 @@ export async function mountHopebotRequests(el, { mode = 'calling' } = {}) {
           e.currentTarget.value ? 'Assigned.' : 'Back to automatic.');
       });
       card.querySelectorAll('[data-out]').forEach((b) => b.addEventListener('click', async (e) => {
+        if(!current()||isImpersonating())return;
         const btn = e.currentTarget;
         const out = btn.dataset.out;
         const note = card.querySelector('.hb-note')?.value || null;
@@ -332,7 +351,7 @@ export async function mountHopebotRequests(el, { mode = 'calling' } = {}) {
         if (out === 'call_back') {
           const { pickCallbackTime } = await import('./callbackPicker.js');
           back = await pickCallbackTime(x.family?.patient_name || x.family?.name || 'they');
-          if (!back) return;
+          if (!back||!current()) return;
         }
         act(btn, 'hopebot_request_log', back ? { p_id: id, p_outcome: out, p_note: note, p_callback_at: back } : { p_id: id, p_outcome: out, p_note: note },
           out === 'no_answer' ? (Number(x.attempts) >= 2 ? 'That was the third try: the request is closed as not reached.'
@@ -346,8 +365,8 @@ export async function mountHopebotRequests(el, { mode = 'calling' } = {}) {
     await load();
   } catch (e) {
     // Not deployed yet, or a network blip: the page around it still works.
-    console.warn('[hopebot] requests unavailable:', e.message);
-    if (mode === 'leads') el.innerHTML = `<div class="due-meta">Could not load HopeBot requests: ${sanitize(e.message)}</div>`;
+    if(!current())return;
+    if (mode === 'leads') el.innerHTML = '<div class="due-meta" role="status">Could not load HopeBot requests. Refresh to retry.</div>';
     else el.hidden = true;
     return;
   }
