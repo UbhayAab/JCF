@@ -1704,7 +1704,7 @@ function renderLogForm(p) {
               <div class="yesno" data-yn="social"><button type="button" class="yn" data-v="yes">Yes</button><button type="button" class="yn" data-v="no">No</button></div></div>
           </div>` : `
           <p style="font:var(--t-xs);color:var(--ink-3);margin:0;padding:10px 12px;background:var(--surface-3);border-radius:var(--r-sm)">
-            ${icon('info')} First call. Services, WhatsApp and medical details unlock from the second call. Today is about trust - and consent, if they offer it.
+            ${icon('info')} First call. Focus on trust and consent. The HopeBot introduction is available today in its own panel after consent; the longer service and medical questions appear from the second call.
           </p>`}
           <button type="button" class="btn btn-ghost btn-sm" id="f-wellbeing-btn" style="align-self:flex-start">${icon('activity')}Record well-being scores (PHQ-4, QoL…)</button>
           <div class="row gap5 wrap" style="display:flex;gap:20px;flex-wrap:wrap">
