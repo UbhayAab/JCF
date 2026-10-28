@@ -44,6 +44,7 @@ const { CARE_CASE_FIELDS, indiaCallDay, dayPlus, activeCareCase, careCallBounds,
 // import, the #hb-requests div in mountReady() and the one call after it.
 import { mountHopebotRequests } from '../components/hopebotFamily.js';
 import { mountHopebotUsageWork } from '../components/hopebotUsageWork.js';
+import * as nutritionCare108 from '../components/nutritionCare.js';
 
 // ---- module state ----
 let me = null;                 // current profile
@@ -1361,48 +1362,50 @@ function portalLeverRow(lever, svc) {
 function wireLeversPanel(p) {
   const panel = document.getElementById('levers-panel');
   if (!panel) return;
+  const generation = callingGeneration, queue = currentQueueId, account = callingIdentity();
+  const current = () => callingCurrent(generation) && callingWritable() && callingIdentity() === account
+    && currentQueueId === queue && currentPatient?.patient_id === p.patient_id && document.getElementById('levers-panel') === panel;
   const syncCount = () => {
     const n = Object.values(currentServices || {}).filter(x => x.done).length;
     const badge = document.getElementById('levers-count');
     if (badge) { badge.textContent = `${n} on`; badge.className = `badge badge-${n ? 'ok' : 'neutral'}`; }
   };
   panel.querySelectorAll('.lever-row[data-lever]').forEach(row => {
-    const lever = row.dataset.lever;
+    const lever = row.dataset.lever, toggle = row.querySelector('[data-toggle]');
+    let saved = toggle.checked, busy = false;
+    const paint = value => { toggle.checked = value; row.classList.toggle('on', value); const extra = row.querySelector('.lever-extra'); if (extra) extra.style.display = value ? '' : 'none'; };
     const save = async () => {
-      const toggle = row.querySelector('[data-toggle]');
-      const num = (sel) => { const v = row.querySelector(sel)?.value; return v === '' || v == null ? null : Number(v); };
-      const txt = (sel) => row.querySelector(sel)?.value?.trim() || null;
-      toggle.disabled = true;
+      if (busy || !current() || !row.isConnected) { paint(saved); return; }
+      const done = toggle.checked; busy = true; toggle.disabled = true;
+      const num = sel => { const v = row.querySelector(sel)?.value; return v === '' || v == null ? null : Number(v); };
+      const txt = sel => row.querySelector(sel)?.value?.trim() || null;
       try {
+        if (lever === 'nutrition_plan_given' && done && !saved) {
+          paint(saved);
+          const module = typeof nutritionCare108.prepareNutritionSupportPlan108 === 'function' ? nutritionCare108 : await import('../components/nutritionCare.js?sync108');
+          if (!current() || !row.isConnected) return;
+          if (typeof module.prepareNutritionSupportPlan108 !== 'function') throw new Error('Refresh the app to open the current plan form.');
+          const result = await module.prepareNutritionSupportPlan108({ patientId: p.patient_id, isCurrent: () => current() && row.isConnected, onSaved: async data => {
+            if (current() && row.isConnected && data?.ok === true && data.current_status === 'closed') {
+              saved = true; paint(true); currentServices[lever] = { ...(currentServices[lever] || {}), lever, done: true }; syncCount();
+            }
+          } });
+          if (!current()) return;
+          if (result.handled) return;
+          paint(done);
+        }
         const { error } = await getSupabase().rpc('set_service_lever', {
-          p_patient_id: p.patient_id,
-          p_lever: lever,
-          p_done: toggle.checked,
-          p_amount: num('[data-extra="amount"]'),
-          p_sessions: num('[data-extra="sessions"]'),
-          p_outcome: txt('[data-extra="outcome"]'),
-          p_detail: txt('[data-extra="detail"]'),
+          p_patient_id: p.patient_id, p_lever: lever, p_done: done,
+          p_amount: num('[data-extra="amount"]'), p_sessions: num('[data-extra="sessions"]'),
+          p_outcome: txt('[data-extra="outcome"]'), p_detail: txt('[data-extra="detail"]'),
         });
-        if (error) throw error;
-        currentServices[lever] = { ...(currentServices[lever] || {}), lever, done: toggle.checked };
-        syncCount();
-      } catch (e) {
-        // Put the switch back. A toggle that looks saved and is not is the
-        // exact failure this panel exists to remove.
-        toggle.checked = !toggle.checked;
-        row.classList.toggle('on', toggle.checked);
-        const extra = row.querySelector('.lever-extra');
-        if (extra) extra.style.display = toggle.checked ? '' : 'none';
-        showToast('Could not save that: ' + e.message, 'error');
-      } finally { toggle.disabled = false; }
+        if (!current() || !row.isConnected) return;
+        if (error) throw new Error('Support could not be confirmed. Retry this switch.');
+        saved = done; paint(saved); currentServices[lever] = { ...(currentServices[lever] || {}), lever, done }; syncCount();
+      } catch (error) { if (current() && row.isConnected) { paint(saved); showToast(error.message || 'Could not confirm support. Retry this switch.', 'error'); } }
+      finally { busy = false; if (current() && row.isConnected) toggle.disabled = false; }
     };
-    row.querySelector('[data-toggle]').addEventListener('change', (e) => {
-      const on = e.target.checked;
-      row.classList.toggle('on', on);
-      const extra = row.querySelector('.lever-extra');
-      if (extra) extra.style.display = on ? '' : 'none';
-      save();
-    });
+    toggle.addEventListener('change', () => { paint(toggle.checked); save(); });
     row.querySelectorAll('.lever-extra .input, .lever-extra .select').forEach(inp => inp.addEventListener('change', save));
   });
 }

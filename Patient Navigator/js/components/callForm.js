@@ -335,7 +335,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
   let recSection = null;
   let consentWritten = false;   // written the moment a waiting recording needed it
   const dropRec = () => { recSection?.dispose(); recSection = null; };
-  let feedbackSection = null, disposed = false, savedCallId = null, callSaving = false, nutritionPlanSaved = false, observer, subscription;
+  let feedbackSection = null, disposed = false, savedCallId = null, callSaving = false, nutritionPlanSaved = false, pendingNutritionPlan = null, observer, subscription;
   const current = () => !disposed && el.isConnected && modal?.isCurrentModal?.() && freshActor();
   function dispose() {
     if (disposed) return;
@@ -734,6 +734,10 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
         showSavedCall('The call save response could not be confirmed. Check Call Logs before trying to log it again.');
         return;
       }
+      // Keep this identity even if a later step or response fails. Retry only
+      // this outcome, never insert the call again or fall back to a bare flag.
+      const boundPlan = nutritionCall && connected && !!nutritionFields.nutrition_request_id && !!state.levers.nutrition_plan_given;
+      if (boundPlan) pendingNutritionPlan = { callId: savedCallId, requestId: nutritionFields.nutrition_request_id, operation: crypto.randomUUID() };
 
       // sql/193: the family's answer about recording, and its recording, join
       // this call. Never blocks the log; a failure says so (attachRecordingToLog).
@@ -758,7 +762,7 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
       }
 
       // ACTION: upsert the support-lever ledger
-      const leverRows = Object.entries(state.levers).map(([lever, f]) => ({
+      const leverRows = Object.entries(state.levers).filter(([lever]) => !(boundPlan && lever === 'nutrition_plan_given')).map(([lever, f]) => ({
         patient_id: patientId, lever, done: true,
         amount: f.amount ? Number(f.amount) : null,
         sessions: f.sessions ? parseInt(f.sessions, 10) : null,
@@ -771,6 +775,10 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
       // row by row so one bad lever cannot take the rest down with it, and say
       // out loud when something did not save.
       const leverFailures = [];
+      if (pendingNutritionPlan) {
+        try { await savePendingNutritionPlan(); }
+        catch (error) { if (!current()) return; leverFailures.push({ lever: 'nutrition_plan_given', msg: error.message }); }
+      }
       if (leverRows.length) {
         const { error: e2 } = await sb.from('patient_services').upsert(leverRows, { onConflict: 'patient_id,lever' });
         if (!current()) return;
@@ -796,16 +804,16 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
       }
 
       stopGuard();
-      nutritionPlanSaved = !!state.levers.nutrition_plan_given && !leverFailures.some(f => f.lever === 'nutrition_plan_given');
+      nutritionPlanSaved = !boundPlan && !!state.levers.nutrition_plan_given && !leverFailures.some(f => f.lever === 'nutrition_plan_given');
       showSavedCall();
-      const savedLevers = leverRows.length - leverFailures.length;
+      const savedLevers = Object.keys(state.levers).length - leverFailures.length;
       const extras = (savedLevers ? ` · ${savedLevers} support` : '')
         + (assessRows.length && !scoreFailed ? ` · ${assessRows.length} scores` : '')
         + (recAttached ? ' · recording' : '');
       showToast('Call logged' + extras, 'success');
       // Never let a partial save read as a clean one.
       if (leverFailures.length) {
-        showToast(`Support not saved (${leverFailures.map(f => leverLabel(f.lever)).join(', ')}): ${leverFailures[0].msg}. Add it from the patient's Support tab.`, 'error', 9000);
+        showToast(`Support not confirmed (${leverFailures.map(f => leverLabel(f.lever)).join(', ')}): ${leverFailures[0].msg}${pendingNutritionPlan ? ' Use Retry plan save below; the call is already saved.' : ' Retry the missing support from the patient Support tab.'}`, 'error', 9000);
       }
       if (scoreFailed) showToast(`Wellbeing scores not saved: ${scoreFailed}`, 'error', 9000);
       if (typeof onSaved === 'function') {
@@ -825,6 +833,16 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     }
   });
 
+  async function savePendingNutritionPlan() {
+    if (!current() || !pendingNutritionPlan) return;
+    const pending = pendingNutritionPlan;
+    const module = typeof nutritionCare.recordPlanForSavedNutritionCall108 === 'function' ? nutritionCare : await import('./nutritionCare.js?sync108');
+    if (!current()) return;
+    if (typeof module.recordPlanForSavedNutritionCall108 !== 'function') throw new Error('Refresh the app, then check this saved call in Nutrition tracker.');
+    await module.recordPlanForSavedNutritionCall108({ ...pending, isCurrent: current });
+    if (current() && pendingNutritionPlan === pending) pendingNutritionPlan = null;
+  }
+
   function showSavedCall(note = '') {
     if (!current() || el.querySelector('[data-lc-saved-stage]')) return;
     callSaving = false; stopGuard(); dropRec();
@@ -839,9 +857,21 @@ export async function openCallForm({ patient = null, onSaved = null } = {}) {
     $('#lc-submit').textContent = confirmed ? 'Call saved' : 'Check Call Logs';
     stage.innerHTML = `<h3>${confirmed ? 'Call saved' : 'Check Call Logs'}</h3><p>${note ? sanitize(note) : 'HopeBot usage feedback is a separate answer linked to this saved call. You can add it now or reopen the call from Call Logs.'}</p>
       <div style="display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="btn btn-primary" data-lc-feedback ${confirmed ? '' : 'disabled'}>Add HopeBot feedback</button>${nutritionPlanSaved ? '<button type="button" class="btn btn-secondary" data-lc-nutrition>Review nutrition request</button>' : ''}<button type="button" class="btn btn-secondary" data-lc-logs>Open Call Logs</button><button type="button" class="btn btn-secondary" data-lc-done>Done</button></div>
+      <div data-lc-plan-retry ${pendingNutritionPlan ? '' : 'hidden'}><p data-lc-plan-status role="status">Call saved. Its nutrition plan outcome is not yet confirmed.</p><button type="button" class="btn btn-secondary" data-lc-retry-plan>Retry plan save</button></div>
       <div data-lc-feedback-slot style="margin-top:16px;min-width:0" hidden></div><p data-lc-feedback-error role="status"></p>`;
     el.prepend(stage); el.closest('.modal')?.scrollTo({ top: 0 });
     stage.querySelector('[data-lc-done]').onclick = () => { if (current()) closeOwned(); };
+    stage.querySelector('[data-lc-retry-plan]').onclick = async event => {
+      if (!current() || !pendingNutritionPlan || event.currentTarget.disabled) return;
+      const button = event.currentTarget, status = stage.querySelector('[data-lc-plan-status]'); button.disabled = true;
+      try {
+        await savePendingNutritionPlan(); if (!current()) return;
+        if (pendingNutritionPlan) throw new Error('Check the current request status.');
+        status.textContent = 'Nutrition outcome confirmed. The related request is closed.'; button.hidden = true;
+        showToast('Plan saved and request closed. No second call was added.', 'success');
+        if (typeof onSaved === 'function') Promise.resolve(onSaved()).catch(() => { if (current()) showToast('Refresh to update the tracker.', 'info'); });
+      } catch (error) { if (current()) { status.textContent = error.message; button.disabled = false; } }
+    };
     stage.querySelector('[data-lc-nutrition]')?.addEventListener('click', () => {
       if (!current()) return;
       nutritionCare.promptNutritionCompletion({ patientId: chosenPatientId(), isCurrent: freshActor, mayOpen: current, onSaved: async () => { if (freshActor() && typeof onSaved === 'function') await onSaved(); } });

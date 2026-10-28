@@ -13,6 +13,43 @@ const accountGuard = current => { const id = getCurrentUser()?.id; return () => 
 const supportedRow = row => row?.can_record_plan_outcome === true && row?.status !== 'closed' && !!row.updated_at;
 const safeReply = (data, row) => data?.ok === true && data.request_id === row.id && !!data.action_id;
 const needLabel = row => nutritionRequests.NUTRITION_REASONS?.[row.reason] || 'Nutrition support';
+
+export async function recordPlanForSavedNutritionCall108({ callId, requestId, operation, isCurrent }) {
+  const current = accountGuard(isCurrent), actor = getCurrentUser()?.id;
+  if (!current()) throw new Error('Your account changed. Reopen the saved call.');
+  const { data, error } = await getSupabase().rpc('record_nutrition_call_plan108', {
+    p_call: callId, p_request: requestId, p_operation: operation, p_actor: actor,
+  });
+  if (!current()) throw new Error('Your account changed. Check the saved call before trying again.');
+  if (error || data?.ok !== true || data.call_id !== callId || data.request_id !== requestId
+    || !data.event_id || !data.action_id || data.current_status !== 'closed') {
+    throw new Error('The call is saved, but its nutrition outcome could not be confirmed. Retry the plan save here or refresh the tracker.');
+  }
+  return data;
+}
+
+// The checkbox is an entry point to ONE request-bound plan save, not a first
+// legacy flag followed by another closure. Cancellation leaves it unsaved.
+export async function prepareNutritionSupportPlan108({ patientId, isCurrent, onSaved = async () => {} }) {
+  const current = accountGuard(isCurrent);
+  if (!current()) throw new Error('Your account changed. Refresh before saving support.');
+  const { data, error } = await getSupabase().rpc('get_nutrition_tracker', { p_patient_ids: [patientId] });
+  if (!current()) return { handled: true };
+  if (error || !Array.isArray(data)) throw new Error('Could not check current nutrition requests. Retry before recording this plan.');
+  const rows = data.filter(r => r.patient_id === patientId && supportedRow(r));
+  if (!rows.length) return { handled: false };
+  const outcome = await import('./nutritionPlanOutcome.js?sync108');
+  if (!current()) return { handled: true };
+  if (typeof outcome.openNutritionPlanOutcome !== 'function') throw new Error('Refresh the app to load the plan form.');
+  const open = row => { if (current()) outcome.openNutritionPlanOutcome({ row, shared: true, isCurrent: current, onSaved }); };
+  if (rows.length === 1) { open(rows[0]); return { handled: true }; }
+  const modal = showModal({ title: 'Choose the nutrition request', content: `<p>More than one need is open. Choose the exact request this plan addresses; other needs and follow-ups remain pending.</p><div class="form-group"><label class="form-label" for="nutrition-support-request108">Request</label><select class="form-select" id="nutrition-support-request108"><option value="">Choose a request</option>${rows.map((r,i) => `<option value="${i}">${sanitize(day(r.raised_at))} - ${sanitize(needLabel(r))}</option>`).join('')}</select></div><div class="nw-actions"><button class="btn btn-secondary" data-support-cancel108>Cancel</button><button class="btn btn-primary" data-support-next108 disabled>Record plan shared</button></div>` });
+  const selected = modal.querySelector('select'), next = modal.querySelector('[data-support-next108]');
+  selected.onchange = () => { next.disabled = selected.value === ''; };
+  modal.querySelector('[data-support-cancel108]').onclick = () => modal.closeOwnedModal();
+  next.onclick = () => { if (!current() || !modal.isCurrentModal() || selected.value === '') return; const row = rows[Number(selected.value)]; if (!row) return; modal.closeOwnedModal(); open(row); };
+  return { handled: true };
+}
 function followupSnapshot(items, id) {
   const item = (items || []).find(x => x.call_id === id), version = item?.schedule_version;
   if (!item || !/^\d+$/.test(String(version ?? '')) || !/^\d{4}-\d{2}-\d{2}$/.test(item.due_on || ''))
@@ -88,7 +125,10 @@ export function mountNutritionCallLink(host, { getPatient, isCurrent, isConnecte
       rows=data.filter(r=>r.can_record_plan_outcome===true || r.status==='closed'); loadedPatient=pid;
       const hasWork=rows.some(r=>r.status!=='closed' || (r.pending_followups||[]).length);
       host.innerHTML=`<div class="field"><label for="nutrition-call-request">Related nutrition request${hasWork ? ' (choose the exact need)' : ' (optional)'}</label><select class="select" id="nutrition-call-request" data-nutrition-call-request><option value="">${hasWork?'Choose a request or mark this call unrelated':'No request linked'}</option>${hasWork?'<option value="__unrelated__">Unrelated call - leave all existing work pending</option>':''}${rows.map(r=>`<option value="${sanitize(r.id)}">${sanitize(day(r.raised_at))} - ${sanitize(needLabel(r))}${r.status==='closed'?' - closed need':''}</option>`).join('')}</select><div class="muted" style="font-size:12px">Choose the exact need. Logging a call does not automatically close a pending plan.</div></div><div class="field"><label for="nutrition-call-origin">Earlier follow-up completed by this connected call</label><select class="select" id="nutrition-call-origin" data-nutrition-call-origin></select></div>`;
-      host.querySelector('[data-nutrition-call-request]').onchange=paintOrigins; paintOrigins();
+      const requestChoice = host.querySelector('[data-nutrition-call-request]');
+      const actionable = rows.filter(r => r.status !== 'closed' || (r.pending_followups || []).length);
+      if (actionable.length === 1 && actionable[0].status !== 'closed') requestChoice.value = actionable[0].id;
+      requestChoice.onchange=paintOrigins; paintOrigins();
     } catch { if(current() && generation===seq) host.innerHTML='<p class="nw-muted" role="status">Request links could not load. The call can still be saved without a link; use Nutrition tracker to link it later.</p>'; }
     finally { if(generation===seq) loading=false; }
   }

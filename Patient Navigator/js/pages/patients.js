@@ -13,6 +13,7 @@ import { showToast } from '../components/toast.js';
 import { showModal, closeModal, confirmModal } from '../components/modal.js';
 import { openCallForm } from '../components/callForm.js';
 import * as nutritionCare from '../components/nutritionCare.js';
+import * as supportAuth108 from '../auth.js';
 import { openWhatsappShare, recipientsFromPatient } from '../components/whatsappShare.js';
 import { openAssessmentFlow } from '../components/assessmentFlow.js';
 import { mountBeforeYouCall } from '../components/beforeYouCall.js';
@@ -1582,40 +1583,49 @@ function renderLeverRow(lever, svc) {
 }
 
 function bindLeverRows(scope, patient, sb, me) {
+  const actor = getCurrentUser()?.id, profile = getCurrentProfile()?.id, generation = detailGeneration, route = window.location.hash;
+  const current = () => !!actor && scope.isConnected && generation === detailGeneration && route === window.location.hash
+    && getCurrentUser()?.id === actor && getCurrentProfile()?.id === profile && me?.id === actor
+    && typeof supportAuth108.isImpersonating === 'function' && !supportAuth108.isImpersonating()
+    && supportAuth108.getRealProfile?.()?.id === actor && supportAuth108.getRealProfile?.()?.is_active === true;
   scope.querySelectorAll('.lever-row[data-lever]').forEach(row => {
-    const lever = row.dataset.lever;
+    const lever = row.dataset.lever, toggle = row.querySelector('[data-toggle]');
+    let saved = toggle.checked, busy = false;
+    const paint = value => { toggle.checked = value; row.classList.toggle('on', value); const extra = row.querySelector('.lever-extra'); if (extra) extra.style.display = value ? '' : 'none'; };
     const upsert = async () => {
-      const done = row.querySelector('[data-toggle]').checked;
-      const payload = {
-        patient_id: patient.id, lever, done,
-        recorded_by: me?.id || getCurrentUser()?.id,
-      };
-      const amount = row.querySelector('[data-extra="amount"]')?.value;
-      const sessions = row.querySelector('[data-extra="sessions"]')?.value;
-      const outcome = row.querySelector('[data-extra="outcome"]')?.value;
-      const detail = row.querySelector('[data-extra="detail"]')?.value;
-      if (amount !== undefined) payload.amount = amount === '' ? null : Number(amount);
-      if (sessions !== undefined) payload.sessions = sessions === '' ? null : Number(sessions);
-      if (outcome !== undefined) payload.outcome = outcome || null;
-      if (detail !== undefined) payload.detail = detail?.trim() || null;
-      const { error } = await sb.from('patient_services').upsert(payload, { onConflict: 'patient_id,lever' });
-      if (error) showToast('Could not save: ' + error.message, 'error');
-      else if (lever === 'nutrition_plan_given' && done) {
-        const actor = me?.id || getCurrentUser()?.id;
-        nutritionCare.promptNutritionCompletion({ patientId: patient.id, isCurrent: () => scope.isConnected && getCurrentUser()?.id === actor });
-      }
+      if (busy || !current() || !row.isConnected) { paint(saved); return; }
+      const done = toggle.checked; busy = true; toggle.disabled = true;
+      try {
+        if (lever === 'nutrition_plan_given' && done && !saved) {
+          paint(saved);
+          const module = typeof nutritionCare.prepareNutritionSupportPlan108 === 'function' ? nutritionCare : await import('../components/nutritionCare.js?sync108');
+          if (!current() || !row.isConnected) return;
+          if (typeof module.prepareNutritionSupportPlan108 !== 'function') throw new Error('Refresh the app to open the current plan form.');
+          const result = await module.prepareNutritionSupportPlan108({ patientId: patient.id, isCurrent: () => current() && row.isConnected, onSaved: async data => {
+            if (current() && row.isConnected && data?.ok === true && data.current_status === 'closed') { saved = true; paint(true); }
+          } });
+          if (!current()) return;
+          if (result.handled) return;
+          paint(done);
+        }
+        const payload = { patient_id: patient.id, lever, done, recorded_by: actor };
+        const amount = row.querySelector('[data-extra="amount"]')?.value;
+        const sessions = row.querySelector('[data-extra="sessions"]')?.value;
+        const outcome = row.querySelector('[data-extra="outcome"]')?.value;
+        const detail = row.querySelector('[data-extra="detail"]')?.value;
+        if (amount !== undefined) payload.amount = amount === '' ? null : Number(amount);
+        if (sessions !== undefined) payload.sessions = sessions === '' ? null : Number(sessions);
+        if (outcome !== undefined) payload.outcome = outcome || null;
+        if (detail !== undefined) payload.detail = detail?.trim() || null;
+        const { error } = await sb.from('patient_services').upsert(payload, { onConflict: 'patient_id,lever' });
+        if (!current() || !row.isConnected) return;
+        if (error) throw new Error('Support could not be confirmed. Retry this switch.');
+        saved = done; paint(saved);
+      } catch (error) { if (current() && row.isConnected) { paint(saved); showToast(error.message || 'Could not confirm support. Retry this switch.', 'error'); } }
+      finally { busy = false; if (current() && row.isConnected) toggle.disabled = false; }
     };
-
-    row.querySelector('[data-toggle]').addEventListener('change', (e) => {
-      const on = e.target.checked;
-      row.classList.toggle('on', on);
-      const extra = row.querySelector('.lever-extra');
-      if (extra) extra.style.display = on ? '' : 'none';
-      upsert();
-    });
-    row.querySelectorAll('.lever-extra .input, .lever-extra .select').forEach(inp => {
-      inp.addEventListener('change', upsert);
-    });
+    toggle.addEventListener('change', () => { paint(toggle.checked); upsert(); });
+    row.querySelectorAll('.lever-extra .input, .lever-extra .select').forEach(inp => inp.addEventListener('change', upsert));
   });
 }
 
