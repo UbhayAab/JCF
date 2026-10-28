@@ -3,6 +3,7 @@ import { getCurrentUser, isImpersonating } from '../auth.js';
 import { sanitize } from '../utils/validators.js';
 
 export const HOPEBOT_INTRO_CONSENT = 'Family agreed on this call to get HopeBot on WhatsApp';
+const introMountTurns = new WeakMap();
 const when = (value) => new Date(value).toLocaleString('en-IN', {
   timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short',
 });
@@ -15,7 +16,9 @@ const BLOCKS = {
   do_not_call: 'Not sent: this family is marked not to be contacted.',
   blacklisted: 'Not sent: this family is blocked from contact.',
   inactive: 'Not sent: this family is inactive or deceased.',
-  recent_intro: 'Not sent: HopeBot was already requested in the last 7 days.',
+  recent_intro: 'Not sent: wait 15 minutes after the previous HopeBot intro, then record agreement on a new connected call.',
+  intro_pending: 'Not sent: a HopeBot intro is still waiting for its send or delivery status. Refresh delivery status before trying again.',
+  intro_outcome_unknown: 'Not sent: the previous send outcome is unknown. Check its delivery status before requesting another intro.',
 };
 const STATES = {
   queued: 'Queued for HopeBot', offered: 'Waiting for HopeBot', in_hopebot: 'Queued for WhatsApp',
@@ -32,7 +35,9 @@ export async function requestHopebotIntro(patientId, callId) {
     });
     if (error) return { ok: false, error: error.message };
     if (!data?.ok) return { ok: false, error: 'Not sent: the request was not confirmed. Refresh the family card before trying again.' };
-    return data;
+    return { ...data, message: data.duplicate
+      ? `HopeBot was already requested on this call: ${STATES[data.state] || 'request recorded'}. Refresh delivery status to check it.`
+      : 'HopeBot intro is queued; delivery is not confirmed.' };
   } catch {
     return { ok: false, error: 'The request response was lost. Refresh the family card before trying again; it may already be queued.' };
   }
@@ -43,7 +48,10 @@ export async function requestHopebotIntro(patientId, callId) {
 export async function mountHopebotIntro(mount, patientId, options = {}) {
   if (!mount || isImpersonating()) return;
   const userId = getCurrentUser()?.id;
+  const turn = {};
+  introMountTurns.set(mount, turn);
   const stillHere = () => mount.isConnected && getCurrentUser()?.id === userId
+    && introMountTurns.get(mount) === turn
     && (!options.isCurrent || options.isCurrent());
   if (!userId) return;
   const [panel, delivery] = await Promise.all([
@@ -62,21 +70,21 @@ export async function mountHopebotIntro(mount, patientId, options = {}) {
   const staged = !!options.getStaged?.();
   const blocked = data.blocked;
   const reason = blocked ? BLOCKS[blocked] || `Not sent: ${String(blocked).replaceAll('_', ' ')}.`
-    : !options.stageForCall && !calls.length ? 'Save your connected call first. Choose a call from the last 24 hours.' : '';
+    : !options.stageForCall && !calls.length ? 'Save a new connected call first. Choose an unused call from the last 24 hours.' : '';
   mount.innerHTML = `<section class="card" style="padding:16px;margin-bottom:16px;overflow-wrap:anywhere" data-hopebot-intro>
     <h3 style="margin:0 0 8px">HopeBot on WhatsApp</h3>
-    <p>Send one introduction and a Main menu button to this family's current saved WhatsApp number${data.to ? ` (${sanitize(data.to)})` : ''}. Their reply opens HopeBot. At most one intro per family in 7 days.</p>
+    <p>Send one introduction and a Main menu button to this family's current saved WhatsApp number${data.to ? ` (${sanitize(data.to)})` : ''}. Their reply opens HopeBot. A new connected call and fresh agreement can request another intro after 15 minutes. A request still waiting for its outcome cannot be sent again.</p>
     ${options.stageForCall ? '<p>Send when this call is saved. A connected call and its consent answer are recorded together before anything is queued.</p>' : `<label class="form-label" for="hi-call">The call where they agreed (India time)</label>
       <select class="form-select" id="hi-call" ${!calls.length ? 'disabled' : ''}>${calls.map((c) => `<option value="${sanitize(c.id)}">${sanitize(when(c.called_at))}</option>`).join('')}</select>`}
     <label style="display:flex;gap:10px;align-items:flex-start;margin:12px 0"><input type="checkbox" data-hi-agreed ${staged ? 'checked' : ''} ${reason ? 'disabled' : ''}><span>${HOPEBOT_INTRO_CONSENT}</span></label>
-    <button type="button" class="btn btn-primary btn-sm" data-hi-send ${reason || !staged ? 'disabled' : ''}>${staged ? 'Remove from this call' : 'Send HopeBot on WhatsApp'}</button>
+    <button type="button" class="btn btn-primary btn-sm" data-hi-send ${reason || !staged ? 'disabled' : ''}>${options.stageForCall ? staged ? 'Remove from this call' : 'Send when this call is saved' : 'Send HopeBot on WhatsApp'}</button>
     <p role="status" aria-live="polite" data-hi-status>${sanitize(reason || (staged ? 'Selected. Send when this call is saved.' : 'Tick the agreement only after asking the family on this call.'))}</p>
     ${data.template?.body ? `<details><summary>${blocked === 'template_pending' ? 'Intro wording awaiting approval' : 'Approved intro wording'}</summary><p style="white-space:pre-wrap">${sanitize(data.template.body)}</p></details>` : ''}
     ${last ? `<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px" data-hi-history>
       <strong>${sanitize(STATES[last.state] || last.state)}</strong>${last.reason ? `: ${sanitize(String(last.reason).replaceAll('_', ' '))}` : ''}
       <p style="margin:6px 0">Requested ${sanitize(when(last.recorded_at))} India time${last.recorded_name ? ` by ${sanitize(last.recorded_name)}` : ''}. Consent recorded${last.call_at ? ` on the call at ${sanitize(when(last.call_at))} India time` : ' on the selected connected call'}.</p>
       ${last.sent_at ? `<p style="margin:6px 0">Last sent ${sanitize(when(last.sent_at))} India time.</p>` : ''}
-      ${data.next_allowed_at ? `<p style="margin:6px 0">Next intro can be requested ${sanitize(when(data.next_allowed_at))} India time.</p>` : ''}
+      ${data.next_allowed_at && blocked === 'recent_intro' ? `<p style="margin:6px 0">Next intro can be requested ${sanitize(when(data.next_allowed_at))} India time, with agreement on a new connected call.</p>` : ''}
     </div>` : '<p>No HopeBot intro has been requested for this family yet.</p>'}
     ${!last && data.next_allowed_at && blocked === 'recent_intro' ? `<p>HopeBot was sent recently. Next intro can be requested ${sanitize(when(data.next_allowed_at))} India time.</p>` : ''}
     ${legacy ? `<div data-hi-document-delivery><strong>Document reminder:</strong>${(legacy.recipients || [legacy]).map(r => `<p>${r.to ? `${sanitize(r.to)}: ` : ''}${sanitize(STATES[r.status] || r.status)}${r.reason ? `: ${sanitize(r.reason)}` : ''}. Requested ${sanitize(when(r.sent_at))} India time.</p>`).join('')}</div>` : delivery.error ? '<p>Document reminder delivery could not be checked. Refresh before trying again.</p>' : ''}
@@ -87,22 +95,23 @@ export async function mountHopebotIntro(mount, patientId, options = {}) {
   const button = mount.querySelector('[data-hi-send]');
   const status = mount.querySelector('[data-hi-status]');
   agreed.onchange = () => {
+    if (!stillHere() || reason) return;
     button.disabled = !!reason || !agreed.checked;
-    if (!agreed.checked && options.stageForCall) {
-      options.onStageChange?.(false);
-      button.textContent = 'Send HopeBot on WhatsApp';
-      status.textContent = 'Not selected. Nothing will be sent when this call is saved.';
+    if (options.stageForCall) {
+      options.onStageChange?.(agreed.checked);
+      button.textContent = agreed.checked ? 'Remove from this call' : 'Send when this call is saved';
+      status.textContent = agreed.checked ? 'Selected. Send when this connected call is saved.'
+        : 'Not selected. Nothing will be sent when this call is saved.';
     }
   };
   button.onclick = async () => {
     if (!stillHere() || !agreed.checked || reason) return;
     if (options.stageForCall) {
-      const next = !options.getStaged?.();
-      options.onStageChange?.(next);
-      agreed.checked = next;
-      button.textContent = next ? 'Remove from this call' : 'Send HopeBot on WhatsApp';
-      button.disabled = !next;
-      status.textContent = next ? 'Selected. Send when this call is saved.' : 'Not selected. Nothing will be sent when this call is saved.';
+      options.onStageChange?.(false);
+      agreed.checked = false;
+      button.textContent = 'Send when this call is saved';
+      button.disabled = true;
+      status.textContent = 'Not selected. Nothing will be sent when this call is saved.';
       return;
     }
     button.disabled = true;

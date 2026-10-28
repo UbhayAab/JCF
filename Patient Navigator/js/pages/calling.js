@@ -1038,20 +1038,29 @@ function mountActive(p, history) {
     .then((m) => m.mountCollectStatus(docCollectMount, p.patient_id,
       { patientName: p.full_name || p.patient_code || '', preferred: 'verbal_during_call' }))
     .catch((e) => console.warn('[documents] collection status:', e.message));
-  const introMount = document.getElementById('hopebot-intro-call-mount');
-  import('../components/hopebotIntro.js')
-    .then((m) => m.mountHopebotIntro(introMount, p.patient_id, {
-      stageForCall: true, isCurrent: () => currentPatient?.patient_id === p.patient_id,
-      getStaged: () => form.hopebotIntro === true,
-      onStageChange: (selected) => { form.hopebotIntro = selected; saveActive(); },
-    }))
-    .catch(() => { if (introMount?.isConnected) introMount.textContent = 'HopeBot intro is unavailable. Refresh before trying again.'; });
+  mountCallHopebotIntro(p);
   mountReferralBrief(document.getElementById('referral-mount'), p);
   wireActive(p);
   wireGapsPanel(p);
   wireLeversPanel(p);
   wireUndoBar();
   decorateRecordings(el).catch((e) => console.warn('[portal] recordings unavailable:', e.message));
+}
+
+// Consent can change while this call is open. Reload the same current-family
+// panel after it is saved, without selecting WhatsApp agreement on their behalf.
+function mountCallHopebotIntro(p) {
+  const mount = document.getElementById('hopebot-intro-call-mount');
+  const isCurrent = () => mount?.isConnected && currentPatient?.patient_id === p.patient_id
+    && root()?.contains(mount);
+  if (!isCurrent()) return;
+  import('../components/hopebotIntro.js')
+    .then((m) => { if (isCurrent()) return m.mountHopebotIntro(mount, p.patient_id, {
+      stageForCall: true, isCurrent,
+      getStaged: () => form.hopebotIntro === true,
+      onStageChange: (selected) => { form.hopebotIntro = selected; saveActive(); },
+    }); })
+    .catch(() => { if (isCurrent()) mount.textContent = 'HopeBot intro is unavailable. Refresh before trying again.'; });
 }
 
 // The number the big button dials. It used to read patients.phone_full only,
@@ -1486,6 +1495,7 @@ async function recordConsentNow(p) {
     if (panel) { panel.outerHTML = renderGapsPanel(p); wireGapsPanel(p); }
     const badge = document.querySelector('.pcard-head .badge-warn[title^="No consent"]');
     if (badge) badge.outerHTML = consentBadge(p);
+    mountCallHopebotIntro(p);
   } catch (e) {
     showToast('Could not record consent: ' + e.message, 'error');
   }
@@ -2312,7 +2322,7 @@ async function submitCallLog() {
         confirmedCallId = dup[0].id;
         const intro = await requestIntro(dup[0].id);
         if (!stillCurrent()) return;
-        showToast(intro ? intro.ok ? 'Call already saved. HopeBot intro is queued; delivery is not confirmed.'
+        showToast(intro ? intro.ok ? `Call already saved. ${intro.message}`
           : `Call already saved. ${intro.error}` : 'Already logged for this person a moment ago, not duplicating',
         intro && !intro.ok ? 'warning' : 'info', intro ? 12000 : 4000);
         // The recording joins the log that was saved, rather than waiting for the sweep.
@@ -2397,7 +2407,7 @@ async function submitCallLog() {
     const fName = (currentPatient.full_name || '').split(' ')[0];
     const niceDate = followUp ? new Date(followUp).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }) : null;
     const callMessage = niceDate ? `Logged. ${fName}'s next check-in is set for ${niceDate}` : `Logged for ${fName}`;
-    showToast(intro ? intro.ok ? `${callMessage}. HopeBot intro is queued; delivery is not confirmed.`
+    showToast(intro ? intro.ok ? `${callMessage}. ${intro.message}`
       : `${callMessage}. ${intro.error} Open the family card to check or retry.` : callMessage,
     intro && !intro.ok ? 'warning' : 'success', intro ? 12000 : 4000);
     await offerSavedCallFeedback(callLog?.id);
