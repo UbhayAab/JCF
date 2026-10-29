@@ -29,6 +29,7 @@ import { CONDITIONS, DIAL_STATUSES, RECEPTIVENESS } from '../utils/catalog.js';
 // name that file lacks stops the whole app at boot (tools/stale_import_check.mjs).
 // Missing names are undefined here instead, and the recording box waits for the new file.
 import * as recording from '../components/callRecording.js';
+import * as completedSessions128 from '../components/completedSessions128.js';
 import * as careCalendar217 from '../utils/careFollowup.js?v=nutrition217';
 const { CARE_CASE_FIELDS, indiaCallDay, activeCareCase, careCallBounds, normalizeCareCall } = careCalendar217;
 
@@ -155,6 +156,8 @@ export async function renderCalls(container) {
     } catch (err) { showToast('Export failed: ' + err.message, 'error'); }
   });
 
+  const sessionHistory=document.createElement('div');container.querySelector('#history-view')?.append(sessionHistory);
+  completedSessions128.mountCompletedSessions128?.(sessionHistory);
   await loadCalls();
 }
 

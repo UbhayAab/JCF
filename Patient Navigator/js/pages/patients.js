@@ -12,6 +12,7 @@ import { getCurrentUser, getCurrentProfile, isManagerOrAdmin, getUserRole } from
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal, confirmModal } from '../components/modal.js';
 import { openCallForm } from '../components/callForm.js';
+import * as completedSessions128 from '../components/completedSessions128.js';
 import * as nutritionCare from '../components/nutritionCare.js';
 import * as supportAuth108 from '../auth.js';
 import { openWhatsappShare, recipientsFromPatient } from '../components/whatsappShare.js';
@@ -2074,4 +2075,6 @@ function renderCallsTab(el, p, calls, reload, failed = false) {
   `;
   el.querySelector('#tab-log-call')?.addEventListener('click', () =>
     openCallForm({ patient: { id: p.id, full_name: p.full_name }, onSaved: reload }));
+  const sessionHistory=document.createElement('div');el.append(sessionHistory);
+  completedSessions128.mountCompletedSessions128?.(sessionHistory,{patientId:p.id});
 }
