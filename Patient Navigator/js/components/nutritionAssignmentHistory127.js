@@ -28,6 +28,8 @@ export function openNutritionAssignmentHistory127(container){
  const end=()=>{if(disposed)return;disposed=true;token++;subscription?.unsubscribe?.();observer?.disconnect();window.removeEventListener('hashchange',changed);list.replaceChildren();modal.closeOwnedModal();};
  const modal=showModal({title:'Nutrition assignment history',size:'lg',content:'<p>Recent recorded assignments to nutrition interns, newest first. Use this as a reference for your team\'s cycle; it does not choose the next intern or change ownership.</p><p class="nw-muted">India time (Asia/Kolkata). Earlier imported ownership and handbacks are excluded because they are not new assignments.</p><div data-assignment-history-list aria-live="polite"></div><p data-assignment-history-state role="status"></p><div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn btn-secondary" data-assignment-history-refresh>Refresh history</button><button type="button" class="btn btn-secondary" data-assignment-history-older hidden>Older assignments</button></div>',onClose:end});
  const list=modal.querySelector('[data-assignment-history-list]'),state=modal.querySelector('[data-assignment-history-state]'),older=modal.querySelector('[data-assignment-history-older]'),refresh=modal.querySelector('[data-assignment-history-refresh]');
+ const sheet=modal.querySelector('.modal');sheet.style.overflowAnchor='none';
+ modal.querySelector('.modal-header').style.cssText='position:sticky;top:0;z-index:4;background:var(--surface)';
  const showOlder=show=>{older.hidden=!show;older.style.display=show?'':'none';};showOlder(false);
  const current=()=>!disposed&&container.isConnected&&modal.isCurrentModal()&&route===location.hash&&getCurrentUser()?.id===account&&canViewNutritionAssignments127();
  function changed(){if(!current())end();}
@@ -47,6 +49,7 @@ export function openNutritionAssignmentHistory127(container){
    }
    loaded+=page.length;if(page.length)cursor={id:page.at(-1).id,changed_at:page.at(-1).changed_at};
    showOlder(rows.length>PAGE);state.textContent=loaded?`${loaded} recorded assignment${loaded===1?'':'s'} shown.${older.hidden?' No older assignments found.':''}`:'No recorded nutrition assignments yet. Imported ownership is not listed.';
+   if(reset)sheet.scrollTop=0;
   }catch{if(current()&&request===token){state.textContent='Assignment history could not be loaded. Try again; the current patient assignments have not changed.';showOlder(!!cursor);refresh.textContent=loaded?'Refresh history':'Retry history';}}
   finally{clearTimeout(timeout);if(request===token){busy=false;refresh.disabled=older.disabled=false;}changed();}
  }
