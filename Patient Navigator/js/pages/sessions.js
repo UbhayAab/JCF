@@ -17,6 +17,7 @@ import { formatRelativeTime } from '../utils/formatters.js';
 import { sanitize } from '../utils/validators.js';
 import { SESSION_KINDS, sessionKind, sessionStatus } from '../utils/catalog.js';
 import { routeOpen } from '../utils/probation.js';
+import { openSessionRecording128 } from '../components/sessionRecording128.js';
 
 let rows = [];
 let kindFilter = 'all';
@@ -164,6 +165,7 @@ function paint() {
                 <span class="hist-meta">${r.status === 'held' ? `${sanitize(r.assignee?.full_name) || 'N/A'} · ${r.duration_mins ? r.duration_mins + ' min · ' : ''}${formatRelativeTime(r.held_at)}` : formatRelativeTime(r.updated_at || r.created_at)}</span>
               </div>
               ${r.session_notes ? `<div style="font:var(--t-xs);color:var(--ink-2);margin-top:4px">${sanitize(r.session_notes)}</div>` : ''}
+              ${r.status === 'held' ? `<button type="button" class="btn btn-ghost btn-sm" data-act="recording128" data-id="${r.id}">Session notes and recordings</button>` : ''}
             </div>`;
           }).join('')}
         </div>
@@ -172,7 +174,8 @@ function paint() {
   // wire actions
   body.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
     const id = b.dataset.id, act = b.dataset.act;
-    if (act === 'schedule') openScheduleModal(id);
+    if (act === 'recording128') openSessionRecording128(id, load);
+    else if (act === 'schedule') openScheduleModal(id);
     else if (act === 'held') openHeldModal(id);
     else if (act === 'agreed') quickUpdate(id, { status: 'agreed', agreed_at: new Date().toISOString() }, 'They said yes. Now give it a date');
     else if (act === 'declined') quickUpdate(id, { status: 'declined' }, 'Noted: no session this time');
@@ -234,6 +237,7 @@ function sessionRow(r, stage) {
         ${stage === 'agreed' ? `
           <button class="btn btn-primary btn-sm" data-act="schedule" data-id="${r.id}">${icon('calendar')}Schedule</button>` : ''}
         ${stage === 'scheduled' ? `
+          <button class="btn btn-secondary btn-sm" data-act="recording128" data-id="${r.id}">${icon('mic')}Record session</button>
           <button class="btn btn-primary btn-sm" data-act="held" data-id="${r.id}">${icon('check')}Held it</button>
           <button class="btn btn-ghost btn-sm" data-act="no_show" data-id="${r.id}">No-show</button>
           <button class="btn btn-ghost btn-sm" data-act="cancelled" data-id="${r.id}">Cancel</button>` : ''}

@@ -27,6 +27,11 @@ import { createSharedRecordingStore, SHARE_TTL_MS } from '../utils/sharedRecordi
 // Historical wording is never relabelled. sql/212 opts in only a fresh rec-v2
 // answer while its prospective completion policy is enabled.
 export const CONSENT_WORDING_VERSION = 'rec-v2';
+export const SESSION_RECORDING_BINDING128 = 1;
+export const SESSION_CONSENT_VERSION128 = 'session-rec-v1';
+const SESSION_NOTICE128 = { version: SESSION_CONSENT_VERSION128,
+  en: 'May I record this session so I do not miss what you tell me? Only our care team can listen. A computer service, Google, writes it down for the team to check. Once the complete written note is ready and the session is saved, the cloud audio is deleted. Incomplete processing or review is kept for no more than 90 days. An unsaved upload is cleared after a day. Written notes stay with the session. Is that all right?',
+  hi: 'Kya hum yeh session record kar sakte hain, taaki aapki koi baat chhoot na jaaye? Sirf hamari care team ise sun sakti hai. Google ki computer seva ise team ki jaanch ke liye likhti hai. Poori likhit note taiyaar hone aur session save hone ke baad cloud audio hata di jaayegi. Adhoori processing ya jaanch ka audio zyada se zyada 90 din rahega. Bina save kiye upload ek din baad hata diya jaayega. Likhi hui baatein session ke saath rahengi. Kya yeh theek hai?' };
 export const CONSENT_LINE_EN = 'May I record this call so I do not miss anything you tell me? Only our care team will listen to it. Once a complete written note is ready and the call is saved, the cloud recording is deleted. If processing or review is incomplete, it is kept for no more than three months. The written notes stay with the call. Is that all right?';
 export const CONSENT_LINE_HI = 'Kya hum yeh call record kar sakte hain, taaki aapki koi baat chhoot na jaaye? Ise sirf hamari care team sunegi. Poori likhit note taiyaar hone aur call save hone ke baad cloud recording hata di jaayegi. Agar processing ya jaanch adhoori ho, to recording zyada se zyada teen mahine rakhi jaayegi. Likhi hui baatein call ke saath rahengi. Kya yeh theek hai?';
 const LEGACY_CONSENT = { version: 'rec-v1-2026-10-08',
@@ -409,6 +414,9 @@ export function mountRecordingSection(el, ctx) {
   const measurementStates = new Map(); // private to this mounted call, never an automatic write
   const sb = getSupabase();
   const inline = !!ctx.inline;
+  const sessionMode = !!ctx.sessionId;
+  if (sessionMode) consentNotice = null; // Never fall back to a phone-call notice.
+  let noticeError = '';
   const transcriptAccount = recordingViewIdentity(), transcriptRoute = window.location.hash;
   const transcriptOwner = recordingAuth.getCurrentUser?.()?.id;
   let transcriptRead = null, transcriptSubscription, transcriptObserver;
@@ -439,7 +447,7 @@ export function mountRecordingSection(el, ctx) {
     const rec = ctx.get();
     const local = rec.sharedRecording ? `<p style="font:var(--t-xs);color:var(--ink-2);margin:8px 0 0">${rec.sharedRecording.legacy ? 'This older shared copy cannot be safely removed automatically. Ask your team lead about legacy app-storage cleanup.' : 'The app-held shared copy is available here for six hours, or until upload and saved-call attachment are confirmed. Expired copies are cleared when the Navigator next checks them.'} The original in Phone or Files must be deleted manually.${rec.sharedCleanupError ? ` ${esc(rec.sharedCleanupError)}` : ''}</p>` : '';
     return `<div class="followup rec-card" style="border-color:${border};background:${bg};padding:12px 14px">
-      <div class="fu-head">${icon('mic')}<span>Call recording</span></div>${inner}${local}</div>`;
+      <div class="fu-head">${icon('mic')}<span>${sessionMode ? 'Session recording' : 'Call recording'}</span></div>${inner}${local}</div>`;
   }
 
   function render() {
@@ -461,11 +469,11 @@ export function mountRecordingSection(el, ctx) {
 
     if (!rec.decision) {
       el.innerHTML = card(`
-        ${!rec.reminded ? consentNotice ? `<details style="font:var(--t-xs);margin:6px 0 8px"><summary>If you have not read the recording notice, ask before choosing Yes</summary><p>${esc(consentNotice.en)}</p><p lang="hi-Latn">${esc(consentNotice.hi)}</p></details>` : small('Checking the recording notice...') : ''}
-        <p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 10px">Did the family agree to this call being recorded?${rec.intent === 'off' ? ' You chose to call without recording.' : ''}</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">${consentNotice ? btn('rec-yes', 'Yes, they agreed', 'btn-primary') : ''}${btn('rec-no', 'No')}</div>
-        ${small('Not recorded, or nobody picked up? Leave this and log the call as usual.')}
-        ${howto}`);
+        ${!rec.reminded ? consentNotice ? `<details ${sessionMode ? 'open' : ''} style="font:var(--t-xs);margin:6px 0 8px"><summary>If you have not read the recording notice, ask before choosing Yes</summary><p>${esc(consentNotice.en)}</p><p lang="hi-Latn">${esc(consentNotice.hi)}</p></details>` : small('Checking the recording notice...') : ''}
+        <p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 10px">Did the family agree to this ${sessionMode ? 'session' : 'call'} being recorded?${rec.intent === 'off' ? ' You chose to call without recording.' : ''}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">${consentNotice ? btn('rec-yes', 'Yes, they agreed', 'btn-primary') : ''}${!sessionMode || consentNotice ? btn('rec-no', 'No') : ''}</div>
+        ${small(sessionMode ? noticeError || 'Recording is optional. You can save human-written session notes without it.' : 'Not recorded, or nobody picked up? Leave this and log the call as usual.')}
+        ${sessionMode ? '' : howto}`);
     } else if (rec.decision === 'declined') {
       el.innerHTML = card(`
         <p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 8px"><strong>The family said no.</strong> Do not upload anything. If your phone recorded this call, delete that recording from your phone.</p>
@@ -483,11 +491,11 @@ export function mountRecordingSection(el, ctx) {
       const note = rec.status === 'upload_failed' ? small(`The upload failed: ${esc(rec.error || 'no connection')}. Pick the file again.`, 'var(--danger)')
         : rec.status === 'interrupted' ? small('The upload was interrupted. Pick the file again.', 'var(--danger)') : '';
       el.innerHTML = card(`
-        <p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 10px">They agreed. Upload the recording your phone saved: a transcript and suggested answers fill this form for you to check.</p>
+        <p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 10px">${sessionMode ? 'They agreed. Capture audio below or upload this session\'s complete recording. Review the AI draft before choosing to use it.' : 'They agreed. Upload the recording your phone saved: a transcript and suggested answers fill this form for you to check.'}</p>
         <label class="btn btn-primary btn-sm" style="gap:6px;cursor:pointer">${icon('upload')}Upload recording
           <input type="file" id="rec-file" accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.opus,.webm" hidden /></label>
-        ${note}${phoneTipHTML(savedPhone())}
-        <div style="display:flex;gap:4px;flex-wrap:wrap">${howto}${btn('rec-change', 'Change the answer', 'btn-ghost')}</div>
+        ${note}${sessionMode ? '' : phoneTipHTML(savedPhone())}
+        <div style="display:flex;gap:4px;flex-wrap:wrap">${sessionMode ? '' : howto}${btn('rec-change', 'Change the answer', 'btn-ghost')}</div>
         <div id="rec-shared"></div>`);
     } else if (rec.status === 'uploading' || rec.status === 'transcribing') {
       el.innerHTML = card(`
@@ -495,7 +503,7 @@ export function mountRecordingSection(el, ctx) {
           <span style="font:var(--t-xs);color:var(--ink-2)" role="status">${rec.status === 'uploading' ? `Uploading ${esc(rec.fileName)}...` : 'Listening to the call. This takes about 10 to 40 seconds; you can keep filling the form.'}</span></div>`);
     } else if (rec.status === 'done' && rec.result) {
       const r = rec.result;
-      const filled = r.auto_apply === false ? 'Nothing was filled automatically. Listen, check the transcript and write the verified notes in the form.' : (rec.applied || []).length ? `Filled in below: ${esc(rec.applied.join(', '))}. Check them before you save.` : 'Nothing new to fill in: the form already had your answers.';
+      const filled = sessionMode ? 'Your human notes were kept. Review this AI draft and the transcript before using any of it.' : r.auto_apply === false ? 'Nothing was filled automatically. Listen, check the transcript and write the verified notes in the form.' : (rec.applied || []).length ? `Filled in below: ${esc(rec.applied.join(', '))}. Check them before you save.` : 'Nothing new to fill in: the form already had your answers.';
       const note = noteHTML(r);
       // Only when it was actually filled: a condition she had already chosen is never replaced.
       const critical = r.suggestions?.condition?.value === 'critical' && r.suggestions.condition.unverified
@@ -531,7 +539,7 @@ export function mountRecordingSection(el, ctx) {
     }
     wire();
     const measurements = rec.result?.suggestions?.measurements;
-    if (rec.status === 'done' && rec.decision === 'agreed' && ctx.consentOnFile()
+    if (!sessionMode && rec.status === 'done' && rec.decision === 'agreed' && ctx.consentOnFile()
         && rec.recordingId && Array.isArray(measurements) && measurements.length) {
       if (!measurementStates.has(rec.recordingId)) measurementStates.set(rec.recordingId, {});
       measurementBox = mountCallMeasurements(el.querySelector('#rec-measurements'), ctx.patientId, {
@@ -545,9 +553,10 @@ export function mountRecordingSection(el, ctx) {
   async function answer(decision) {
     if (busy) return; busy = true;
     try {
+      if (sessionMode && !consentNotice) throw new Error('Reopen the session to check the current recording notice.');
       const wordingVersion = consentNotice?.version || LEGACY_CONSENT.version;
-      const { data, error } = await sb.rpc('record_call_recording_consent',
-        { p_patient_id: ctx.patientId, p_decision: decision, p_wording_version: wordingVersion });
+      const { data, error } = await sb.rpc(sessionMode ? 'record_session_consent128' : 'record_call_recording_consent',
+        { ...(sessionMode ? { p_session_id: ctx.sessionId } : { p_patient_id: ctx.patientId }), p_decision: decision, p_wording_version: wordingVersion });
       if (error) throw error;
       update({ consentId: data, decision, wordingVersion });
     } catch (e) {
@@ -576,7 +585,10 @@ export function mountRecordingSection(el, ctx) {
   }
 
   async function picked(file, shareRef = null) {
-    if (!file) return;
+    if (!file || disposed || busy || ctx.get().decision !== 'agreed' || !ctx.consentOnFile()) return;
+    if (sessionMode && ctx.get().recordingId && !['upload_failed','interrupted'].includes(ctx.get().status)) {
+      showToast('Remove the current draft recording before choosing another.', 'warning'); return;
+    }
     const selection = ++selectionEpoch;
     const type = canonicalAudioType(file.name, file.type);
     if (!type) {
@@ -592,7 +604,9 @@ export function mountRecordingSection(el, ctx) {
       try { await createSharedRecordingStore().bind(sharedRecording, { consentId, patientId: ctx.patientId, uploaderId: sharedRecording.uploaderId }); }
       catch { update({ sharedCleanupError: 'Local retry metadata could not be saved; the shared copy is kept.' }); }
     }
-    const durationS = await readAudioDuration(file);
+    const measuredDuration = await readAudioDuration(file);
+    const durationS = Number.isFinite(measuredDuration) && measuredDuration > 0 ? measuredDuration
+      : sessionMode && Number.isFinite(file.captureDurationSeconds) ? file.captureDurationSeconds : measuredDuration;
     if (!sameConsent(consentId) || selection !== selectionEpoch) return;
     const rec = ctx.get();
     // No dial in the Navigator (a logged call reopened, a call back): measured from when the call was logged.
@@ -669,7 +683,7 @@ export function mountRecordingSection(el, ctx) {
       // note: the full call note by section (prompt v3); summary: the same note as the text the log keeps.
       const result = recordingResultForForm(res, ctx.get().durationS || null);
       let applied = [];
-      try { if(result.auto_apply !== false) applied = ctx.apply(result) || []; } catch (e) { console.warn('[recording] could not fill the form:', e); }
+      try { if(!sessionMode && result.auto_apply !== false) applied = ctx.apply(result) || []; } catch (e) { console.warn('[recording] could not fill the form:', e); }
       update({ status: 'done', result, applied });
       return;
     }
@@ -788,9 +802,16 @@ export function mountRecordingSection(el, ctx) {
   // goes ahead. Not arrived: "interrupted, pick it again".
   const start = ctx.get();
   render();
-  if (!consentNotice && !start.decision) currentRecordingConsentNotice().then((notice) => {
-    if (!disposed) { consentNotice = notice; render(); }
-  });
+  if (!consentNotice && !start.decision) {
+    if (sessionMode) Promise.resolve(sb.rpc('session_recording_policy128', { p_session_id: ctx.sessionId })).then(({ data, error }) => {
+      if (disposed) return;
+      if (error || data?.available !== true || data.wording_version !== SESSION_CONSENT_VERSION128 || data.max_audio_days !== 90) {
+        noticeError = 'Recording is unavailable. You can still save human-written notes. Reopen the session to retry.';
+      } else consentNotice = { ...SESSION_NOTICE128 };
+      render();
+    }).catch(() => { if (!disposed) { noticeError = 'The recording notice could not be checked. Save human notes or reopen to retry.'; render(); } });
+    else currentRecordingConsentNotice().then((notice) => { if (!disposed) { consentNotice = notice; render(); } });
+  }
   if (start.recordingId && (start.status === 'uploading' || start.status === 'transcribing')) transcribe();
   else if (start.status === 'uploading') update({ status: 'interrupted' });
   transcriptSubscription = sb.auth?.onAuthStateChange?.((event, session) => {
@@ -805,7 +826,7 @@ export function mountRecordingSection(el, ctx) {
     transcriptObserver = new MutationObserver(transcriptContextChanged);
     transcriptObserver.observe(document.body, { childList: true, subtree: true });
   }
-  return { refresh: render, dispose };
+  return { refresh: render, dispose, acceptFile: picked };
 }
 
 // After the call log is saved: the answer and its recording join it. Never
@@ -950,7 +971,7 @@ async function recordingRead(promise) {
   finally { clearTimeout(timer); }
 }
 
-async function renderRecordingViewer(container, recordingId) {
+export async function renderRecordingViewer(container, recordingId) {
   if (!container?.isConnected) return null;
   recordingViewLoads.get(container)?.dispose?.();
   const request = {}, account = recordingViewIdentity(), route = window.location.hash;
@@ -992,7 +1013,7 @@ async function renderRecordingViewer(container, recordingId) {
     observer = new MutationObserver(changed);
     observer.observe(document.body, { childList: true, subtree: true });
     const response = await recordingRead(sb.from('call_recordings')
-      .select('id, patient_id, storage_path, status, summary, suggestions, transcript, duration_seconds, audio_deleted_at, audio_delete_reason, delete_audio_after_transcription, created_at, language, uploaded_by, transcription_complete, audio_quality, dropped')
+      .select('id, patient_id, care_session_id, storage_path, status, summary, suggestions, transcript, duration_seconds, audio_deleted_at, audio_delete_reason, delete_audio_after_transcription, created_at, language, uploaded_by, transcription_complete, audio_quality, dropped')
       .eq('id', recordingId).maybeSingle());
     if (!current()) return null;
     if (response?.error || !response?.data || response.data.id !== recordingId) { unavailable(); return null; }
@@ -1003,12 +1024,14 @@ async function renderRecordingViewer(container, recordingId) {
   const review = {required:r.transcription_complete!==true || r.audio_quality!=='clear' || r.suggestions?.note_review?.required===true
     || Array.isArray(r.dropped)&&r.dropped.some(d=>String(d?.field||'').startsWith('note.')),reasons:[]};
   container.innerHTML = `
-      <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">${r.delete_audio_after_transcription
+      <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">${r.care_session_id
+        ? 'Session audio is deleted after a complete clear transcript and a saved held session. Incomplete processing or review keeps it for at most 90 days. Unsaved uploads are cleared after a day. The transcript and written notes stay with the session.'
+        : r.delete_audio_after_transcription
         ? 'This recording uses the new cleanup policy: cloud audio is deleted after a complete clear transcript and a saved call. Incomplete processing or review keeps it for at most 90 days.'
-        : 'This recording uses the original policy: the protected cloud audio is retained for 90 days when linked to a saved call.'} The transcript and written notes stay with the call. The temporary app-held shared copy is cleaned separately after upload and saved-call attachment. The original in Phone or Files must be deleted manually.</p>
-      ${r.audio_deleted_at ? `<p style="color:var(--ink-2);margin:0 0 10px">${r.audio_delete_reason === 'completed_transcript_saved_call'
-        ? 'The cloud audio was deleted after the complete transcript and saved call were confirmed.'
-        : ['kept90days', 'kept 90 days'].includes(r.audio_delete_reason) ? 'The cloud audio was deleted after 90 days.' : 'The cloud audio has been deleted.'} The transcript stays with the call.</p>`
+        : 'This recording uses the original policy: the protected cloud audio is retained for 90 days when linked to a saved call.'} ${r.care_session_id ? 'Original files in Phone or Files must be deleted manually.' : 'The transcript and written notes stay with the call. The temporary app-held shared copy is cleaned separately after upload and saved-call attachment. The original in Phone or Files must be deleted manually.'}</p>
+      ${r.audio_deleted_at ? `<p style="color:var(--ink-2);margin:0 0 10px">${['completed_transcript_saved_call', 'completed_transcript_saved_session'].includes(r.audio_delete_reason)
+        ? `The cloud audio was deleted after the complete transcript and saved ${r.care_session_id ? 'session' : 'call'} were confirmed.`
+        : ['kept90days', 'kept 90 days'].includes(r.audio_delete_reason) ? 'The cloud audio was deleted after 90 days.' : 'The cloud audio has been deleted.'} The transcript stays with the ${r.care_session_id ? 'session' : 'call'}.</p>`
         : '<audio id="rec-audio" class="rec-audio" controls preload="none" style="width:100%;margin-bottom:10px"></audio>'}
       <p style="font:var(--t-xs);color:var(--ink-3);margin:0 0 8px">Recorded ${esc(fmtWhen(new Date(r.created_at).getTime()))}${r.duration_seconds ? ` · ${fmtDur(r.duration_seconds)}` : ''}${r.language ? ` · ${esc(r.language)}` : ''}. Only the caller, their managers and admins can open it.</p>
       ${recordingReviewHTML({review})}
@@ -1020,7 +1043,7 @@ async function renderRecordingViewer(container, recordingId) {
         : r.summary ? `<p style="margin:0 0 10px;color:var(--ink-2);white-space:pre-line"><strong>Summary (AI, not checked by a person):</strong> ${esc(r.summary)}</p>` : ''}
       <div id="rec-past-measurements"></div><button type="button" class="btn btn-ghost" data-recording-retry>Reload saved recording</button>`;
   container.querySelector('[data-recording-retry]').addEventListener('click', retry);
-  if (r.status === 'done' && Array.isArray(r.suggestions?.measurements) && r.suggestions.measurements.length) {
+  if (!r.care_session_id && r.status === 'done' && Array.isArray(r.suggestions?.measurements) && r.suggestions.measurements.length) {
     try {
       const { data: patient } = await recordingRead(sb.from('patients').select('consent_given').eq('id', r.patient_id).maybeSingle());
       if (current() && patient?.consent_given) mountCallMeasurements(container.querySelector('#rec-past-measurements'), r.patient_id, {
