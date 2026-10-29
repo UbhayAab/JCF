@@ -24,6 +24,7 @@ import { AVATAR_COLORS, avatarColor, initials } from '../utils/avatar.js';
 // Family text comes from outside (referral form, WhatsApp, uploads); staff names are typed by people.
 import { sanitize } from '../utils/validators.js';
 import { showModal } from '../components/modal.js';
+import {canViewNutritionAssignments127,openNutritionAssignmentHistory127} from '../components/nutritionAssignmentHistory127.js';
 
 
 let tab = 'care';   // 'care' | 'outreach'
@@ -49,11 +50,12 @@ export async function renderNutrition(container) {
         <h1>Nutrition</h1>
         <p class="header-subtitle" id="nut-sub" style="margin:4px 0 0"></p>
       </div>
-      <div class="nw-actions"><a class="btn btn-secondary btn-sm" href="#nutrition-tracker">${isManagerOrAdmin() ? "View all interns' requests" : 'Nutrition tracker'}</a><span class="badge badge-primary" id="nut-count">…</span></div>
+      <div class="nw-actions">${canViewNutritionAssignments127()?'<button type="button" class="btn btn-secondary btn-sm" data-nutrition-history>Assignment history</button>':''}<a class="btn btn-secondary btn-sm" href="#nutrition-tracker">${isManagerOrAdmin() ? "View all interns' requests" : 'Nutrition tracker'}</a><span class="badge badge-primary" id="nut-count">…</span></div>
     </div>
     <div class="chip-row" id="nut-tabs" style="margin:0 0 var(--s4)"></div>
     <div id="nut-panel"></div>`;
   counts = {};
+  container.querySelector('[data-nutrition-history]')?.addEventListener('click',()=>openNutritionAssignmentHistory127(container));
   paintTabs(container);
   await openTab(container);
   // Fill the other tab's number so the team can see at a glance whether
@@ -347,7 +349,7 @@ async function assignNutritionIntern(container, patient) {
   const modal = showModal({
     title: 'Assign to intern',
     content: `<p>Assign <strong>${sanitize(patient.full_name || 'this patient')}</strong> to an eligible nutrition intern.</p><p class="nw-muted">Active interns who are available today are listed with their current patient load.</p><div data-nutrition-assignees role="status">Loading interns...</div><p class="nw-error" data-assignment-error role="alert" hidden></p>`,
-    footer: '<button type="button" class="btn btn-secondary" data-assignment-cancel>Cancel</button><button type="button" class="btn btn-primary" data-assignment-save disabled>Assign patient</button>',
+    footer: '<button type="button" class="btn btn-secondary" data-assignment-history>View assignment history</button><button type="button" class="btn btn-secondary" data-assignment-cancel>Cancel</button><button type="button" class="btn btn-primary" data-assignment-save disabled>Assign patient</button>',
   });
   const list = modal.querySelector('[data-nutrition-assignees]');
   const submit = modal.querySelector('[data-assignment-save]');
@@ -355,6 +357,7 @@ async function assignNutritionIntern(container, patient) {
   let assignees = [];
   const current = () => modal.isCurrentModal() && getCurrentUser()?.id === userId && isManagerOrAdmin() && !isImpersonating();
   modal.querySelector('[data-assignment-cancel]').addEventListener('click', () => modal.closeOwnedModal());
+  modal.querySelector('[data-assignment-history]').addEventListener('click',()=>openNutritionAssignmentHistory127(container));
   try {
     const { data, error } = await getSupabase().rpc('get_nutrition_assignees');
     if (!current()) return;
