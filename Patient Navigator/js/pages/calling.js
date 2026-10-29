@@ -5,6 +5,7 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
+import { introContactSelection } from '../components/hopebotIntro.js';
 import { getCurrentUser, getRealProfile, getCurrentProfile, getUserRole, isImpersonating } from '../auth.js';
 import { showToast } from '../components/toast.js';
 import { openAssessmentFlow } from '../components/assessmentFlow.js';
@@ -200,7 +201,7 @@ function applySavedForm(saved) {
   }
   // The recording box comes back as left (a transcript in flight is asked for again).
   if (saved.recording) { form.recording = saved.recording; if (currentPatient) mountRecording(currentPatient); }
-  form.hopebotIntro = saved.hopebotIntro === true;
+  form.hopebotIntro = introContactSelection(saved.hopebotIntro);
   updateSubmit();
   saveActive();
 }
@@ -211,7 +212,7 @@ function blankForm() {
     fbPatient: '', fbCaregiver: '', consent: null, dateManual: false,
     // The recording's state (callRecording.js): reminder shown, the family's
     // answer, the upload and its transcript. Here so a new call clears it.
-    recording: null, hopebotIntro: false,
+    recording: null, hopebotIntro: null,
     // Set by recordConsentNow(). MUST live here: Object.assign(form,
     // blankForm()) is how a new call resets the form, and a key that is
     // absent from blankForm is never cleared - so a leftover true would
@@ -1068,8 +1069,8 @@ function mountCallHopebotIntro(p) {
   import('../components/hopebotIntro.js')
     .then((m) => { if (isCurrent()) return m.mountHopebotIntro(mount, p.patient_id, {
       stageForCall: true, isCurrent,
-      getStaged: () => form.hopebotIntro === true,
-      onStageChange: (selected) => { form.hopebotIntro = selected; saveActive(); },
+      getStaged: () => introContactSelection(form.hopebotIntro),
+      onStageChange: (selected) => { form.hopebotIntro = introContactSelection(selected); saveActive(); },
     }); })
     .catch(() => { if (isCurrent()) mount.textContent = 'HopeBot intro is unavailable. Refresh before trying again.'; });
 }
@@ -2287,7 +2288,8 @@ async function submitCallLog() {
   let confirmedCallId = null;
   const btn = document.getElementById('f-submit');
   const connected = form.dialStatus === 'connected';
-  const introWanted = form.hopebotIntro === true;
+  const introSelection = introContactSelection(form.hopebotIntro);
+  const introWanted = !!introSelection;
   const introPatientId = currentPatient.patient_id;
   const requestIntro = async (callId) => {
     if (!introWanted || !stillCurrent()) return null;
@@ -2295,7 +2297,7 @@ async function submitCallLog() {
     try {
       const m = await import('../components/hopebotIntro.js');
       if (!stillCurrent()) return null;
-      return await m.requestHopebotIntro(introPatientId, callId);
+      return await m.requestHopebotIntro(introPatientId, callId, introSelection);
     } catch {
       return { ok: false, error: 'The HopeBot request was not confirmed. Refresh the family card before trying again.' };
     }
