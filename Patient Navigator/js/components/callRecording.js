@@ -15,7 +15,8 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
-import { getCurrentProfile } from '../auth.js';
+import * as recordingAuth from '../auth.js';
+const { getCurrentProfile } = recordingAuth;
 import { showToast } from './toast.js';
 import { showModal, closeModal, confirmModal } from './modal.js';
 import { icon } from './icons.js';
@@ -408,6 +409,21 @@ export function mountRecordingSection(el, ctx) {
   const measurementStates = new Map(); // private to this mounted call, never an automatic write
   const sb = getSupabase();
   const inline = !!ctx.inline;
+  const transcriptAccount = recordingViewIdentity(), transcriptRoute = window.location.hash;
+  const transcriptOwner = recordingAuth.getCurrentUser?.()?.id;
+  let transcriptRead = null, transcriptSubscription, transcriptObserver;
+  const transcriptContextChanged = () => {
+    if (disposed) return;
+    if (el.isConnected && transcriptAccount === recordingViewIdentity() && transcriptRoute === window.location.hash) return;
+    dispose();
+    if (el.isConnected) el.innerHTML = '<p role="status">Open the recording again from your current account.</p>';
+  };
+  function dispose() {
+    if (disposed) return;
+    disposed = true; transcriptRead = null; transcripts.clear(); measurementBox?.dispose();
+    transcriptSubscription?.unsubscribe?.(); transcriptObserver?.disconnect();
+    window.removeEventListener('hashchange', transcriptContextChanged);
+  }
   // A question before something that cannot be undone: a modal on the portal, inside the box in a modal.
   const confirmFirst = (text, label, run, title) => {
     if (!inline) { confirmModal(text, run, { title, confirmLabel: label }); return; }
@@ -491,7 +507,7 @@ export function mountRecordingSection(el, ctx) {
         ${note || `<p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">${r.quality === 'no_speech' ? 'No conversation was heard in this recording.' : 'No call note could be made from this recording.'}</p>`}
         <p style="font:var(--t-xs);color:var(${r.auto_apply === false ? '--ink-2' : '--ok'});margin:0 0 8px">${filled}</p>
         ${transcripts.has(rec.recordingId)
-          ? `<details><summary style="cursor:pointer;font:var(--t-xs);color:var(--ink-2)">Show the transcript (${transcripts.get(rec.recordingId).length} turns${r.language ? `, ${esc(r.language)}` : ''})</summary>
+          ? `<details open><summary style="cursor:pointer;font:var(--t-xs);color:var(--ink-2)">Show the transcript (${transcripts.get(rec.recordingId).length} turns${r.language ? `, ${esc(r.language)}` : ''})</summary>
           <div style="max-height:260px;overflow-y:auto;margin-top:6px">${transcripts.get(rec.recordingId).map((t) => `<p style="font:var(--t-xs);margin:0 0 4px"><strong>${t.speaker === 'caller' ? 'You' : t.speaker === 'family' ? 'Family' : 'Someone'}:</strong> ${esc(t.text)}</p>`).join('')}</div></details>`
           : btn('rec-read', 'Read the transcript', 'btn-ghost', 'fileText')}
         <div id="rec-measurements"></div>
@@ -744,10 +760,24 @@ export function mountRecordingSection(el, ctx) {
     el.querySelector('#rec-retry')?.addEventListener('click', () => transcribe());
     el.querySelector('#rec-read')?.addEventListener('click', async () => {
       const id = ctx.get().recordingId;
-      if (!inline) { openRecordingViewer(id); return; }
-      const { data, error } = await sb.from('call_recordings').select('transcript').eq('id', id).maybeSingle();
-      if (error || !Array.isArray(data?.transcript)) { showToast('The transcript could not be opened just now.', 'warning'); return; }
-      if (sameRecording(id)) { transcripts.set(id, data.transcript); render(); }
+      const alive = () => sameRecording(id) && el.isConnected && transcriptAccount === recordingViewIdentity()
+        && transcriptRoute === window.location.hash;
+      if (!alive() || transcriptRead) return;
+      if (!inline) { void openRecordingViewer(id); return; }
+      const operation = {}, button = el.querySelector('#rec-read'); transcriptRead = operation;
+      const current = () => transcriptRead === operation && alive();
+      button.disabled = true; button.textContent = 'Opening transcript...';
+      try {
+        const response = await recordingRead(sb.from('call_recordings').select('transcript').eq('id', id).maybeSingle());
+        if (!current()) return;
+        if (response?.error || !Array.isArray(response?.data?.transcript)) throw new Error('recording_unavailable');
+        transcripts.set(id, response.data.transcript); render();
+      } catch {
+        if (current()) showToast('The saved transcript could not be opened. Your form is kept. Check your connection or access and try again.', 'warning');
+      } finally {
+        const owned = current(); if (transcriptRead === operation) transcriptRead = null;
+        if (owned && button.isConnected) { button.disabled = false; button.textContent = 'Read the transcript'; }
+      }
     });
     el.querySelector('#rec-remove')?.addEventListener('click', () => confirmFirst('Remove this recording? The transcript goes with it.', 'Remove',
       removeRecording, 'Remove recording'));
@@ -763,7 +793,19 @@ export function mountRecordingSection(el, ctx) {
   });
   if (start.recordingId && (start.status === 'uploading' || start.status === 'transcribing')) transcribe();
   else if (start.status === 'uploading') update({ status: 'interrupted' });
-  return { refresh: render, dispose() { disposed = true; measurementBox?.dispose(); } };
+  transcriptSubscription = sb.auth?.onAuthStateChange?.((event, session) => {
+    if (event === 'SIGNED_OUT' || transcriptOwner && session?.user?.id && transcriptOwner !== session.user.id) {
+      dispose();
+      if (el.isConnected) el.innerHTML = '<p role="status">Open the recording again from your current account.</p>';
+    } else transcriptContextChanged();
+  })?.data?.subscription;
+  if (disposed) transcriptSubscription?.unsubscribe?.();
+  else {
+    window.addEventListener('hashchange', transcriptContextChanged);
+    transcriptObserver = new MutationObserver(transcriptContextChanged);
+    transcriptObserver.observe(document.body, { childList: true, subtree: true });
+  }
+  return { refresh: render, dispose };
 }
 
 // After the call log is saved: the answer and its recording join it. Never
@@ -893,12 +935,69 @@ export async function mountLogRecording(el, { log, meId, consentOnFile, callSeco
 
 // A recording's player, call note and transcript, in a modal (the portal's
 // history) or inside any container (the Edit call modal, which a second modal would close).
+// Read ownership is separate from transcription and never changes a saved call.
+const recordingViewLoads = new WeakMap();
+const recordingViewIdentity = () => JSON.stringify([
+  recordingAuth.getCurrentUser?.()?.id, recordingAuth.getRealProfile?.()?.id,
+  recordingAuth.getRealProfile?.()?.role, recordingAuth.getRealProfile?.()?.is_active,
+  getCurrentProfile()?.id, getCurrentProfile()?.role, recordingAuth.isImpersonating?.(),
+]);
+async function recordingRead(promise) {
+  let timer;
+  try { return await Promise.race([promise, new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('recording_read_timeout')), 8000);
+  })]); }
+  finally { clearTimeout(timer); }
+}
+
 async function renderRecordingViewer(container, recordingId) {
-  const sb = getSupabase();
-  const { data: r, error } = await sb.from('call_recordings')
-    .select('id, patient_id, storage_path, status, summary, suggestions, transcript, duration_seconds, audio_deleted_at, audio_delete_reason, delete_audio_after_transcription, created_at, language, uploaded_by, transcription_complete, audio_quality, dropped')
-    .eq('id', recordingId).maybeSingle();
-  if (error || !r) { showToast('This recording is not open to you.', 'warning'); return null; }
+  if (!container?.isConnected) return null;
+  recordingViewLoads.get(container)?.dispose?.();
+  const request = {}, account = recordingViewIdentity(), route = window.location.hash;
+  const ownerId = recordingAuth.getCurrentUser?.()?.id;
+  let ended = false, subscription, observer;
+  recordingViewLoads.set(container, request);
+  const overlay = container.closest('.modal-overlay');
+  const current = () => !ended && container.isConnected && recordingViewLoads.get(container) === request
+    && account === recordingViewIdentity() && route === window.location.hash && overlay?.isCurrentModal?.() !== false;
+  const end = (hide = false) => {
+    if (ended) return;
+    ended = true; subscription?.unsubscribe?.(); observer?.disconnect();
+    window.removeEventListener('hashchange', changed);
+    if (recordingViewLoads.get(container) !== request) return;
+    recordingViewLoads.delete(container);
+    if (hide && container.isConnected) {
+      container.innerHTML = '<p role="status">This recording view has ended. Open it again from your current account.</p>';
+      overlay?.closeOwnedModal?.();
+    }
+  };
+  const changed = () => { if (!current()) end(true); };
+  request.dispose = () => end();
+  const retry = () => { if (current()) void renderRecordingViewer(container, recordingId); };
+  const unavailable = () => {
+    if (!current()) return;
+    container.innerHTML = '<p role="status">The saved recording and transcript could not be opened. Check your connection or access, then try again. No new transcript has been requested.</p><button type="button" class="btn btn-secondary" data-recording-retry>Try again</button>';
+    container.querySelector('[data-recording-retry]').addEventListener('click', retry);
+  };
+  container.innerHTML = '<p role="status">Opening the saved recording and transcript...</p>';
+  let sb, r;
+  try {
+    sb = getSupabase();
+    subscription = sb.auth?.onAuthStateChange?.((event, session) => {
+      if (event === 'SIGNED_OUT' || account !== recordingViewIdentity()
+          || ownerId && session?.user?.id && ownerId !== session.user.id) end(true);
+    })?.data?.subscription;
+    if (ended) { subscription?.unsubscribe?.(); return null; }
+    window.addEventListener('hashchange', changed);
+    observer = new MutationObserver(changed);
+    observer.observe(document.body, { childList: true, subtree: true });
+    const response = await recordingRead(sb.from('call_recordings')
+      .select('id, patient_id, storage_path, status, summary, suggestions, transcript, duration_seconds, audio_deleted_at, audio_delete_reason, delete_audio_after_transcription, created_at, language, uploaded_by, transcription_complete, audio_quality, dropped')
+      .eq('id', recordingId).maybeSingle());
+    if (!current()) return null;
+    if (response?.error || !response?.data || response.data.id !== recordingId) { unavailable(); return null; }
+    r = response.data;
+  } catch { unavailable(); return null; }
   const turns = Array.isArray(r.transcript) ? r.transcript : [];
   const n = r.suggestions?.note || null;
   const review = {required:r.transcription_complete!==true || r.audio_quality!=='clear' || r.suggestions?.note_review?.required===true
@@ -913,44 +1012,50 @@ async function renderRecordingViewer(container, recordingId) {
         : '<audio id="rec-audio" class="rec-audio" controls preload="none" style="width:100%;margin-bottom:10px"></audio>'}
       <p style="font:var(--t-xs);color:var(--ink-3);margin:0 0 8px">Recorded ${esc(fmtWhen(new Date(r.created_at).getTime()))}${r.duration_seconds ? ` · ${fmtDur(r.duration_seconds)}` : ''}${r.language ? ` · ${esc(r.language)}` : ''}. Only the caller, their managers and admins can open it.</p>
       ${recordingReviewHTML({review})}
-      ${n ? `<div style="margin:0 0 10px"><p style="font:var(--t-xs);color:var(--ink-3);margin:0">Call note (AI, not checked by a person):</p>${noteHTML({ note: n })}</div>`
-        : r.summary ? `<p style="margin:0 0 10px;color:var(--ink-2);white-space:pre-line"><strong>Summary (AI, not checked by a person):</strong> ${esc(r.summary)}</p>` : ''}
-      ${turns.length ? `<details ${n ? '' : 'open'}><summary style="cursor:pointer;font:var(--t-xs);color:var(--ink-2)">The transcript (${turns.length} turns)</summary>
+      ${turns.length ? `<details open><summary style="cursor:pointer;font:var(--t-xs);color:var(--ink-2)">The transcript (${turns.length} turns)</summary>
         <div style="max-height:320px;overflow-y:auto;border-top:1px solid var(--line);padding-top:8px;margin-top:6px">${turns.map((t) =>
         `<p style="margin:0 0 6px"><strong>${t.speaker === 'caller' ? 'Caller' : t.speaker === 'family' ? 'Family' : 'Someone'}:</strong> ${esc(t.text)}</p>`).join('')}</div></details>`
-        : `<p style="color:var(--ink-3);margin:0">${r.status === 'done' ? 'No speech was found.' : 'No transcript yet.'}</p>`}
-      <div id="rec-past-measurements"></div>`;
+        : `<p style="color:var(--ink-3);margin:0">${r.status === 'done' ? 'No saved transcript text is available for this recording.' : 'No transcript yet.'}</p>`}
+      ${n ? `<div style="margin:0 0 10px"><p style="font:var(--t-xs);color:var(--ink-3);margin:0">Call note (AI, not checked by a person):</p>${noteHTML({ note: n })}</div>`
+        : r.summary ? `<p style="margin:0 0 10px;color:var(--ink-2);white-space:pre-line"><strong>Summary (AI, not checked by a person):</strong> ${esc(r.summary)}</p>` : ''}
+      <div id="rec-past-measurements"></div><button type="button" class="btn btn-ghost" data-recording-retry>Reload saved recording</button>`;
+  container.querySelector('[data-recording-retry]').addEventListener('click', retry);
   if (r.status === 'done' && Array.isArray(r.suggestions?.measurements) && r.suggestions.measurements.length) {
-    const { data: patient } = await sb.from('patients').select('consent_given').eq('id', r.patient_id).maybeSingle();
-    if (container.isConnected && patient?.consent_given) mountCallMeasurements(container.querySelector('#rec-past-measurements'), r.patient_id, {
-      suggestions: r.suggestions.measurements, recordingId, sb,
-      allowed: () => container.isConnected && (!container.closest('.modal-overlay') || container.closest('.modal-overlay').classList.contains('active')),
-    });
+    try {
+      const { data: patient } = await recordingRead(sb.from('patients').select('consent_given').eq('id', r.patient_id).maybeSingle());
+      if (current() && patient?.consent_given) mountCallMeasurements(container.querySelector('#rec-past-measurements'), r.patient_id, {
+        suggestions: r.suggestions.measurements, recordingId, sb, allowed: current,
+      });
+    } catch {
+      if (current()) container.querySelector('#rec-past-measurements').textContent = 'Suggested measurement controls could not be loaded. The saved transcript is still available.';
+    }
   }
-  if (!r.audio_deleted_at) wirePlayer(container.querySelector('.rec-audio'), r.storage_path);
+  if (current() && !r.audio_deleted_at) void wirePlayer(container.querySelector('.rec-audio'), r.storage_path, current);
   return r;
 }
 
 export async function openRecordingViewer(recordingId) {
   const overlay = showModal({ title: 'Call recording', size: 'lg', content: '<p style="color:var(--ink-3);margin:0">Opening the recording...</p>' });
-  const r = await renderRecordingViewer(overlay.querySelector('.modal-body'), recordingId);
-  if (!r) closeModal();
+  await renderRecordingViewer(overlay.querySelector('.modal-body'), recordingId);
 }
 
-async function wirePlayer(audio, storagePath) {
+async function wirePlayer(audio, storagePath, current = () => true) {
   if (!audio) return;
   const sb = getSupabase();
-  const sign = async () => (await sb.storage.from(BUCKET).createSignedUrl(storagePath, SIGNED_URL_SECONDS)).data?.signedUrl || null;
+  const sign = async () => {
+    try { return (await recordingRead(sb.storage.from(BUCKET).createSignedUrl(storagePath, SIGNED_URL_SECONDS)))?.data?.signedUrl || null; }
+    catch { return null; }
+  };
   const url = await sign();
-  if (!url) { audio.outerHTML = '<p style="color:var(--danger);margin:0 0 10px">The audio could not be opened just now.</p>'; return; }
+  if (!current() || !document.body.contains(audio)) return;
+  if (!url) { audio.outerHTML = '<p style="color:var(--danger);margin:0 0 10px">The audio could not be opened just now. The saved transcript is still available.</p>'; return; }
   audio.src = url;
-  // The link lasts five minutes; a longer listen asks for a fresh one and carries on.
   let renewals = 0;
   audio.addEventListener('error', async () => {
-    if (renewals++ >= 6 || !document.body.contains(audio)) return;
+    if (renewals++ >= 6 || !current() || !document.body.contains(audio)) return;
     const at = audio.currentTime; const playing = !audio.paused;
     const fresh = await sign();
-    if (!fresh) return;
+    if (!fresh || !current() || !document.body.contains(audio)) return;
     audio.src = fresh; audio.currentTime = at;
     if (playing) audio.play().catch(() => {});
   });

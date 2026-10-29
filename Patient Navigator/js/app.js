@@ -378,30 +378,53 @@ function gateAndBoot() {
 function renderAccountProblemScreen() {
   const app = document.getElementById('app');
   app.innerHTML = `
-    <div class="login-page">
-      <div class="login-card">
-        <div class="login-logo">
-          <div class="logo-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
-          </div>
-          <h1>We couldn't load your account</h1>
-          <p>This is usually a weak connection, or a sign-in that is no longer valid on this device.</p>
-        </div>
-        <div class="card">
-          <button class="btn btn-primary btn-lg" style="width:100%" id="acct-retry">Try again</button>
-          <button class="btn btn-secondary btn-lg" style="width:100%;margin-top:var(--space-3)" id="acct-signout">Sign out &amp; sign in again</button>
-          <p style="text-align:center;margin-top:var(--space-4);font-size:var(--font-xs);color:var(--color-text-muted)">
-            If this keeps happening, ask your administrator to check your account.
-          </p>
-        </div>
+    <div class="login-page"><div class="login-card">
+      <div class="login-logo"><h1>We couldn't load your account</h1>
+        <p>Your account details could not be confirmed. Try again without signing out.</p></div>
+      <div class="card">
+        <p id="acct-status" role="status" style="margin-bottom:16px">Your sign-in is kept while we check the connection.</p>
+        <button class="btn btn-primary btn-lg" style="width:100%" id="acct-retry">Try again</button>
+        <button class="btn btn-secondary btn-lg" style="width:100%;margin-top:var(--space-3)" id="acct-signout">Sign out &amp; sign in again</button>
+        <p style="text-align:center;margin-top:var(--space-4);font-size:var(--font-xs);color:var(--color-text-muted)">If this keeps happening, ask your administrator to check your account.</p>
       </div>
-    </div>`;
-  document.getElementById('acct-retry')?.addEventListener('click', () => location.reload());
-  document.getElementById('acct-signout')?.addEventListener('click', async () => {
-    const btn = document.getElementById('acct-signout');
-    btn.disabled = true; btn.innerHTML = '<div class="spinner" style="margin:0 auto"></div>';
+    </div></div>`;
+  const retry = app.querySelector('#acct-retry'), status = app.querySelector('#acct-status');
+  const owned = () => app.isConnected && document.getElementById('app') === app && retry.isConnected && app.contains(retry);
+  let checking = false;
+  retry.addEventListener('click', async () => {
+    if (checking || !owned()) return;
+    const ownerId = getCurrentUser()?.id;
+    checking = true; retry.disabled = true; retry.textContent = 'Checking account...';
+    status.textContent = 'Checking your sign-in and account details. Your saved draft stays on this device.';
+    try {
+      const session = await initAuth();
+      if (!owned()) return;
+      if (ownerId && getCurrentUser()?.id && ownerId !== getCurrentUser().id) {
+        status.textContent = 'The signed-in account changed. Try again for the current account.';
+        return;
+      }
+      if (!session) { appBooted = false; renderLoginPage(); return; }
+      const user = getCurrentUser(), profile = getRealProfile();
+      if (session.user?.id !== user?.id || !profile || profile.id !== user?.id) {
+        status.textContent = 'Your account details still could not be confirmed. Check your connection and try again. You have not been signed out.';
+        return;
+      }
+      // Reuse the real-account gate, including the existing password rule.
+      gateAndBoot();
+    } catch {
+      if (owned()) status.textContent = 'Your account could not be checked just now. Check your connection and try again.';
+    } finally {
+      checking = false;
+      if (owned()) { retry.disabled = false; retry.textContent = 'Try again'; }
+    }
+  });
+  app.querySelector('#acct-signout').addEventListener('click', async () => {
+    if (!owned()) return;
+    const btn = app.querySelector('#acct-signout');
+    btn.disabled = true; btn.textContent = 'Signing out...';
     const { clearSession } = await import('./auth.js');
-    await clearSession();          // never throws: guarantees local teardown
+    await clearSession();
+    if (!owned()) return;
     appBooted = false;
     renderLoginPage();
   });
@@ -511,7 +534,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261029d';  // bumped on every breaking deploy
+const APP_BUILD = '20261029e';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
