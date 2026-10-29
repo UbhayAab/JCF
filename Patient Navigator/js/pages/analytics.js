@@ -308,6 +308,7 @@ export async function renderAnalytics(container) {
           <p class="header-subtitle" style="margin:0">Live. The story updates as the team works</p>
         </div>
         <div class="flex gap-2 items-center" style="flex-wrap:wrap">
+          ${isManagerOrAdmin() ? '<a href="#analytics/hopebot" class="btn btn-secondary btn-sm">HopeBot analytics</a>' : ''}
           <a href="#report" class="btn btn-secondary btn-sm" title="Open the monthly impact report and download it as a PDF"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>Monthly report</a>
           <span id="live-pill" style="display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:11px;color:var(--ink-3);padding:5px 10px;border:1px solid var(--line-2);border-radius:99px">
             <span style="width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb, var(--ok) 13%, transparent)"></span>

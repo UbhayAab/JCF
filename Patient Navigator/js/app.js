@@ -511,7 +511,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261029b';  // bumped on every breaking deploy
+const APP_BUILD = '20261029c';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -568,6 +568,7 @@ async function init() {
   registerRoute('calls', (c) => renderCalls(c), { requiresAuth: true, roles: CARE_ROLES });
   registerRoute('admin', (c, p) => renderAdmin(c, p), { requiresAuth: true, roles: ['admin', 'manager'] });
   registerRoute('analytics', (c) => renderAnalytics(c), { requiresAuth: true, roles: ['admin', 'manager', 'content'] });
+  registerRoute('analytics/hopebot', (c) => import('./pages/hopebotAnalytics.js').then(m => m.renderHopebotAnalytics(c)), { requiresAuth: true, roles: ['admin', 'manager'] });
   registerRoute('calling', (c) => renderCalling(c), { requiresAuth: true, roles: CARE_ROLES });
   registerRoute('team', (c) => renderTeam(c), { requiresAuth: true, roles: ['admin', 'manager'] });
   registerRoute('circles', (c) => import('./components/circleMessages.js').then(m=>{
