@@ -9,6 +9,7 @@
 
 import { getSupabase } from '../supabase.js';
 import { getCurrentProfile, isManagerOrAdmin, getUserRole, isImpersonating } from '../auth.js';
+import { captureSpecialistScope, specialistScopeCurrent, specialistRows, specialistCount } from '../utils/specialistScope.js';
 import { formatRelativeTime, capitalize } from '../utils/formatters.js';
 import { measureLabel } from '../utils/catalog.js';
 import { showToast } from '../components/toast.js';
@@ -185,15 +186,19 @@ async function loadCallerAvailability() {
 }
 
 async function renderSpecialistStats(id) {
+  const identity = captureSpecialistScope();
+  const originalHero = document.getElementById('hero-metrics');
+  const originalGrid = document.getElementById('stats');
+  if (!specialistScopeCurrent(identity) || identity.id !== id) return;
   const sb = getSupabase();
   const role = getUserRole();
   let s = {};
-  try { const { data } = await sb.rpc('get_specialist_stats', { p_user_id: id }); s = data || {}; } catch (e) { console.warn('specialist stats', e); }
+  try { const { data, error } = await sb.rpc('get_specialist_stats', { p_user_id: id }); if (error) throw error; s = data || {}; } catch (e) { console.warn('specialist stats', e); }
   // Optional outreach the builder picked for this nutritionist today (sql/88).
   let outMine = null;
   if (role === 'nutritionist') {
     try {
-      const { data } = await sb.rpc('get_nutrition_outreach');
+      const { data } = await specialistRows(sb, 'outreach', identity);
       // By the person on screen: 'mine' is the signed-in account's, which a
       // manager viewing as a nutritionist is not (Fixboard #26).
       outMine = (data || []).filter(r => r.assigned_to === id).length;
@@ -210,15 +215,20 @@ async function renderSpecialistStats(id) {
     if (error) throw error;
     calls = data;
   } catch (e) { console.warn('call counts', e); }
-  // Fall back gracefully if the DB predates v49 (no mine/pool split yet).
-  const training = !!getCurrentProfile()?.on_probation;
-  const mine = training ? (s.domain_patients ?? 0) : (s.my_patients ?? s.domain_patients ?? 0);
-  const pool = s.domain_patients ?? 0;
+  if (!specialistScopeCurrent(identity)
+      || document.getElementById('hero-metrics') !== originalHero
+      || document.getElementById('stats') !== originalGrid
+      || originalHero?.isConnected === false || originalGrid?.isConnected === false) return;
+  // Ownership is explicit. A missing own count never turns the whole pool into yours.
+  const training = identity.probation;
+  const ownCount = specialistCount(s.my_patients);
+  const mine = ownCount ?? '…';
+  const pool = specialistCount(s.domain_patients);
   const poolName = role === 'nutritionist' ? 'nutrition pool' : 'well-being pool';
   const hero = document.getElementById('hero-metrics');
   if (hero) hero.innerHTML = `
     <div class="hero-card teal"><span class="hc-ico">${icon('users')}</span><div class="hc-label">People in your care</div><div class="hc-num">${mine}</div>
-      <div class="hc-sub">${training ? 'assigned to you during training' : s.my_patients != null ? `yours, of ${pool} in the ${poolName}` : 'routed to you for support'}</div></div>
+      <div class="hc-sub">${ownCount == null ? 'Assignment count unavailable. Refresh to try again.' : training ? 'assigned to you during training' : pool != null ? `yours, of ${pool} in the ${poolName}` : 'assigned to you for support'}</div></div>
     <div class="hero-card paper"><span class="hc-ico">${icon('activity')}</span><div class="hc-label">Well-being check-ins</div><div class="hc-num">${s.assessments_logged || 0}</div>
       <div class="hc-sub">${s.assessments_month || 0} this month</div></div>`;
   const grid = document.getElementById('stats');
@@ -241,11 +251,13 @@ async function renderSpecialistStats(id) {
 async function loadSpecialistPeople(role) {
   const sb = getSupabase();
   const me = getCurrentProfile();
+  const identity = captureSpecialistScope();
   const el = document.getElementById('due-today'); const countEl = document.getElementById('due-count');
   if (!el || !me?.id) return;
   try {
     if (role === 'nutritionist') {
-      const { data, error } = await sb.rpc('get_nutrition_worklist');
+      const { data, error } = await specialistRows(sb, 'care', identity);
+      if (!specialistScopeCurrent(identity, el) || document.getElementById('due-today') !== el) return;
       if (error) throw error;
       const rows = data || [];
       const training = !!me.on_probation;
@@ -288,6 +300,7 @@ async function loadSpecialistPeople(role) {
         .eq('assigned_to', me.id).in('status', ['agreed', 'scheduled'])
         .order('scheduled_at', { ascending: true }).limit(8);
       if (error) throw error;
+      if (!specialistScopeCurrent(identity, el) || document.getElementById('due-today') !== el) return;
       const rows = data || [];
       if (countEl) countEl.textContent = rows.length;
       if (!rows.length) {
@@ -302,6 +315,7 @@ async function loadSpecialistPeople(role) {
       el.querySelectorAll('[data-pid]').forEach(r => r.addEventListener('click', () => { if (r.dataset.pid) navigate('patients/' + r.dataset.pid); }));
     }
   } catch (err) {
+    if (!specialistScopeCurrent(identity, el) || document.getElementById('due-today') !== el) return;
     console.error('Specialist people error:', err);
     el.innerHTML = `<div class="empty" style="padding:var(--s6)"><p>Could not load your people.</p></div>`;
   }

@@ -12,6 +12,7 @@
 
 import { getSupabase } from '../supabase.js';
 import { getCurrentProfile, getUserRole, isManagerOrAdmin, getCurrentUser, isImpersonating } from '../auth.js';
+import { captureSpecialistScope, specialistScopeCurrent, specialistScopeKey, specialistRows } from '../utils/specialistScope.js';
 import { showToast } from '../components/toast.js';
 import { icon } from '../components/icons.js';
 import { navigate } from '../router.js';
@@ -30,10 +31,16 @@ let scope = null;   // 'mine' | 'unclaimed' | 'all': picked after first load
 let query = '';     // the search box
 let outScope = null;   // 'mine' | 'all': picked after first load
 let outQuery = '';
+let viewedScope = '';
 let counts = {};    // tab -> how many, filled in as each list arrives
 const manuallyAssignedOnly = () => !!getCurrentProfile()?.on_probation;
 
 export async function renderNutrition(container) {
+  const nextScope = specialistScopeKey(captureSpecialistScope());
+  if (viewedScope !== nextScope) {
+    viewedScope = nextScope; careRows = []; counts = {}; scope = null; outScope = null;
+    query = ''; outQuery = ''; tab = 'care';
+  }
   if (manuallyAssignedOnly()) { scope = 'assigned'; outScope = 'assigned'; }
   else { if (scope === 'assigned') scope = null; if (outScope === 'assigned') outScope = null; }
   container.innerHTML = `
@@ -81,14 +88,18 @@ function paintTabs(container) {
 }
 
 async function otherCount(container) {
+  const identity = captureSpecialistScope();
+  if (!specialistScopeCurrent(identity, container)) return;
   const sb = getSupabase();
   try {
     if (counts.outreach == null) {
-      const { data } = await sb.rpc('get_nutrition_outreach');
+      const { data } = await specialistRows(sb, 'outreach', identity);
+      if (!specialistScopeCurrent(identity, container)) return;
       counts.outreach = (data || []).length;
     }
     if (counts.care == null) {
-      const { data } = await sb.rpc('get_nutrition_worklist');
+      const { data } = await specialistRows(sb, 'care', identity);
+      if (!specialistScopeCurrent(identity, container)) return;
       counts.care = (data || []).length;
     }
     paintTabs(container);
@@ -147,16 +158,20 @@ function haystack(r) {
 let careRows = [];
 
 async function load(container) {
+  const identity = captureSpecialistScope();
+  if (!specialistScopeCurrent(identity, container)) return;
   const sb = getSupabase();
   const list = container.querySelector('#nut-list');
   if (!list) return;
   try {
-    const { data, error } = await sb.rpc('get_nutrition_worklist');
+    const { data, error } = await specialistRows(sb, 'care', identity);
     if (error) throw error;
+    if (!specialistScopeCurrent(identity, container)) return;
     careRows = data || [];
     counts.care = careRows.length; paintTabs(container);
     paint(container);
   } catch (e) {
+    if (!specialistScopeCurrent(identity, container)) return;
     list.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Couldn't load the worklist</h4><p>${sanitize(e.message)}</p></div>`;
   }
 }
@@ -488,15 +503,19 @@ function outHaystack(r) {
 }
 
 async function loadOutreach(container) {
+  const identity = captureSpecialistScope();
+  if (!specialistScopeCurrent(identity, container)) return;
   const sb = getSupabase();
   const list = container.querySelector('#out-list');
   if (!list) return;
   try {
-    const { data, error } = await sb.rpc('get_nutrition_outreach');
+    const { data, error } = await specialistRows(sb, 'outreach', identity);
     if (error) throw error;
+    if (!specialistScopeCurrent(identity, container)) return;
     counts.outreach = (data || []).length; paintTabs(container);
     paintOutreach(container, data || []);
   } catch (e) {
+    if (!specialistScopeCurrent(identity, container)) return;
     list.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Couldn't load the outreach list</h4><p>${sanitize(e.message)}</p></div>`;
   }
 }
