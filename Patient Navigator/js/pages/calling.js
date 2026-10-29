@@ -70,6 +70,7 @@ let saturdayMountGeneration = 0;
 let hopebotUsageSection = null;
 let portalFeedback = null;
 let portalSaving = null;
+let portalSkipping = null;
 let callingMount = null;
 let callingAccount = '';
 let callingRoute = '';
@@ -689,11 +690,11 @@ async function toggleAvailability() {
 }
 
 // ============================================================ Get next
-// justSkippedId: the row a Skip just sank. If it comes straight back, the
-// caller is on the last one and needs to be told that, not shown the same
-// screen twice with no explanation.
-async function getNextCall(justSkippedId = null) {
-  if (portalFeedback) return;
+// skipContext identifies a confirmed Skip. A repeated queue row alone does
+// not prove that this person is the only eligible call; keep the saved notes
+// and ask the caller to check their daily list when ordering is unconfirmed.
+async function getNextCall(skipContext = null) {
+  if (portalFeedback || portalSaving || portalSkipping) return;
   if (!callingWritable()) { if (callingCurrent()) showToast('Return to your own active account to log a call.', 'info'); return; }
   if (hopebotUsageSection?.hasOpenCall()) return;
   const generation = callingGeneration;
@@ -718,8 +719,12 @@ async function getNextCall(justSkippedId = null) {
       if (!callingCurrent(generation) || !callingWritable()) return;
       await mountQueueEmpty(); return;
     }
-    if (justSkippedId && data.queue_id === justSkippedId) {
-      showToast(`${(data.full_name || 'They').split(' ')[0]} is the only person left on your list today, so they come straight back.`, 'info', 9000);
+    if (skipContext && data.queue_id === skipContext.queueId) {
+      // A repeated row is not evidence that the list contains one person.
+      // Keep the existing draft when a concurrent claim/order cannot be confirmed.
+      saveActive();
+      showToast('The skipped call came back before another could be confirmed. Your notes are kept. Refresh your daily list to check the remaining calls.', 'warning', 9000);
+      return;
     }
     await startCallSession(data);
   } catch (err) {
@@ -739,6 +744,9 @@ async function getNextCall(justSkippedId = null) {
 // One entry into the active-call view: get_next_call and the tappable
 // Today's list both land here with the same claimed-queue JSON.
 async function startCallSession(data) {
+  const generation = callingGeneration, account = callingIdentity();
+  const current = () => callingCurrent(generation) && callingWritable() && callingIdentity() === account
+    && currentQueueId === data.queue_id && currentPatient?.patient_id === data.patient_id;
   clearHopebotUsage();
   clearSaturdaySession();
   // First, before any wait: a transcript still on its way belongs to the call
@@ -751,7 +759,10 @@ async function startCallSession(data) {
   clearInterval(timerInterval); timerInterval = null;
   await Promise.all([loadPatientPitches(data.patient_id), loadPatientSessions(data.patient_id), loadPatientPriority(data.patient_id),
                      loadPatientServices(data.patient_id), loadOpenLoopsForCall(data.patient_id), loadContextFor(data.patient_id)]);
-  currentHistory = await loadPatientHistory(data.patient_id);
+  if (!current()) return;
+  const history = await loadPatientHistory(data.patient_id);
+  if (!current()) return;
+  currentHistory = history;
   currentPatient = withContextPhones(data);
   saveActive();
   mountActive(currentPatient, currentHistory);
@@ -2213,54 +2224,60 @@ function resumeRunningTimer() { paintTimerRunning(); }
 // today's list and come back after the rest. Only a submitted outcome
 // (connected / not-picked-up) actually removes them from today.
 async function skipPatient() {
-  if (!currentQueueId) return;
-  const sb = getSupabase();
-  const name = (currentPatient?.full_name || 'They').split(' ')[0];
+  if (!callingWritable() || portalFeedback || portalSaving || portalSkipping || !currentQueueId || !currentPatient) return;
+  const operation = {}, generation = callingGeneration, account = callingIdentity();
+  const queueId = currentQueueId, patientId = currentPatient.patient_id;
+  const name = (currentPatient.full_name || 'They').split(' ')[0];
   const btn = document.getElementById('f-skip');
+  const current = () => portalSkipping === operation && callingCurrent(generation) && callingWritable()
+    && callingIdentity() === account && currentQueueId === queueId && currentPatient?.patient_id === patientId;
+  portalSkipping = operation;
   if (btn) btn.disabled = true;
-  // skip_call used to return void, so a skip RLS or the queue trigger had
-  // already discarded looked exactly like a skip that worked: the toast said
-  // "moved down", the draft was wiped, and the patient had not moved at all.
-  // It now returns an outcome, so we only clear the call when something
-  // really happened, and a refusal keeps every note the caller typed.
-  const { data, error } = await sb.rpc('skip_call', { p_queue_id: currentQueueId });
-  if (error) {
-    // Two of skip_call's refusals mean the row has left this caller for good
-    // ("no longer on your list", "belongs to <someone>"). Submit cannot rescue
-    // those either, so re-enabling the button just leaves the caller pressing
-    // it. Everything else is transient and keeps the draft where it is.
-    if (/no longer on your list|not yours to skip|belongs to/i.test(error.message || '')) {
-      clearActive();
-      showToast(error.message + ' Back to your list.', 'warning', 8000);
-      await mountReady();
-      return;
+  let timer, action = null;
+  try {
+    const response = await Promise.race([
+      getSupabase().rpc('skip_call', { p_queue_id: queueId }),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('skip_confirmation_timeout')), 20000); }),
+    ]);
+    if (!current()) return;
+    if (response?.error) {
+      if (/no longer on your list|not yours to skip|belongs to/i.test(response.error.message || '')) {
+        action = 'list';
+        showToast('This call is no longer yours to skip. Returning to your daily list.', 'warning', 8000);
+        return;
+      }
+      throw new Error('skip_refused');
     }
-    if (btn) btn.disabled = false;
-    showToast(error.message + ' Your notes are safe. Submit still records this call.', 'error', 7000);
-    return;
+    const data = response?.data;
+    if (!data || !['skipped','skipped_alone','already_handled','already_logged'].includes(data.outcome)
+        || data.outcome === 'skipped' && (!Number.isSafeInteger(data.others) || data.others < 1)
+        || data.outcome === 'skipped_alone' && data.others !== 0) throw new Error('skip_unconfirmed');
+    if (data.outcome === 'already_logged') {
+      action = 'list';
+      showToast('This call was already logged. Returning to your daily list.', 'info');
+    } else if (data.outcome === 'already_handled') {
+      showToast('This call is already parked as a callback. Your notes are kept.', 'info');
+    } else if (data.outcome === 'skipped_alone') {
+      showToast(`${name} is the only eligible person on today's list right now. Other tasks may be scheduled later, resting or outside today's fixed plan. Your notes are kept.`, 'info', 9000);
+    } else {
+      // Persist the old draft until a different next call is actually confirmed.
+      stopTimer(); saveActive(); action = 'next';
+      showToast(`${name} moved behind the other eligible calls. Still on your list.`, 'info');
+    }
+  } catch {
+    if (current()) showToast('Skip could not be confirmed. Your notes are kept. Check your connection and refresh your daily list before retrying.', 'error', 9000);
+  } finally {
+    clearTimeout(timer);
+    const canContinue = current();
+    if (portalSkipping === operation) portalSkipping = null;
+    if (canContinue && btn?.isConnected) btn.disabled = false;
+    if (canContinue && action === 'list') { clearActive(); await mountReady(); }
+    else if (canContinue && action === 'next') await getNextCall({ queueId });
   }
-  const outcome = data?.outcome || 'skipped';
-  if (outcome === 'already_handled') {
-    if (btn) btn.disabled = false;
-    showToast(data.message, 'info');
-    return;   // the row stays put, so keep the caller where they are
-  }
-  // The last servable row has nowhere to sink to: get_next_call would hand
-  // the SAME person straight back, which is what "Skip does nothing" is.
-  // Say so, and keep the draft rather than wiping it for a no-op.
-  if (outcome === 'skipped_alone') {
-    if (btn) btn.disabled = false;
-    showToast(`${name} is the only person left on your list today, so there is nobody to move them behind. Log this call when you can, or check back after the list is rebuilt.`, 'info', 9000);
-    return;
-  }
-  showToast(outcome === 'skipped'
-    ? `${name} moved down, still on your list. We'll circle back`
-    : data.message, 'info', outcome === 'skipped' ? 4000 : 7000);
-  stopTimer(); clearActive(); getNextCall(currentQueueId);
 }
 
 async function submitCallLog() {
-  if (!callingWritable() || portalFeedback || portalSaving) return;
+  if (!callingWritable() || portalFeedback || portalSaving || portalSkipping) return;
   if (!currentPatient || !currentQueueId) return;
   const sb = getSupabase();
   const operation = {}, generation = callingGeneration, identity = callingIdentity();
@@ -2499,6 +2516,7 @@ async function mountQueueEmpty() {
 }
 
 function resetState() {
+  portalSkipping = null;
   clearHopebotUsage();
   clearSaturdaySession();
   recordingSection?.dispose(); recordingSection = null;
