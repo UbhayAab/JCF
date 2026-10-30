@@ -45,7 +45,9 @@ export function showModal({ title, content, size = '', footer = '', onClose = nu
   // (it was z-index 9998, modals are 70) and hid "Save call" completely.
   document.body.classList.add('modal-open');
 
-  requestAnimationFrame(() => overlay.classList.add('active'));
+  requestAnimationFrame(() => {
+    if (activeModal === overlay && overlay.isConnected) overlay.classList.add('active');
+  });
 
   if (!dismissible) return overlay;
   overlay.querySelector('.modal-close-btn').addEventListener('click', () => closeModal(onClose));

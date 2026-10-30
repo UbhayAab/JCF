@@ -22,6 +22,7 @@ import { showModal, closeModal, confirmModal } from './modal.js';
 import { icon } from './icons.js';
 import { mountCallMeasurements } from './measurements.js';
 import { verifiedCareCallDate, recordingResultForForm } from '../utils/careFollowup.js';
+import * as savedRecordingRead from '../utils/careFollowup.js';
 import { createSharedRecordingStore, SHARE_TTL_MS } from '../utils/sharedRecording.js';
 
 // Historical wording is never relabelled. sql/212 opts in only a fresh rec-v2
@@ -1020,9 +1021,10 @@ export async function renderRecordingViewer(container, recordingId) {
     r = response.data;
   } catch { unavailable(); return null; }
   const turns = Array.isArray(r.transcript) ? r.transcript : [];
-  const n = r.suggestions?.note || null;
-  const review = {required:r.transcription_complete!==true || r.audio_quality!=='clear' || r.suggestions?.note_review?.required===true
-    || Array.isArray(r.dropped)&&r.dropped.some(d=>String(d?.field||'').startsWith('note.')),reasons:[]};
+  // A stale cached client adapter must not fall back to unchecked saved data.
+  const saved = savedRecordingRead.recordingResultForRead?.(r);
+  if (!saved) { unavailable(); return null; }
+  const n = saved.note;
   container.innerHTML = `
       <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">${r.care_session_id
         ? 'Session audio is deleted after a complete clear transcript and a saved held session. Incomplete processing or review keeps it for at most 90 days. Unsaved uploads are cleared after a day. The transcript and written notes stay with the session.'
@@ -1034,13 +1036,12 @@ export async function renderRecordingViewer(container, recordingId) {
         : ['kept90days', 'kept 90 days'].includes(r.audio_delete_reason) ? 'The cloud audio was deleted after 90 days.' : 'The cloud audio has been deleted.'} The transcript stays with the ${r.care_session_id ? 'session' : 'call'}.</p>`
         : '<audio id="rec-audio" class="rec-audio" controls preload="none" style="width:100%;margin-bottom:10px"></audio>'}
       <p style="font:var(--t-xs);color:var(--ink-3);margin:0 0 8px">Recorded ${esc(fmtWhen(new Date(r.created_at).getTime()))}${r.duration_seconds ? ` · ${fmtDur(r.duration_seconds)}` : ''}${r.language ? ` · ${esc(r.language)}` : ''}. Only the caller, their managers and admins can open it.</p>
-      ${recordingReviewHTML({review})}
+      ${recordingReviewHTML(saved)}
       ${turns.length ? `<details open><summary style="cursor:pointer;font:var(--t-xs);color:var(--ink-2)">The transcript (${turns.length} turns)</summary>
         <div style="max-height:320px;overflow-y:auto;border-top:1px solid var(--line);padding-top:8px;margin-top:6px">${turns.map((t) =>
         `<p style="margin:0 0 6px"><strong>${t.speaker === 'caller' ? 'Caller' : t.speaker === 'family' ? 'Family' : 'Someone'}:</strong> ${esc(t.text)}</p>`).join('')}</div></details>`
         : `<p style="color:var(--ink-3);margin:0">${r.status === 'done' ? 'No saved transcript text is available for this recording.' : 'No transcript yet.'}</p>`}
-      ${n ? `<div style="margin:0 0 10px"><p style="font:var(--t-xs);color:var(--ink-3);margin:0">Call note (AI, not checked by a person):</p>${noteHTML({ note: n })}</div>`
-        : r.summary ? `<p style="margin:0 0 10px;color:var(--ink-2);white-space:pre-line"><strong>Summary (AI, not checked by a person):</strong> ${esc(r.summary)}</p>` : ''}
+      ${n || saved.points.length || saved.draft_summary ? `<div style="margin:0 0 10px"><p style="font:var(--t-xs);color:var(--ink-3);margin:0">Call note (AI, not checked by a person):</p>${noteHTML(saved)}${n && saved.show_fallback ? noteHTML({ points: saved.points, draft_summary: saved.draft_summary }) : ''}</div>` : ''}
       <div id="rec-past-measurements"></div><button type="button" class="btn btn-ghost" data-recording-retry>Reload saved recording</button>`;
   container.querySelector('[data-recording-retry]').addEventListener('click', retry);
   if (!r.care_session_id && r.status === 'done' && Array.isArray(r.suggestions?.measurements) && r.suggestions.measurements.length) {
