@@ -4,6 +4,7 @@
 
 import { initAuth, getCurrentUser, getCurrentProfile, getRealProfile, getUserRole, signIn, isImpersonating, stopImpersonation, takeOpenAsProblem } from './auth.js';
 import { sanitize } from './utils/validators.js';
+import { getIstAutoBuildWindow } from './utils/autoBuildClock.js';
 import { registerRoute, initRouter, navigate, setAuthGuard, setRoleGuard } from './router.js';
 import { renderSidebar, bindSidebarSync } from './components/sidebar.js';
 import { showToast } from './components/toast.js';
@@ -515,10 +516,9 @@ function homeRoute() {
 async function maybeAutoBuild() {
   const role = getUserRole();
   if (role !== 'admin' && role !== 'manager') return;
-  // 12:00 IST = 06:30 UTC. Only after the cutoff, once per day per session.
-  const nowUtc = new Date();
-  if (nowUtc.getUTCHours() + nowUtc.getUTCMinutes() / 60 < 6.5) return;
-  const istDay = new Date(nowUtc.getTime() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  // The noon cutoff and session day must describe the same IST instant.
+  const { istDay, afterNoon } = getIstAutoBuildWindow(new Date());
+  if (!afterNoon) return;
   if (sessionStorage.getItem('autobuild_' + istDay)) return;
   sessionStorage.setItem('autobuild_' + istDay, '1');
   try {
@@ -534,7 +534,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261031b';  // bumped on every breaking deploy
+const APP_BUILD = '20261031c';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
