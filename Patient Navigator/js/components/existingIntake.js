@@ -4,7 +4,7 @@ import { getSupabase } from '../supabase.js';
 import { getCurrentUser } from '../auth.js';
 import { sanitize } from '../utils/validators.js';
 
-const FIELDS = 'id,full_name,patient_code,consent_given,patient_status';
+const FIELDS = 'id,full_name,patient_code,consent_given,patient_status,primary_language';
 const LIMIT = 20;
 const noteStyle = 'white-space:normal;overflow:visible;text-overflow:clip';
 export const validPatientId = id => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -47,6 +47,9 @@ export async function findExistingPatients(sb, value, { allowed = () => true } =
 
 export function existingPatientHTML(patient, { keepForm = false } = {}) {
   if (!validPatientId(patient?.id)) return '<p class="due-meta">Use Update existing to find the accessible patient record. Nothing was saved from this form.</p>';
+  const language = Object.prototype.hasOwnProperty.call(patient, 'primary_language')
+    && (patient.primary_language === null || typeof patient.primary_language === 'string')
+      ? (patient.primary_language || '').trim() || 'Not recorded' : 'Language unavailable';
   const base = '#patients/' + encodeURIComponent(patient.id);
   const target = keepForm ? ' target="_blank" rel="noopener"' : '';
   const consent = patient.consent_given === true ? 'Consent is recorded. Reconfirm with the family before entering new details.'
@@ -55,6 +58,7 @@ export function existingPatientHTML(patient, { keepForm = false } = {}) {
   return `<article class="card" style="padding:14px;min-width:0;overflow-wrap:anywhere">
     <h3 style="margin:0 0 6px">${sanitize(patient.full_name || 'Existing patient')}</h3>
     <p class="due-meta" style="${noteStyle}">${sanitize(patient.patient_code || '')} · Existing record</p>
+    <p class="info-value" style="${noteStyle};overflow-wrap:anywhere;margin:8px 0"><strong>Preferred language:</strong> ${sanitize(language)}</p>
     <p class="due-meta" style="${noteStyle};margin:8px 0">${consent}</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <a class="btn btn-primary btn-sm" href="${base}?tab=overview&amp;focus=edit"${target}>Update details / consent</a>

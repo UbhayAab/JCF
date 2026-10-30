@@ -28,6 +28,7 @@
 // (tools/stale_import_check.mjs).
 // ============================================================
 import { getSupabase } from '../supabase.js';
+import { getCurrentProfile } from '../auth.js';
 import { beginDocumentTask, DocumentTaskStopped } from './documentReadTasks.js';
 import { showToast } from './toast.js';
 import { icon } from './icons.js';
@@ -106,13 +107,24 @@ async function checkPhone(phone, task = null) {
 }
 
 /** Whether this person may file papers for the family (the same test the Upload documents tab uses). */
-async function canFile(patientId, task = null) {
+async function canFile(patientId, task = null, onContext = null) {
   const sb = task ? await task.client() : getSupabase();
   task?.check();
   const { data, error } = await sb.rpc('get_call_context', { p_patient_ids: [patientId] });
   task?.check();
   if (error) throw error;
-  return (data || []).some((row) => row.patient_id === patientId);
+  const allowed = (data || []).some((row) => row.patient_id === patientId);
+  if (allowed && typeof onContext === 'function') onContext(data.find(row => row.patient_id === patientId));
+  return allowed;
+}
+
+
+function cameraLanguageHTML131(row) {
+  const profile = row?.profile;
+  const value = profile && Object.prototype.hasOwnProperty.call(profile, 'primary_language')
+    && (profile.primary_language === null || typeof profile.primary_language === 'string')
+      ? (profile.primary_language || '').trim() || 'Not recorded' : 'Language unavailable';
+  return `<span class="info-value" style="display:block;margin-top:5px;white-space:normal;overflow-wrap:anywhere;max-width:100%"><strong>Preferred language:</strong> ${sanitize(value)}</span>`;
 }
 
 async function consentFor(file, granted = null) {
@@ -809,6 +821,12 @@ export function mountCameraIntake(el, { hospital } = {}) {
   const status = el.querySelector('#ci-phone-status');
   const open = el.querySelector('#ci-open');
   const formTask = beginDocumentTask('Intake form', null, { visible: false });
+  const form = el.querySelector('#ci-form'), actorProfile = getCurrentProfile(), actorRole = actorProfile?.role;
+  const routeHash = window.location.hash;
+  const currentPhoneForm = () => host === el && el.isConnected && formTask.active()
+    && el.querySelector('#ci-form') === form && !form.hidden && window.location.hash === routeHash
+    && getCurrentProfile() === actorProfile && getCurrentProfile()?.role === actorRole;
+  let phoneLookup = 0;
   formTask.onStop = () => {
     clearTimeout(timer);
     if (el.isConnected) {
@@ -826,28 +844,33 @@ export function mountCameraIntake(el, { hospital } = {}) {
   el.querySelector('#ci-phone').addEventListener('input', (e) => {
     clearTimeout(timer);
     open.removeAttribute('disabled');
-    const phone = tenDigits(e.target.value);
+    const phone = tenDigits(e.target.value), lookup = ++phoneLookup;
     checkFor = phone || '';
-    if (!phone) { status.innerHTML = ''; return; }
+    status.innerHTML = '';
+    if (!phone) return;
+    const currentLookup = () => currentPhoneForm() && lookup === phoneLookup && checkFor === phone
+      && tenDigits(el.querySelector('#ci-phone').value) === phone;
     timer = setTimeout(async () => {
-      if (!formTask.active()) return;
+      if (!currentLookup()) return;
       status.innerHTML = '<div class="due-meta" style="margin:-4px 0 10px">Checking the number…</div>';
       try {
         const st = await checkPhone(phone, formTask);
-        if (checkFor !== phone) return;
+        if (!currentLookup()) return;
         if (!st.found) { status.innerHTML = '<div class="due-meta" style="margin:-4px 0 10px">New patient.</div>'; return; }
-        const mine = await canFile(st.patient_id, formTask);
-        if (checkFor !== phone) return;
+        status.innerHTML = '<div class="due-meta" style="margin:-4px 0 10px">Loading language...</div>';
+        let context = null;
+        const mine = await canFile(st.patient_id, formTask, row => { context = row; });
+        if (!currentLookup()) return;
         const who = sanitize(st.full_name || st.patient_code || 'A patient');
         if (mine) {
-          status.innerHTML = `<div class="due-meta" style="margin:-4px 0 10px">${who} is already registered. These photos go to the same record.</div>`;
+          status.innerHTML = `<div class="due-meta" style="margin:-4px 0 10px">${who} is already registered. These photos go to the same record.${cameraLanguageHTML131(context)}</div>`;
           if (!el.querySelector('#ci-name').value && st.full_name) el.querySelector('#ci-name').value = st.full_name;
         } else {
           status.innerHTML = `<div class="due-meta" style="margin:-4px 0 10px;color:var(--danger)">${who} was registered by someone else, so their papers go through ${st.assigned_mentor ? sanitize(st.assigned_mentor) + ', their mentor' : 'their mentor'}.</div>`;
           open.setAttribute('disabled', '');
         }
       } catch {
-        if (checkFor === phone) status.innerHTML = '';     // offline: the save checks again
+        if (currentLookup()) status.innerHTML = '<div class="due-meta" style="margin:-4px 0 10px">Language unavailable. Could not check this number; saving checks access again.</div>';
       }
     }, 450);
   });

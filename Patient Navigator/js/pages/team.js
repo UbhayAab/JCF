@@ -1125,13 +1125,59 @@ function queueSplitNote(r) {
 // whether today's queue is offered. Cloning it would have meant maintaining
 // the stale-response guard, the delegated picker and the count-mirroring
 // button label twice.
+
+// Read only the current manual-pick candidates through the signed-in SDK/RLS.
+// An omitted/failed row is unavailable, not a recorded empty preference.
+const assignmentPatientId131 = id => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+function assignmentLanguageHTML131(entry) {
+  const value = entry?.state === 'loading' ? 'Loading language...'
+    : entry?.state === 'ready' ? (entry.value === null ? '' : entry.value.trim()) || 'Not recorded'
+      : 'Language unavailable';
+  return `<strong>Preferred language:</strong> ${sanitize(value)}`;
+}
+async function readAssignmentLanguages131(sb, rows, isCurrent) {
+  const out = new Map();
+  if (!isCurrent()) return null;
+  if (!Array.isArray(rows) || rows.length > 400) return out;
+  const ids = [...new Set(rows.map(r => r?.patient_id).filter(assignmentPatientId131).map(id => id.toLowerCase()))];
+  ids.forEach(id => out.set(id, { state: 'unavailable' }));
+  for (let at = 0; at < ids.length; at += 100) {
+    if (!isCurrent()) return null;
+    const batch = ids.slice(at, at + 100), wanted = new Set(batch);
+    let result;
+    try { result = await sb.from('patients').select('id,primary_language').in('id', batch).limit(batch.length); }
+    catch { result = null; }
+    if (!isCurrent()) return null;
+    if (!result || result.error || !Array.isArray(result.data) || result.data.length > batch.length) continue;
+    const seen = new Set();
+    const valid = result.data.every(row => {
+      const id = assignmentPatientId131(row?.id) ? row.id.toLowerCase() : '';
+      if (!wanted.has(id) || seen.has(id)) return false;
+      seen.add(id);
+      return Object.prototype.hasOwnProperty.call(row, 'primary_language')
+        && (row.primary_language === null || typeof row.primary_language === 'string');
+    });
+    if (!valid) continue;
+    for (const row of result.data) out.set(row.id.toLowerCase(), { state: 'ready', value: row.primary_language });
+  }
+  return out;
+}
+
 async function showAssignPatientsModal(presetMentorId = null, opts = {}) {
+  if (!isManagerOrAdmin()) return;
   const preset = typeof presetMentorId === 'string' ? presetMentorId : null;
   const isNut = opts.team === 'nutrition';
   const sb = getSupabase();
   const el = document.createElement('div');
   el.innerHTML = `<div style="padding:var(--s6);text-align:center;color:var(--ink-3)"><span class="spinner" style="width:22px;height:22px;border-width:2.5px"></span><div style="margin-top:10px">Loading the team…</div></div>`;
-  showModal({ title: isNut ? 'Assign nutrition patients' : 'Assign patients', content: el, size: 'lg' });
+  const ownsActor = captureTeamActor(), actorProfile = getCurrentProfile(), actorRole = actorProfile?.role;
+  const routeHash = window.location.hash, routePage = document.getElementById('page-content');
+  const assignmentModal = showModal({ title: isNut ? 'Assign nutrition patients' : 'Assign patients', content: el, size: 'lg' });
+  const currentAssignView = () => el.isConnected && assignmentModal.isCurrentModal()
+    && window.location.hash === routeHash && routePage?.isConnected
+    && document.getElementById('page-content') === routePage && ownsActor()
+    && getCurrentProfile() === actorProfile && getCurrentProfile()?.role === actorRole;
+  if (!currentAssignView()) return;
 
   let mentors = []; const nameById = {};
   try {
@@ -1150,16 +1196,18 @@ async function showAssignPatientsModal(presetMentorId = null, opts = {}) {
       mentors = (data || []).filter(m => ['caller', 'caregiver_mentor'].includes(m.role));
     }
   } catch (err) {
+    if (!currentAssignView()) return;
     el.innerHTML = `<div class="empty" style="padding:var(--s6)"><h4>Couldn't load the team</h4><p>${sanitize(err.message)}</p></div>`;
     return;
   }
+  if (!currentAssignView()) return;
   if (!mentors.length) {
     el.innerHTML = `<div class="empty" style="padding:var(--s6)"><div class="ico-wrap">${icon('users')}</div><h4>No ${isNut ? 'nutritionists' : 'caregiver mentors'}</h4><p>There is no active ${isNut ? 'nutritionist' : 'caregiver mentor'} to assign patients to.</p></div>`;
     return;
   }
 
   const state = { mentor: null, mode: isNut ? 'unclaimed' : 'never_called', from: '', q: '', selected: new Set() };
-  let shown = []; let loadSeq = 0;
+  let shown = []; let loadSeq = 0; let languages = new Map();
 
   el.innerHTML = `
     <div style="font:var(--t-body-strong);margin-bottom:8px">1 · Who takes them</div>
@@ -1218,8 +1266,8 @@ async function showAssignPatientsModal(presetMentorId = null, opts = {}) {
     </div>
     <label style="display:${isNut ? 'none' : 'flex'};align-items:flex-start;gap:9px;cursor:pointer;margin-top:var(--s4)">
       <input type="checkbox" id="ap-queue-today" checked style="margin-top:3px" />
-      <span><span class="info-value">Also put them in today's queue</span>
-      <span class="due-meta" style="display:block;margin-top:2px">Off = no call today. They'll surface on the mentor's future daily lists instead.</span></span>
+      <span style="flex:1;min-width:0"><span class="info-value">Also put them in today's queue</span>
+      <span class="due-meta" style="display:block;margin-top:2px;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere">Off = no call today. They'll surface on the mentor's future daily lists instead.</span></span>
     </label>
     ${isNut ? `<p class="due-meta" style="margin-top:var(--s4)">They land on the nutritionist's <strong>My patients</strong> tab straight away. Outreach calls are built fresh every morning and are not written by hand here.</p>` : ''}
     <div class="form-actions">
@@ -1274,6 +1322,7 @@ async function showAssignPatientsModal(presetMentorId = null, opts = {}) {
   };
   el.querySelectorAll('#ap-mode .tab').forEach(t => t.addEventListener('click', () => setAssignMode(t.dataset.amode)));
 
+  const languageRow = r => `<span data-ap-language="${assignmentPatientId131(r.patient_id) ? r.patient_id.toLowerCase() : ''}" class="info-value" style="display:block;margin-top:4px;white-space:normal;overflow-wrap:anywhere;max-width:100%">${assignmentLanguageHTML131(languages.get(String(r.patient_id).toLowerCase()))}</span>`;
   const nutritionRow = (r) => {
     const touch = r.last_nutrition_touch
       ? `<span class="due-meta" style="white-space:nowrap">last worked ${formatRelativeTime(r.last_nutrition_touch)}</span>`
@@ -1283,6 +1332,7 @@ async function showAssignPatientsModal(presetMentorId = null, opts = {}) {
       <span style="flex:1;min-width:0">
         <span class="info-value">${sanitize(r.full_name || 'N/A')}</span>
         <strong class="q-code" style="margin-left:6px">${sanitize(r.patient_code || '')}</strong>
+        ${languageRow(r)}
         ${r.must_score != null ? `<span class="badge badge-${Number(r.must_score) >= 2 ? 'danger' : Number(r.must_score) === 1 ? 'warn' : 'ok'}" style="margin-left:6px">MUST ${r.must_score}</span>` : ''}
         <span class="due-meta" style="display:block;margin-top:2px">${r.owner_name ? 'held by ' + sanitize(r.owner_name) : 'Unclaimed'}${r.hint_owner_name ? ` · ${sanitize(r.hint_owner_name)} worked with them before` : ''}</span>
       </span>
@@ -1304,6 +1354,7 @@ async function showAssignPatientsModal(presetMentorId = null, opts = {}) {
       <span style="flex:1;min-width:0">
         <span class="info-value">${sanitize(r.full_name || 'N/A')}</span>
         <strong class="q-code" style="margin-left:6px">${sanitize(r.patient_code || '')}</strong>
+        ${languageRow(r)}
         <span class="badge badge-${r.patient_status === 'active' ? 'ok' : 'neutral'}" style="margin-left:6px">${capitalize((r.patient_status || 'N/A').replace('_', ' '))}</span>
         <span class="due-meta" style="display:block;margin-top:2px">${r.owner_name ? sanitize(r.owner_name) : 'Unassigned'}${qOwner ? ` · in ${sanitize(qOwner)}'s queue today` : ''}</span>
       </span>
@@ -1312,7 +1363,12 @@ async function showAssignPatientsModal(presetMentorId = null, opts = {}) {
   };
 
   async function loadPatients() {
+    if (!currentAssignView()) return;
     const seq = ++loadSeq;
+    const request = { mode: state.mode, from: state.from, q: state.q };
+    const currentLoad = () => seq === loadSeq && currentAssignView()
+      && state.mode === request.mode && state.from === request.from && state.q === request.q;
+    languages = new Map(); shown = []; syncCounts();
     if ((state.mode === 'by_mentor' || state.mode === 'by_nutritionist') && !state.from) {
       shown = []; listEl.innerHTML = emptyMsg(`Pick a ${isNut ? 'nutritionist' : 'mentor'} above to see their patients.`); syncCounts(); return; }
     if (state.mode === 'search' && state.q.trim().length < 2) { shown = []; listEl.innerHTML = emptyMsg('Type at least 2 characters to search.'); syncCounts(); return; }
@@ -1323,12 +1379,21 @@ async function showAssignPatientsModal(presetMentorId = null, opts = {}) {
       if (state.mode === 'search') args.p_search = state.q.trim();
       const { data, error } = await sb.rpc(isNut ? 'get_assignable_nutrition_patients' : 'get_assignable_patients', args);
       if (error) throw error;
-      if (seq !== loadSeq) return; // a newer load superseded this one
-      shown = data || [];
+      if (!currentLoad()) return;
+      shown = Array.isArray(data) ? data : [];
+      shown.forEach(r => { if (assignmentPatientId131(r.patient_id)) languages.set(r.patient_id.toLowerCase(), { state: 'loading' }); });
       listEl.innerHTML = shown.length ? shown.map(patientRow).join('') : emptyMsg(EMPTY[state.mode]);
       syncCounts();
+      if (!shown.length) return;
+      const currentLanguages = await readAssignmentLanguages131(sb, shown, currentLoad);
+      if (!currentLoad() || !currentLanguages) return;
+      languages = currentLanguages;
+      // Updating only the label keeps the current checkbox selection/focus intact.
+      listEl.querySelectorAll('[data-ap-language]').forEach(label => {
+        if (currentLoad()) label.innerHTML = assignmentLanguageHTML131(languages.get(label.dataset.apLanguage));
+      });
     } catch (err) {
-      if (seq !== loadSeq) return;
+      if (!currentLoad()) return;
       shown = []; listEl.innerHTML = emptyMsg(sanitize(err.message)); syncCounts();
     }
   }
@@ -1352,6 +1417,8 @@ async function showAssignPatientsModal(presetMentorId = null, opts = {}) {
   let searchT;
   el.querySelector('#ap-search').addEventListener('input', (e) => {
     state.q = e.target.value;
+    ++loadSeq; languages = new Map(); shown = [];
+    listEl.innerHTML = emptyMsg('Loading patients...'); syncCounts();
     clearTimeout(searchT); searchT = setTimeout(loadPatients, 300);
   });
 
