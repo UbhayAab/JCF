@@ -17,6 +17,7 @@ import { showModal, closeModal } from '../components/modal.js';
 import { CIRCLE_FIELDS, indiaInput, indiaISO } from '../utils/circleMessage.js';
 import { mountPosterControl } from '../components/whatsappPoster.js';
 import { mountBroadcastArchive66, reloadBroadcastArchive66 } from '../components/broadcastArchive66.js';
+import { captureScheduleActor24, schedulingState24, mountScheduledGroups24, reviewGroupSchedule24, clearScheduleReview24 } from '../components/groupSchedules24.js';
 
 const AUDIENCES = [
   { k: 'connected_week', label: 'Families we spoke to this week' },
@@ -38,10 +39,12 @@ const HOPEBOT_LIST = 'hopebot_session_reminders';
 const PAGE = 1000;
 
 // Supabase answers at most 1000 rows a request, so a long list is read in pages.
-async function readAll(make) {
+async function readAll(make, current = () => true) {
   const out = [];
   for (let from = 0; from < 20000; from += PAGE) {
+    if (!current()) return { data: [], error: new Error('This view changed. Reopen the composer.') };
     const { data, error } = await make().range(from, from + PAGE - 1);
+    if (!current()) return { data: [], error: new Error('This view changed. Reopen the composer.') };
     if (error) return { data: out, error };
     out.push(...(data || []));
     if (!data || data.length < PAGE) break;
@@ -77,37 +80,61 @@ function defaultWhen(existing) {
 }
 
 export async function renderBroadcasts(container) {
+  const ownsPage = captureScheduleActor24();
+  const pageRoute = window.location.hash;
+  if (!ownsPage()) { container.textContent = 'An active manager or admin must open WhatsApp messages.'; return; }
   container.innerHTML = `
     <div class="page-header">
       <div>
         <h1>WhatsApp messages</h1>
-        <p class="header-subtitle" style="margin:4px 0 0">Prepare a WhatsApp message and save it as a draft. Scheduled sending is switched off.</p>
+        <p class="header-subtitle" style="margin:4px 0 0">Compose a message, review its saved contacts and estimated cost, then schedule it or keep a draft.</p>
       </div>
       <button class="btn btn-primary btn-sm" id="wb-new">${icon('plus')}New message</button>
     </div>
-    <p class="muted" style="margin:0 0 var(--s4);color:var(--ink-2)">Scheduled delivery is switched off for groups, families and team test numbers. Saving a draft does not send it. Before any future delivery, each contact must meet consent, number and STOP checks.</p>
+    <p class="muted" id="wb-delivery-state" style="margin:0 0 var(--s4);color:var(--ink-2)">Checking scheduled delivery controls... Saving a draft never sends it.</p>
+    <section id="wb-scheduled-groups"></section>
+    <h2>Drafts and earlier messages</h2>
     <div id="wb-list"><div class="card" style="padding:28px;text-align:center;color:var(--ink-3)">Loading messages…</div></div>`;
-  container.querySelector('#wb-new').addEventListener('click', () => openBroadcastComposer(container));
-  await mountBroadcastArchive66(container, { onEdit: openBroadcastComposer });
+  const pageMarker = container.querySelector('#wb-delivery-state');
+  const currentPage = () => ownsPage() && pageMarker.isConnected && container.contains(pageMarker) && window.location.hash === pageRoute;
+  container.querySelector('#wb-new').addEventListener('click', () => { if (currentPage()) openBroadcastComposer(container); });
+  const delivery = await schedulingState24();
+  if (!currentPage()) return;
+  pageMarker.textContent = delivery?.enabled
+    ? 'Scheduled delivery is available from 9 AM to before 9 PM India time. Review each saved contact and the estimate before confirming. Up to 100 message slots per India day, including posters. Saving a draft never sends it.'
+    : (delivery?.reason || 'Scheduled delivery is unavailable until its current controls can be checked.') + ' You can save a draft; saving does not send it.';
+  await Promise.all([mountBroadcastArchive66(container, { onEdit: openBroadcastComposer }), mountScheduledGroups24(container)]);
 }
 
-async function loadList(container) { await reloadBroadcastArchive66(container); }
+async function loadList(container) { await Promise.all([reloadBroadcastArchive66(container), mountScheduledGroups24(container)]); }
 
 export async function openBroadcastComposer(container, existing = null, preset = {}) {
+  const ownsActor = captureScheduleActor24();
+  if (!ownsActor()) return;
   const sb = getSupabase();
-  let poster;
+  let poster, disposed = false, busy = false;
+  const route = window.location.hash;
   const el = document.createElement('div');
   el.innerHTML = '<div class="sk skeleton-row"></div>';
-  showModal({ title: existing ? 'Edit WhatsApp message' : 'New WhatsApp message', content: el, size: 'lg', onClose: () => poster?.dispose() });
-  const [tplR, recR, circleR, posterR] = await Promise.all([
+  const modal = showModal({ title: existing ? 'Edit WhatsApp message' : 'New WhatsApp message', content: el, size: 'lg', onClose: () => { disposed = true; poster?.dispose(); } });
+  const cleanupObserver = new MutationObserver(() => {
+    if (!modal.isCurrentModal()) { disposed = true; poster?.dispose(); cleanupObserver.disconnect(); }
+  });
+  cleanupObserver.observe(modal, { attributes: true, attributeFilter: ['class'] });
+  cleanupObserver.observe(document.body, { childList: true });
+  const currentView = () => !disposed && el.isConnected && modal.isCurrentModal() && ownsActor() && window.location.hash === route;
+  const [tplR, recR, circleR, posterR, deliveryState] = await Promise.all([
     sb.from('wa_templates').select('name, language, category, body, variables_count').eq('approved', true).is('poster_base', null),
     existing
-      ? readAll(() => sb.from('wa_broadcast_recipients').select('recipient_id').eq('broadcast_id', existing.id).order('recipient_id'))
+      ? readAll(() => sb.from('wa_broadcast_recipients').select('recipient_id').eq('broadcast_id', existing.id).order('recipient_id'), currentView)
       : Promise.resolve({ data: [] }),
     sb.from('wa_circle_templates').select('template_name,label,language,body,parameter_keys,status').in('status',['requested','submitting','pending','approved']),
     existing ? sb.from('wa_broadcasts').select('poster:wa_posters(id,storage_path,file_name,mime,byte_size)').eq('id',existing.id).maybeSingle() : Promise.resolve({data:null}),
-  ]);
+    schedulingState24(),
+  ]).catch(error => [{ error }]);
+  if (!currentView()) return;
   if (tplR.error) { el.innerHTML = `<p style="margin:0">Could not read the message formats: ${sanitize(tplR.error.message)}</p>`; return; }
+  if(recR.error){el.textContent='Could not read the draft recipients. Reload before editing.';return;}
   if(circleR.error){el.innerHTML=`<p>Could not read custom wording: ${sanitize(circleR.error.message)}</p>`;return;}
   if(posterR.error){el.textContent='Could not read the attached poster. Reload before editing.';return;}
   const custom = (circleR.data||[]).map(t=>({...t,name:t.template_name,variables_count:t.parameter_keys.length,custom:true,
@@ -126,7 +153,9 @@ export async function openBroadcastComposer(container, existing = null, preset =
     autoTick: false,         // managers explicitly choose recipients for each new message
     people: [],
     q: '',
+    requestId: crypto.randomUUID(),
   };
+  let peopleGeneration = 0;
 
   el.innerHTML = `
     <div class="form-group"><label class="form-label" for="wb-title">Name, for the team</label>
@@ -136,29 +165,40 @@ export async function openBroadcastComposer(container, existing = null, preset =
       <p id="wb-template-help" style="margin:8px 0 0;color:var(--ink-2);font-size:13px"></p></div>
     <div id="wb-blanks"></div>
     <div class="form-group" id="wb-session-group"><label class="form-label" for="wb-session">Session starts (India time, optional helper)</label>
-      <input class="form-input" id="wb-session" type="datetime-local"><p class="form-hint">Fills the session date and time above. The planned delivery time below is saved only in this draft.</p></div>
+      <input class="form-input" id="wb-session" type="datetime-local"><p class="form-hint">Fills the session date and time above. Set the delivery time separately below.</p></div>
     <div class="form-group"><label class="form-label" for="wb-aud">Who gets it</label>
       <select class="form-select" id="wb-aud">${AUDIENCES.map(a => `<option value="${a.k}"${a.k === state.kind ? ' selected' : ''}>${a.label}</option>`).join('')}</select></div>
     <div id="wb-people" style="margin-bottom:var(--s4)"></div>
     <div class="form-group"><label class="form-label" for="wb-when">When (India time)</label>
-      <input class="form-input" id="wb-when" type="datetime-local" value="${defaultWhen(existing)}"><p class="form-hint">Planned delivery time for this draft. Scheduled delivery is switched off; saving does not schedule or send a message.</p></div>
+      <input class="form-input" id="wb-when" type="datetime-local" value="${defaultWhen(existing)}"><p class="form-hint">Saving a draft does not send it. Scheduled delivery requires a separate contact and cost review, then confirmation.</p></div>
     <div class="form-label" style="margin-bottom:6px">What they will see</div>
     <div class="card" id="wb-preview" style="padding:12px 14px;background:var(--surface-2);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)"></div>
     <div id="wb-poster" style="margin-top:16px"></div>
-    <p>Group and individual scheduled WhatsApp messages remain switched off while consent and delivery costs are reviewed. You can save this group message as a draft, with or without a poster. Saving a draft does not send it.</p>
+    <p>Each saved patient and caregiver number needs its own WhatsApp permission. A selected family can have several eligible contacts; review their masked destinations and estimated cost before confirming. Saving a draft does not send it.</p>
     <div style="display:flex;justify-content:flex-end;gap:var(--s2);margin-top:var(--s4);flex-wrap:wrap">
       <button class="btn btn-secondary" id="wb-close" type="button">Close</button>
       <button class="btn btn-secondary" id="wb-draft" type="button">Save as draft</button>
-      <p>For now, call the family using the Calling Portal. A family's Scheduled WhatsApp panel can explain its permissions, but scheduling there also stays off.</p>
-      <button class="btn btn-primary" id="wb-schedule" type="button" disabled>${icon('clock')}Scheduling switched off</button>
-    </div>`;
+      <button class="btn btn-primary" id="wb-schedule" type="button" disabled>${icon('clock')}Checking delivery controls</button>
+    </div><div id="wb-review"></div>`;
 
   const tplNow = () => tpls.find(t => t.name === state.tpl);
+  const syncScheduleButton = () => {
+    if (!currentView()) return;
+    const button = el.querySelector('#wb-schedule');
+    const enabled = deliveryState?.enabled === true && tplNow()?.approved !== false && state.kind !== HOPEBOT_LIST;
+    button.disabled = busy || !enabled;
+    button.textContent = !deliveryState?.enabled ? 'Scheduling switched off' : tplNow()?.approved === false ? 'Waiting for wording approval' : state.kind === HOPEBOT_LIST ? 'Choose a Navigator group to schedule' : 'Review delivery';
+  };
+  el.addEventListener('input', () => clearScheduleReview24(el));
+  el.addEventListener('change', () => clearScheduleReview24(el));
   const firstName = () => {
     const p = state.people.find(x => state.picked.has(x.recipient_id));
     return p?.name ? String(p.name).trim().split(/\s+/)[0] : 'Asha';
   };
   const preview = () => {
+    if (!currentView()) return;
+    clearScheduleReview24(el);
+    syncScheduleButton();
     const t = tplNow();
     const text = String(t?.body || '').replace(/\{\{(\d+)\}\}/g, (m, n) => {
       const v = state.vars[Number(n) - 1];
@@ -168,12 +208,13 @@ export async function openBroadcastComposer(container, existing = null, preset =
     poster?.estimate(t, indiaISO(el.querySelector('#wb-when').value), [...state.picked]);
   };
   const paintBlanks = () => {
+    if (!currentView()) return;
     const t = tplNow();
     const n = t?.variables_count || 0;
     const fields = t?.custom?t.parameter_keys.map(k=>CIRCLE_FIELDS[k]):TEMPLATE_FIELDS[t?.name] || [];
     el.querySelector('#wb-session-group').hidden=!fields.includes('Session date')||!fields.includes('Session time');
     el.querySelector('#wb-template-help').textContent = t?.custom
-      ? (t.approved?'Your custom wording is approved. Set the session details below.':'This wording is waiting for WhatsApp approval. Scheduling holds it until approval; a missed approval deadline never sends a late invitation.')
+      ? (t.approved?'Your custom wording is approved. Set the session details below.':'This wording is waiting for WhatsApp approval. Save a draft, then review delivery after the wording is approved.')
       : t?.name === 'wellness_session_invite'
       ? 'This approved format says "reminder" and includes a date and time, with no joining link. For a new invitation with a link, choose the session invitation format when it is approved.'
       : t?.name === 'wellness_session_reminder'
@@ -202,6 +243,7 @@ export async function openBroadcastComposer(container, existing = null, preset =
   };
 
   const paintList = () => {
+    if (!currentView()) return;
     const list = el.querySelector('#wb-list-box');
     if (!list) return;
     const q = state.q.toLowerCase();
@@ -224,22 +266,25 @@ export async function openBroadcastComposer(container, existing = null, preset =
   };
   const paintCount = () => {
     const c = el.querySelector('#wb-count');
-    if (c) c.innerHTML = `<strong>${state.picked.size}</strong> ticked · ${state.people.filter(p => p.eligible).length} of ${state.people.length} can get it`;
+    if (c) c.innerHTML = `<strong>${state.picked.size}</strong> people selected · ${state.people.filter(p => p.eligible).length} available in this group. Delivery review checks each saved number's WhatsApp permission.`;
   };
 
   const loadPeople = async () => {
+    if (!currentView()) return;
+    const generation = ++peopleGeneration;
     const box = el.querySelector('#wb-people');
     if (state.kind === HOPEBOT_LIST) {
       state.people = [];
       state.picked.clear();
-      box.innerHTML = '<p style="margin:0;color:var(--ink-2)">HopeBot sends this to everyone who replied to the session code on WhatsApp. That list stays with HopeBot, so there is nobody to tick here.</p>';
+      box.innerHTML = '<p style="margin:0;color:var(--ink-2)">This audience stays as a draft here. Choose a Navigator group to review contact counts, permissions and costs before scheduling.</p>';
       preview();
       return;
     }
     box.innerHTML = '<div class="sk skeleton-row"></div>';
     const kind = state.kind;
-    const { data, error } = await readAll(() => sb.rpc('broadcast_audience', { p_kind: kind, p_search: null, p_limit: 5000 }));
-    if (kind !== state.kind || !box.isConnected) return;
+    state.people = [];
+    const { data, error } = await readAll(() => sb.rpc('broadcast_audience', { p_kind: kind, p_search: null, p_limit: 5000 }), () => currentView() && generation === peopleGeneration && kind === state.kind).catch(error => ({ error }));
+    if (!currentView() || generation !== peopleGeneration || kind !== state.kind || !box.isConnected) return;
     if (error) { box.innerHTML = `<p style="margin:0">Could not load this group: ${sanitize(error.message)}</p>`; return; }
     const seen = new Set();
     state.people = (data || []).filter(p => !seen.has(p.recipient_id) && seen.add(p.recipient_id));
@@ -267,6 +312,8 @@ export async function openBroadcastComposer(container, existing = null, preset =
   };
 
   const save = async (schedule) => {
+    if (!currentView() || busy) return;
+    if (schedule && deliveryState?.enabled !== true) { showToast('Scheduling is switched off or its current controls could not be checked.', 'error'); return; }
     const title = el.querySelector('#wb-title').value.trim();
     const whenStr = el.querySelector('#wb-when').value;
     const iso = indiaISO(whenStr);
@@ -280,14 +327,35 @@ export async function openBroadcastComposer(container, existing = null, preset =
     if (schedule && state.kind !== HOPEBOT_LIST && !state.picked.size) { showToast('Tick at least one person.', 'error'); return; }
     let posterId;
     try { posterId = poster.id(); } catch (e) { showToast(e.message, 'error'); return; }
+    const payload = { id: state.id, title, template_name: state.tpl, language: tplNow()?.language || 'en', variables: [...state.vars], audience_kind: state.kind,
+      scheduled_for: when.toISOString(), recipient_ids: [...state.picked].sort(), schedule, poster_id: posterId };
     const buttons = el.querySelectorAll('#wb-draft, #wb-schedule');
-    buttons.forEach(b => { b.disabled = true; });
-    const { data, error } = await sb.rpc('broadcast_save', { p: {
-      id: state.id, title, template_name: state.tpl, variables: state.vars, audience_kind: state.kind,
-      scheduled_for: when.toISOString(), recipient_ids: [...state.picked], schedule, poster_id: posterId } });
-    buttons.forEach(b => { b.disabled = b.id === 'wb-schedule'; });
-    if (error) { showToast(error.message, 'error'); return; }
-    poster.dispose(); closeModal();
+    busy = true; buttons.forEach(b => { b.disabled = true; });
+    if (schedule) {
+      try { await reviewGroupSchedule24({ host: el, payload, requestId: state.requestId, current: currentView,
+      beginSave: () => {
+        if (busy || !currentView()) return false;
+        busy = true; el.querySelectorAll('input, select, button').forEach(control => { control.disabled = true; }); return true;
+      },
+      finishSave: () => {
+        busy = false;
+        if (currentView()) {
+          el.querySelectorAll('input, select, button').forEach(control => { control.disabled = false; });
+          paintList(); syncScheduleButton();
+        }
+      }, onSaved: result => {
+        if (!currentView()) return;
+        modal.closeOwnedModal(); showToast(`Scheduled for ${result.contacts} saved contacts. Refresh delivery status to follow the result.`, 'success'); loadList(container);
+      } }); } finally { busy = false; if (currentView()) { el.querySelector('#wb-draft').disabled = false; syncScheduleButton(); } }
+      return;
+    }
+    let data, error;
+    try { ({ data, error } = await sb.rpc('broadcast_save', { p: payload })); } catch (e) { error = e; }
+    busy = false;
+    if (!currentView()) return;
+    el.querySelector('#wb-draft').disabled = false; syncScheduleButton();
+    if (error) { showToast(error.message || 'The draft could not be saved. Please retry.', 'error'); return; }
+    poster.dispose(); modal.closeOwnedModal();
     const who = state.kind === HOPEBOT_LIST ? "HopeBot's list" : `${data.kept} ${data.kept === 1 ? 'person' : 'people'}`;
     const left = data.left_out ? ` ${data.left_out} left out: they cannot get WhatsApp messages now.` : '';
     showToast(schedule ? `${data.status==='awaiting_approval'?'Waiting for approval. Planned':'Scheduled'} for ${fmtWhen(when.toISOString())}, to ${who}.${left}` : `Saved as a draft.${left}`, 'success');
@@ -306,7 +374,7 @@ export async function openBroadcastComposer(container, existing = null, preset =
     preview();
   });
   el.querySelector('#wb-aud').addEventListener('change', (e) => { state.kind = e.target.value; state.picked.clear(); state.autoTick = false; loadPeople(); });
-  el.querySelector('#wb-close').addEventListener('click', () => { poster.dispose(); closeModal(); });
+  el.querySelector('#wb-close').addEventListener('click', () => { if (currentView()) modal.closeOwnedModal(); });
   poster = mountPosterControl(el.querySelector('#wb-poster'), { existing: posterR.data?.poster, onChange: preview });
   el.querySelector('#wb-when').addEventListener('change', preview);
   el.querySelector('#wb-draft').addEventListener('click', () => save(false));
