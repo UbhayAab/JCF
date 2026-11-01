@@ -97,12 +97,13 @@ export async function renderAdminDashboard(container, { firstName, subtitle, tod
       <div class="greet">
         <div>
           <h1>Good ${greetingWord()}, ${sanitize(firstName)}</h1>
-          <p>${subtitle}</p>
+          <details class="dash-disclosure"><summary>About this dashboard</summary><p>${subtitle}</p></details>
         </div>
         <div class="date">${today}</div>
       </div>
 
       <div class="kpi-row" id="kpi-row">${Array(5).fill('<div class="kpi"><div class="sk" style="height:84px"></div></div>').join('')}</div>
+      <details class="dash-disclosure"><summary>About these figures</summary><dl id="kpi-definitions"></dl></details>
 
       <div class="quick">
         <a class="qa" id="qa-build"><span class="qa-ico teal">${icon('list')}</span><div><div class="qa-title">Build today's list</div><div class="qa-sub">Assign calls to the team</div></div></a>
@@ -133,7 +134,7 @@ export async function renderAdminDashboard(container, { firstName, subtitle, tod
           <section class="card card-flush">
             <div class="card-head"><h3>Today's intake</h3><span style="width:20px;height:20px;color:var(--ink-3)">${icon('inbox')}</span></div>
             <div class="intake">
-              <p style="font-size:13.5px;color:var(--ink-2)">New people added in the last 24 hours, waiting for assignment.</p>
+              <details class="dash-disclosure"><summary>Intake details</summary><p>New people added in the last 24 hours, waiting for assignment.</p></details>
               <div class="intake-nums" id="intake-nums">
                 <div class="intake-num"><div class="n">…</div><div class="l">Added today</div></div>
                 <div class="intake-num warn"><div class="n">…</div><div class="l">Not yet assigned</div></div>
@@ -148,6 +149,7 @@ export async function renderAdminDashboard(container, { firstName, subtitle, tod
       <section class="dash-wall">
         <div class="wall-head"><h2>How we're doing</h2><a class="link-u" id="wall-analytics">Open analytics ${icon('arrowRight')}</a></div>
         <div class="tiles" id="dq-tiles">${Array(10).fill('<div class="tile"><div class="sk" style="height:70px"></div></div>').join('')}</div>
+        <details class="dash-disclosure"><summary>More about these results</summary><dl id="wall-definitions"></dl></details>
       </section>
 
       <section class="card dq-chart" id="dq-chart">
@@ -217,8 +219,9 @@ async function loadKpis() {
         <div class="kpi${c.hot ? ' is-hot' : ''}${c.go ? ' clickable' : ''}" ${c.go ? `data-go="${c.go}" tabindex="0" role="button"` : ''} data-i="${i}">
           <div class="kpi-top"><div class="kpi-label">${c.label}</div><span class="kpi-ico well-${c.well || 'hot'}">${icon(c.ico)}</span></div>
           <div class="kpi-num tnum">${c.num}</div>
-          <div class="kpi-sub">${c.sub}</div>
         </div>`).join('');
+      const definitions = document.getElementById('kpi-definitions');
+      if (definitions) definitions.innerHTML = cards.map(c => `<dt>${sanitize(c.label)}</dt><dd>${sanitize(c.sub)}</dd>`).join('');
       el.querySelectorAll('[data-go]').forEach(k => {
         const go = () => (k.dataset.go === 'queue' ? openTeamOn('queue') : navigate(k.dataset.go));
         k.addEventListener('click', go);
@@ -281,14 +284,18 @@ function renderCounters(rows) {
     calling: rows.filter(r => r.status === 'in_progress').length,
     done: rows.filter(r => r.status === 'completed').length,
   };
-  el.innerHTML = [
+  const counters = [
     ['Queue records', n.total, 'Loaded queue records, including backlog and future work. These are not a daily allocation.'],
     ['All due work', n.open, 'Due pending work, including tasks waiting for a future daily plan.'],
     // in_progress stays set until the call is logged or the next build, so
     // "being called now" overstated it
     ['In progress', n.calling, 'Opened in the calling portal and not logged yet'],
     ['Completed records', n.done, 'Completed queue records in this snapshot; the call logs count actual calls.'],
-  ].map(([l, v, t]) => `<div title="${t}"><div class="l">${l}</div><div class="n tnum">${v}</div></div>`).join('');
+  ];
+  el.innerHTML = counters.map(([l, v, t]) => `<div title="${t}"><div class="l">${l}</div><div class="n tnum">${v}</div></div>`).join('');
+  el.insertAdjacentHTML('afterend', `<details class="dash-disclosure" data-queue-definitions><summary>Queue definitions</summary><dl>${counters.map(([label, , text]) => `<dt>${sanitize(label)}</dt><dd>${sanitize(text)}</dd>`).join('')}</dl></details>`);
+  // Reloading after a build or move replaces this definition, never duplicates it.
+  el.parentElement.querySelectorAll('[data-queue-definitions]').forEach((node, index) => { if (index > 0) node.remove(); });
 }
 
 function renderDue(open, reload) {
@@ -297,7 +304,7 @@ function renderDue(open, reload) {
   const shown = open.slice(0, 6);
   el.innerHTML = `
     <div class="card-head"><h3>Due work &amp; backlog</h3><span class="badge badge-neutral">${open.length}</span></div>
-    <p class="due-meta wraps" style="padding:0 var(--s5)">Daily routine lists stay fixed. This wider view includes tasks waiting for future plans; Team &amp; Queue can add a deliberate extra call with a reason.</p>
+    <details class="dash-disclosure dash-disclosure-inset"><summary>How this list works</summary><p class="due-meta wraps">Daily routine lists stay fixed. This wider view includes tasks waiting for future plans; Team &amp; Queue can add a deliberate extra call with a reason.</p></details>
     ${shown.length ? `<div class="due-list">${shown.map(r => {
       const name = r.full_name || r.patient_code || 'Patient';
       return `
@@ -575,13 +582,13 @@ async function loadConversations() {
           <div class="convo-main">
             <div class="convo-top"><span class="due-name">${sanitize(name)}</span><span class="convo-when">${formatRelativeTime(c.call_date)}${dur}</span></div>
             <div class="convo-chips"><span class="chip ${cls}">${ico ? icon(ico) : ''}${label}</span>${recep}${next}</div>
-            ${c.caller_notes ? `<p class="convo-note">${sanitize(c.caller_notes)}</p>` : ''}
+            ${c.caller_notes ? `<details class="dash-disclosure"><summary>Read call notes</summary><p class="dash-call-note">${sanitize(c.caller_notes)}</p></details>` : ''}
             ${c.contacted_by_name ? `<div class="due-meta">by ${sanitize(c.contacted_by_name)}</div>` : ''}
           </div>
         </div>`; }).join('')}</div>`
       : `<div class="empty"><div class="ico-wrap">${icon('phoneCall')}</div><h4>No conversations yet</h4><p>Once calls are logged, they appear here.</p></div>`}
       <div class="card-foot"><a id="dq-open-calls">Open call logs ${icon('arrowRight')}</a></div>`;
-    el.querySelectorAll('.convo[data-pid]').forEach(r => r.addEventListener('click', () => { if (r.dataset.pid) navigate('patients/' + r.dataset.pid); }));
+    el.querySelectorAll('.convo[data-pid]').forEach(r => r.addEventListener('click', (event) => { if (!event.target.closest('details') && r.dataset.pid) navigate('patients/' + r.dataset.pid); }));
     document.getElementById('dq-open-calls')?.addEventListener('click', () => navigate('calls'));
   } catch (err) {
     console.error('Recent conversations error:', err);
@@ -629,8 +636,9 @@ async function loadWall(s = {}) {
       <div class="tile tile-${x.t}${x.wide ? ' wide' : ''}">
         <div class="tile-label">${x.label}</div>
         <div class="tile-big${x.text ? ' is-text' : ''} tnum">${sanitize(String(x.big))}</div>
-        <div class="tile-sub">${sanitize(String(x.sub))}</div>
       </div>`).join('');
+    const definitions = document.getElementById('wall-definitions');
+    if (definitions) definitions.innerHTML = tiles.map(x => `<dt>${sanitize(x.label)}</dt><dd>${sanitize(String(x.sub))}</dd>`).join('');
   } catch (err) { console.error('Wall error:', err); el.innerHTML = ''; }
 }
 

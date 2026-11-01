@@ -24,7 +24,7 @@ export function validateIntakeStats(value, expectedDays) {
   return value;
 }
 const dayLabel = date => new Intl.DateTimeFormat('en-IN',{day:'numeric',month:'short',timeZone:'Asia/Kolkata'}).format(new Date(date+'T12:00:00Z'));
-const tile = (number,label,hint) => `<div class="card stat-card"><div class="stat-value tnum">${number}</div><div class="stat-label">${label}</div><p class="due-meta" style="${note};margin-top:6px">${hint}</p></div>`;
+const tile = (number,label,hint) => `<div class="card stat-card"><div class="stat-value tnum">${number}</div><div class="stat-label">${label}</div><details class="dash-disclosure"><summary>Count details<span class="sr-only">: ${label}</span></summary><p class="due-meta" style="${note};margin-top:6px">${hint}</p></details></div>`;
 export function intakeStatsHTML(data) {
   const s=data.summary;
   return `<p class="due-meta" style="${note}">Today: <strong>${dayLabel(data.through)}</strong> · India time (IST). Updated ${sanitize(new Date(data.as_of).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}))}.</p>
@@ -37,10 +37,10 @@ export function intakeStatsHTML(data) {
     <div class="card" style="margin-bottom:16px">
       <h3 style="margin:0 0 10px">All your uploaded records</h3>
       <p style="line-height:1.6;margin:0"><strong>${s.total_uploaded}</strong> uploaded overall · <strong>${s.reached}</strong> reached · <strong>${s.attempted_not_reached}</strong> called, not reached · <strong>${s.not_attempted}</strong> never called.</p>
-      <p class="due-meta" style="${note};margin:8px 0 0"><strong>${s.untouched_over_48h}</strong> active, contactable patients have waited over 48 hours without a call. These are older records, not uploads today. Archived, blocked and resting patients are excluded from that waiting count.</p>
+      <p class="due-meta" style="${note};margin:8px 0 0"><strong>${s.untouched_over_48h}</strong> uncalled over 48 hours</p>
+      <details class="dash-disclosure"><summary>Waiting count details</summary><p class="due-meta wraps">Active, contactable patients who have waited over 48 hours without a call. These are older records, not uploads today. Archived, blocked and resting patients are excluded.</p></details>
     </div>
-    <div class="card" style="min-width:0">
-      <h3 style="margin:0 0 8px">Progress by upload day</h3>
+    <details class="card dash-disclosure" style="min-width:0"><summary>Progress by upload day</summary><div>
       <p class="due-meta" style="${note}">${dayLabel(data.from)} to ${dayLabel(data.through)}, IST. Each row follows the patients uploaded on that date. Contact totals grow as later calls are logged. Zero-upload days stay at zero.</p>
       <p class="form-hint">On a phone, swipe the table sideways to compare all the columns.</p>
       <div style="overflow-x:auto;max-width:100%" tabindex="0" aria-label="Daily lead statistics; scroll horizontally for all columns">
@@ -57,14 +57,14 @@ export function intakeStatsHTML(data) {
         <li>Follow-ups due means an outstanding follow-up or callback queue record scheduled by now, excluding completed, future, engagement holds, blocked or do-not-call work. The calling list separately applies its daily plan and call cooldowns, so this is not a caller's quota.</li>
         <li>All-time totals include your full upload history, including archived records. Waiting-over-48h and due follow-ups include only currently contactable patients.</li>
       </ul></details>
-    </div>`;
+    </div></details>`;
 }
 
 export async function renderIntakeDashboard(container,{sb=getSupabase(),mountNotices=()=>Promise.resolve()}={}) {
   const owner=getCurrentUser()?.id,profile=getCurrentProfile()?.id;
   if (!container?.isConnected || !owner || !profile || !['ground_poc','uploader'].includes(getUserRole())) return;
   let sequence=0;
-  container.innerHTML=`<div class="dash"><div class="greet"><div><h1>Your intake dashboard</h1><p>Your uploads and the team's contact progress, with daily totals in India time.</p></div></div>
+  container.innerHTML=`<div class="dash"><div class="greet"><div><h1>Your intake dashboard</h1><details class="dash-disclosure"><summary>About this dashboard</summary><p>Your uploads and the team's contact progress, with daily totals in India time.</p></details></div></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0">
       <a class="btn btn-primary" href="#upload">Upload leads</a><a class="btn btn-secondary" href="#upload?mode=existing">Update existing patient</a><a class="btn btn-secondary" href="#intake">Full intake report</a><a class="btn btn-ghost" href="#profile">Profile</a>
     </div><div id="care-notifications"></div><div id="saturday-card"></div><div id="resource-replies"></div><div id="docs-waiting-card"></div>

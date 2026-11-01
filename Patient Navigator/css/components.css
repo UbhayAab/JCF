@@ -1442,3 +1442,18 @@ button { -webkit-tap-highlight-color: transparent; }
   .kv.measurements-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .measurements-trend text { font-size: 22px; }
 }
+
+/* Fixboard135: native touch/keyboard drill-downs, limited to dashboards. */
+.dash .dash-disclosure { min-width: 0; color: var(--ink-2); }
+.dash .dash-disclosure > summary {
+  box-sizing: border-box; min-height: 44px; padding: 10px 0;
+  color: var(--primary); font-size: 13px; line-height: 24px;
+  cursor: pointer; text-decoration: underline; text-underline-offset: 3px;
+  white-space: normal; overflow-wrap: anywhere;
+}
+.dash .dash-disclosure > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+.dash .dash-disclosure p, .dash .dash-disclosure dd { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.dash .dash-disclosure dt { font-weight: 600; color: var(--ink); margin-top: 10px; }
+.dash .dash-disclosure dd { margin: 2px 0 12px; }
+.dash .dash-disclosure-inset { padding: 0 var(--s5); }
+.dash .dash-call-note { margin: 4px 0 12px; }

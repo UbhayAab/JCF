@@ -68,7 +68,7 @@ export async function renderDashboard(container) {
       <div class="greet">
         <div>
           <h1>Good ${greetingWord()}, <span class="serif">${firstName}</span></h1>
-          <p>${subtitle}</p>
+          <details class="dash-disclosure"><summary>About this dashboard</summary><p>${subtitle}</p></details>
         </div>
         <div class="date">${today}</div>
       </div>
@@ -168,13 +168,15 @@ async function loadCallerAvailability() {
         <span class="stat-ico ${available ? 'ok' : 'warn'}">${icon(available ? 'checkCircle' : 'clock')}</span>
         <div style="min-width:0"><div class="info-value">${available ? "You're on for calls today" : "You're marked off today"}</div>
           <div class="due-meta wraps">${summary.pending} on today's list · ${summary.follow_ups} follow-ups · ${summary.new_leads} new · ${Number(summary.other_calls || 0)} other ${icon('arrowRight')}</div>
-          ${summary.plan_total != null ? `<div class="due-meta wraps">Daily routine: ${Number(summary.routine_remaining)} left of ${Number(summary.plan_total)} planned · ${Number(summary.additional_pending || 0)} additional · ${Number(summary.done_today)} call logs today.</div>` : ''}
-          ${summary.backlog ? `<div class="due-meta wraps">${Number(summary.backlog)} other due tasks wait for future daily plans. Today's routine does not refill.</div>` : ''}</div>
+          ${summary.plan_total != null || summary.backlog ? `<details class="dash-disclosure"><summary>List details</summary>
+            ${summary.plan_total != null ? `<div class="due-meta wraps">Daily routine: ${Number(summary.routine_remaining)} left of ${Number(summary.plan_total)} planned · ${Number(summary.additional_pending || 0)} additional · ${Number(summary.done_today)} call logs today.</div>` : ''}
+            ${summary.backlog ? `<div class="due-meta wraps">${Number(summary.backlog)} other due tasks wait for future daily plans. Today's routine does not refill.</div>` : ''}
+          </details>` : ''}</div>
       </div>
       ${isImpersonating() ? '<p class="due-meta wraps">Preview only. Return to your own account to change availability.</p>' : ''}
       <button class="btn ${available ? 'btn-secondary' : 'btn-primary'} btn-sm" id="dash-avail" ${isImpersonating() ? 'disabled' : ''}>${available ? 'Mark me off today' : "I'm calling today"}</button>
     </div>`;
-  document.getElementById('avail-open')?.addEventListener('click', () => navigate('calling'));
+  document.getElementById('avail-open')?.addEventListener('click', (event) => { if (!event.target.closest('details')) navigate('calling'); });
   document.getElementById('dash-avail')?.addEventListener('click', async () => {
     if (isImpersonating()) { showToast('Return to your own account to change availability.', 'info'); return; }
     try { const { error } = await sb.rpc('mark_availability', { p_available: !available, p_day: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) });
