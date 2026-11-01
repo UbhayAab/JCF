@@ -10,9 +10,9 @@ export function renderCareCallForm136(p, { pitches = {}, callNum = 1, services =
   const showDeeper = callNum >= 2;   // services, WhatsApp, consent, details
   return `
     <div class="card card-flush logform">
-      <div class="lf-head"><h3>How did it go?</h3>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="faint" style="font-size:13px;color:var(--ink-3)">${sanitize((p.full_name || '').split(' ')[0])}</span>
+      <div class="lf-head" style="flex-wrap:wrap;gap:10px"><h3>How did it go?</h3>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0;max-width:100%">
+          <span class="faint" style="font-size:13px;color:var(--ink-3);min-width:0;max-width:100%;overflow-wrap:anywhere">${sanitize((p.full_name || '').split(' ')[0])}</span>
           <!-- Relabelled 2026-09-10. The RPC behind this modal has been live
                since sql/113 and had been used ZERO times (321 concerns, 0 with
                reassign_requested). Prachi's report on 01/09 asks for an
