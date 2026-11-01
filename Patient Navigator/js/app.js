@@ -535,7 +535,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261102f';  // bumped on every breaking deploy
+const APP_BUILD = '20261102g';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -637,6 +637,8 @@ async function init() {
   // Fixboard #24. Loaded on demand: only managers and admins ever open it.
   registerRoute('broadcasts', (c) => import('./pages/broadcasts.js').then((m) => m.renderBroadcasts(c)),
     { requiresAuth: true, roles: ['admin', 'manager'] });
+  registerRoute('staff-reminders', (c) => import('./pages/staffReminders20.js').then((m) => m.renderStaffReminders20(c)),
+    { requiresAuth: true, roles: ['admin','manager','caller','caregiver_mentor','therapist','nutritionist','content'] });
   // Document reads: what our own call notes say a family holds, staged by
   // tools/read_documents_from_calls.cjs and promoted only by a human here.
   // Managers only: agreeing writes to the patient record.

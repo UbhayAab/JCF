@@ -1,5 +1,10 @@
 // Short, static help for tabs opened during training. No data or action access.
 export const TAB_GUIDES = Object.freeze([
+  { route: 'staff-reminders', label: 'Staff reminders', what: 'Read your scheduled content and keep a persistent record of your own acknowledgements.', steps: [
+    'Open Unread or Upcoming using your own signed-in account. Refresh checks current India-time triggers.',
+    'Read the saved content and acknowledge your own reminder within its completion window. All history keeps missed and acknowledged work.',
+    'Managers create reusable content versions and review named staff, weekdays and trigger times before confirming a plan.',
+  ] },
   { route: 'patients', label: 'Patients', what: 'Read the family record before a call and keep agreed details current.', steps: [
     'Search the families available to you. During training, your manager assigns the families you can open.',
     'Open a record to review its notes, call history and care needs before changing anything.',

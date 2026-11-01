@@ -53,6 +53,7 @@ const NAV_ITEMS = [
       // Fixboard #24: write one message, pick who and when; HopeBot sends it (sql/168).
       { id: 'broadcasts', label: 'WhatsApp messages', icon: 'message', route: 'broadcasts', roles: ['admin', 'manager'] },
       { id: 'circles', label: 'Saturday circles', icon: 'users', route: 'circles', roles: ['admin','manager'] },
+      { id: 'staff-reminders', label: 'Staff reminders', icon: 'bell', route: 'staff-reminders', roles: CARE_ROLES },
       { id: 'updates', label: "What's new", icon: 'bell', route: 'updates', roles: ['admin','manager','caller','caregiver_mentor','therapist','nutritionist'] },
       { id: 'docreads',  label: 'Document reads', icon: 'fileText', route: 'docreads', roles: ['admin', 'manager'] },
       { id: 'resources', label: 'Resources',      icon: 'mapPin',    route: 'resources', roles: ALL_ROLES },

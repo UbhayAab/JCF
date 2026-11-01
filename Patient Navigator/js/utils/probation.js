@@ -11,8 +11,8 @@ import { getSupabase } from '../supabase.js';
 import { getCurrentProfile } from '../auth.js';
 
 const CORE = {
-  caregiver: ['medical-navigation', 'calling', 'patients', 'dashboard', 'nutrition-tracker', 'updates', 'learn', 'profile'],
-  nutrition: ['nutrition', 'dashboard', 'nutrition-tracker', 'updates', 'learn', 'profile'],
+  caregiver: ['medical-navigation', 'calling', 'patients', 'dashboard', 'nutrition-tracker', 'updates', 'learn', 'staff-reminders', 'profile'],
+  nutrition: ['nutrition', 'dashboard', 'nutrition-tracker', 'updates', 'learn', 'staff-reminders', 'profile'],
 };
 const STEP_ONE = ['patients', 'calls', 'resources'];
 const LABEL = { patients: 'Patients', calls: 'Call Logs', resources: 'Resources' };
