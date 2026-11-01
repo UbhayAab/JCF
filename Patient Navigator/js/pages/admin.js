@@ -243,6 +243,7 @@ async function showInviteModal() {
             <option value="ground_poc">Ground POC</option>
             <option value="therapist">Therapist</option>
             <option value="nutritionist">Nutritionist</option>
+            <option value="medical_navigator">Medical Navigator</option>
             <option value="content">Content</option>
             <option value="manager">Manager</option>
             <option value="admin">Admin</option>
@@ -359,7 +360,7 @@ async function loadUsers() {
         : '<span class="text-muted" style="font-size:var(--font-xs)">No manager</span>';
     };
 
-    const roleOpts = (cur) => [['caregiver_mentor','Caregiver Mentor'],['ground_poc','Ground POC'],['therapist','Therapist'],['nutritionist','Nutritionist'],['content','Content'],['uploader','Intake / Uploader'],['manager','Manager'],...(isAdmin()?[['admin','Admin']]:[])]
+    const roleOpts = (cur) => [['caregiver_mentor','Caregiver Mentor'],['ground_poc','Ground POC'],['therapist','Therapist'],['nutritionist','Nutritionist'],['medical_navigator','Medical Navigator'],['content','Content'],['uploader','Intake / Uploader'],['manager','Manager'],...(isAdmin()?[['admin','Admin']]:[])]
       .map(([v,l]) => `<option value="${v}" ${cur===v?'selected':''}>${l}</option>`).join('');
     content.innerHTML = `
       <h2>${active ? 'Active profiles' : 'Inactive Profiles'}</h2>

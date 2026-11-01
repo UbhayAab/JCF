@@ -11,7 +11,7 @@ import { getSupabase } from '../supabase.js';
 import { getCurrentProfile } from '../auth.js';
 
 const CORE = {
-  caregiver: ['calling', 'patients', 'dashboard', 'nutrition-tracker', 'updates', 'learn', 'profile'],
+  caregiver: ['medical-navigation', 'calling', 'patients', 'dashboard', 'nutrition-tracker', 'updates', 'learn', 'profile'],
   nutrition: ['nutrition', 'dashboard', 'nutrition-tracker', 'updates', 'learn', 'profile'],
 };
 const STEP_ONE = ['patients', 'calls', 'resources'];
@@ -46,6 +46,7 @@ const stepOneFor = (role) => STEP_ONE.filter(r => !CORE[teamOf(role)].includes(r
 
 /** Whether a route is open now. A family's own record ('patients/<id>') stays open: RLS limits it to hers. */
 export function routeOpen(route, role) {
+  if (role === 'medical_navigator') return ['medical-navigation', 'profile', 'login'].includes(String(route || '').replace(/^#/, '').split('?')[0]);
   const level = probationLevel();
   if (level === 'all') return true;
   const full = String(route || '').replace(/^#/, '');
@@ -60,7 +61,7 @@ export function routeOpen(route, role) {
 }
 
 /** Where someone on probation lands when a route is not open yet. */
-export const homeFor = (role) => (role === 'nutritionist' ? 'nutrition' : 'calling');
+export const homeFor = (role) => (role === 'medical_navigator' ? 'medical-navigation' : role === 'nutritionist' ? 'nutrition' : 'calling');
 
 /** The line for the menu card; '' when nothing is locked. */
 export function progressLine() {

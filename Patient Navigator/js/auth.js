@@ -201,11 +201,17 @@ async function initialize(epoch) {
 async function loadProfile(epoch = authEpoch, userId = currentUser?.id) {
   if (!userId) return 'error';
   const sb = getSupabase();
-  const { data, error } = await sb
+  let { data, error } = await sb
     .from('profiles')
     .select('*')
     .eq('id', userId)
     .maybeSingle();
+
+  // The medical API surface exposes only a scalar self-profile RPC, so table
+  // embedding cannot reopen a legacy clinical view. Other roles keep this read.
+  if (error?.code === 'PT403' && error?.details === 'pn130_scope') {
+    ({ data, error } = await sb.rpc('medical_navigation_profile'));
+  }
 
   if (epoch !== authEpoch || currentUser?.id !== userId) return 'stale';
 
@@ -304,6 +310,18 @@ export async function signOut() {
 // ---- Update own profile ----
 export async function updateProfile(updates) {
   const sb = getSupabase();
+  if (currentProfile?.role === 'medical_navigator') {
+    const owner = currentUser?.id, epoch = authEpoch;
+    const { data, error } = await sb.rpc('medical_navigation_profile_update', {
+      p_name: updates.full_name, p_phone: updates.phone || null,
+    });
+    if (error) throw new Error(error.message);
+    if (epoch !== authEpoch || currentUser?.id !== owner || data?.id !== owner) {
+      throw new Error('Account changed. Reopen your profile.');
+    }
+    currentProfile = data;
+    return data;
+  }
   const { data, error } = await sb
     .from('profiles')
     .update({

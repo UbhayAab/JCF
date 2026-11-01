@@ -31,6 +31,7 @@ const NAV_ITEMS = [
       { id: 'brief',     label: 'This morning',   icon: 'sun',       route: 'brief',     roles: ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist'] },
       { id: 'dashboard', label: 'Dashboard',      icon: 'grid',      route: 'dashboard', roles: ALL_ROLES },
       { id: 'calling',   label: 'Calling Portal', icon: 'phoneCall', route: 'calling',   roles: ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'content'] },
+      { id: 'medical-navigation', label: 'Medical navigation', icon: 'fileText', route: 'medical-navigation', roles: ['admin','manager','caller','caregiver_mentor','medical_navigator'] },
       { id: 'nutrition', label: 'Nutrition',      icon: 'leaf',      route: 'nutrition', roles: ['nutritionist', 'manager', 'admin'] },
       { id: 'nutrition-tracker', label: 'Nutrition tracker', icon: 'list', route: 'nutrition-tracker', roles: ALL_ROLES },
       { id: 'sessions',  label: '1:1 Sessions',   icon: 'calendar',  route: 'sessions',  roles: ['therapist', 'nutritionist', 'manager', 'admin', 'caller', 'caregiver_mentor'] },
@@ -322,7 +323,9 @@ function renderBottomNav(role, active) {
   const isManagerOrAdminRole = ['admin', 'manager'].includes(role);
   const isIntakeRole = INTAKE_ROLES.includes(role);
   const isNutritionist = role === 'nutritionist';
-  const items = isNutritionist
+  const items = role === 'medical_navigator'
+    ? [{ id: 'medical-navigation', label: 'Medical', route: 'medical-navigation', icon: 'fileText' }, { id: 'profile', label: 'Profile', route: 'profile', icon: 'user' }]
+    : isNutritionist
     ? [
         { id: 'dashboard', label: 'Home',      route: 'dashboard', icon: 'grid' },
         { id: 'nutrition', label: 'Nutrition', route: 'nutrition', icon: 'leaf' },
@@ -348,7 +351,7 @@ function renderBottomNav(role, active) {
 
   // On probation (Fixboard #23): only open tabs, and the Learning Hub in reach.
   let shown = items.filter(it => routeOpen(it.route, role));
-  if (probationLevel() !== 'all' && !shown.some(it => it.route === 'learn')) {
+  if (role !== 'medical_navigator' && probationLevel() !== 'all' && !shown.some(it => it.route === 'learn')) {
     const at = shown.findIndex(it => it.route === 'profile');
     const learn = { id: 'learn', label: 'Learn', route: 'learn', icon: 'book' };
     shown = at < 0 ? [...shown, learn] : [...shown.slice(0, at), learn, ...shown.slice(at)];

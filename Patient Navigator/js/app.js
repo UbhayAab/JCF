@@ -280,7 +280,7 @@ function renderAppShell() {
                  exactly what that box finds (name, ID, city, cancer type) and
                  only the families this person may see. Wide screens only:
                  phones have Patients one tap away in the bottom bar. -->
-            <form class="hdr-search" id="hdr-search" role="search" autocomplete="off">
+            <form class="hdr-search" id="hdr-search" role="search" autocomplete="off" ${getUserRole() === 'medical_navigator' ? 'hidden' : ''}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
               <input type="search" id="hdr-search-input" maxlength="80" placeholder="Find a patient: name, ID or city" aria-label="Find a patient by name, ID or city" />
             </form>
@@ -499,6 +499,7 @@ function homeRoute() {
   switch (getUserRole()) {
     case 'admin':
     case 'manager':           return 'team';
+    case 'medical_navigator': return 'medical-navigation';
     case 'caller':
     case 'caregiver_mentor':  return 'calling';
     case 'uploader':
@@ -534,10 +535,11 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261102d';  // bumped on every breaking deploy
+const APP_BUILD = '20261102e';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
+const LEGACY_ROLES = [...CARE_ROLES, ...INTAKE_ROLES];
 const UPLOAD_ROLES = ['admin', 'manager', 'content', ...INTAKE_ROLES];
 
 function bootApp() {
@@ -564,8 +566,10 @@ function bootApp() {
     maybeAutoBuild();
     // Once per member until they confirm their WhatsApp number (Fixboard #10,
     // sql/157). After the first page has painted, so it never races it.
-    setTimeout(maybeAskForPhone, 900);
-    setTimeout(maybeShowFeatureUpdate, 1800);
+    if (getUserRole() !== 'medical_navigator') {
+      setTimeout(maybeAskForPhone, 900);
+      setTimeout(maybeShowFeatureUpdate, 1800);
+    }
   } catch (e) {
     console.error('[boot] FAILED to render shell:', e);
     appBooted = false;
@@ -583,11 +587,11 @@ async function init() {
 
   // Register routes
   registerRoute('login', () => renderLoginPage(), { requiresAuth: false });
-  registerRoute('dashboard', (c) => renderDashboard(c), { requiresAuth: true });
+  registerRoute('dashboard', (c) => renderDashboard(c), { requiresAuth: true, roles: LEGACY_ROLES });
   // The morning brief. Same roles as the calling portal, because it is the
   // thing you read on the way into it.
   registerRoute('brief', (c) => renderBrief(c), { requiresAuth: true, roles: CARE_ROLES });
-  registerRoute('patients', (c, p) => renderPatients(c, p), { requiresAuth: true });
+  registerRoute('patients', (c, p) => renderPatients(c, p), { requiresAuth: true, roles: LEGACY_ROLES });
   registerRoute('calls', (c) => renderCalls(c), { requiresAuth: true, roles: CARE_ROLES });
   registerRoute('admin', (c, p) => renderAdmin(c, p), { requiresAuth: true, roles: ['admin', 'manager'] });
   registerRoute('analytics', (c) => renderAnalytics(c), { requiresAuth: true, roles: ['admin', 'manager', 'content'] });
@@ -599,12 +603,15 @@ async function init() {
     return m.renderCircleMessages(c.querySelector('#circles-workspace'));
   }), { requiresAuth:true, roles:['admin','manager'] });
   registerRoute('updates', renderFeatureUpdates, { requiresAuth:true, roles:['admin','manager','caller','caregiver_mentor','therapist','nutritionist'] });
-  registerRoute('profile', (c) => renderProfile(c), { requiresAuth: true });
+  registerRoute('medical-navigation', (c) => import('./pages/medicalNavigation.js').then(m => m.renderMedicalNavigation(c)), { requiresAuth: true, roles: ['admin','manager','caller','caregiver_mentor','medical_navigator'] });
+  registerRoute('profile', (c) => getUserRole() === 'medical_navigator'
+    ? import('./pages/medicalProfile.js').then(m => m.renderMedicalProfile(c))
+    : renderProfile(c), { requiresAuth: true });
   registerRoute('learn', (c) => renderLearn(c), { requiresAuth: true, roles: CARE_ROLES });
   registerRoute('upload', (c) => renderUpload(c), { requiresAuth: true, roles: UPLOAD_ROLES });
   registerRoute('intake', (c) => renderIntake(c), { requiresAuth: true, roles: UPLOAD_ROLES });
   registerRoute('nutrition', (c) => renderNutrition(c), { requiresAuth: true, roles: ['nutritionist', 'manager', 'admin'] });
-  registerRoute('nutrition-tracker', renderNutritionTracker, { requiresAuth: true });
+  registerRoute('nutrition-tracker', renderNutritionTracker, { requiresAuth: true, roles: LEGACY_ROLES });
   registerRoute('hopebot-feedback', async (c) => {
     const account = getCurrentUser()?.id, route = window.location.hash;
     const allowed = () => c.isConnected && route === window.location.hash && account === getCurrentUser()?.id
@@ -641,14 +648,14 @@ async function init() {
   // action has been navigating to #resources/money_stay since 03/09 and
   // landing on the unfiltered shelf, which is a large part of why the list
   // still reads as a dump. resources.js has read params.id since then.
-  registerRoute('resources', (c, p) => renderResources(c, p), { requiresAuth: true });
+  registerRoute('resources', (c, p) => renderResources(c, p), { requiresAuth: true, roles: LEGACY_ROLES });
   // Data room: raw CSV downloads. Managers/admins get everything,
   // content (research) only the de-identified datasets.
   registerRoute('exports', (c) => renderExports(c), { requiresAuth: true, roles: ['admin', 'manager', 'content'] });
   registerRoute('report', (c) => renderReport(c), { requiresAuth: true, roles: ['admin', 'manager'] });
   // Who uploaded which family's documents (sql/146). Open to every role: the
   // RPC shows managers and admins everyone's uploads and anyone else their own.
-  registerRoute('uploads', (c) => renderUploads(c), { requiresAuth: true });
+  registerRoute('uploads', (c) => renderUploads(c), { requiresAuth: true, roles: LEGACY_ROLES });
 
   // Set guards
   setAuthGuard(() => !!getCurrentUser());

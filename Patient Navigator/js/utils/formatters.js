@@ -74,6 +74,7 @@ export function roleLabel(role) {
     caregiver_mentor: 'Caregiver Mentor',
     ground_poc: 'Ground POC',
     uploader: 'Intake / Uploader',
+    medical_navigator: 'Medical Navigator',
   };
   return labels[role] || capitalize(role);
 }
@@ -82,7 +83,7 @@ export function getRoleBadge(role) {
   const map = {
     admin: 'badge-danger', manager: 'badge-info', caller: 'badge-success',
     ground_poc: 'badge-primary', caregiver_mentor: 'badge-success', therapist: 'badge-primary',
-    nutritionist: 'badge-warning', content: 'badge-neutral'
+    nutritionist: 'badge-warning', content: 'badge-neutral', medical_navigator: 'badge-primary'
   };
   return `<span class="badge ${map[role] || 'badge-neutral'}">${roleLabel(role)}</span>`;
 }

@@ -1431,6 +1431,24 @@ button { -webkit-tap-highlight-color: transparent; }
 #mode-camera { scroll-margin-top: calc(var(--header-h) + 12px); }
 .ci-next { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
 .ci-next[hidden] { display: none; }
+
+/* Medical navigation uses native hidden controls for exhausted/role-only work. */
+[data-mednav] [hidden] { display: none !important; }
+.hdr-search[hidden] { display: none !important; }
+[data-mednav] label { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+[data-mednav] input, [data-mednav] select, [data-mednav] textarea {
+  box-sizing: border-box; width: 100%; max-width: 100%; min-height: 44px;
+  border: 1px solid var(--color-border, #cbd0dc); border-radius: 10px;
+  padding: 10px 12px; color: inherit; background: var(--color-surface, #fff);
+  font: inherit;
+}
+[data-mednav] textarea { min-height: 112px; resize: vertical; }
+[data-mednav] [data-call-fields] { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 12px; }
+[data-mednav] [data-call-fields] label:first-child { grid-column: 1 / -1; }
+[data-mednav] dl { margin: 12px 0 20px; }
+[data-mednav] section > h3 { margin-top: 20px; }
+[data-mednav] [data-history] h4 { font-size: 16px; }
+[data-mednav] [data-history] a { display: inline-block; margin: 12px 0; }
 .ci-next-line { display: flex; align-items: flex-start; gap: 10px; font-weight: 600; line-height: 1.45; }
 .ci-next-line svg { flex: none; width: 22px; height: 22px; color: var(--ok); }
 .ci-agree { display: flex; align-items: center; gap: 10px; min-height: 44px; font-weight: 600; cursor: pointer; }
