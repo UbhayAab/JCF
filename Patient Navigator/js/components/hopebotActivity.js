@@ -23,18 +23,22 @@ const count = value => Number.isInteger(value) && value >= 0 ? value : null;
 const text = (value, max) => typeof value === 'string' ? value.slice(0, max).trim() : '';
 const status = value => value === 'closed' ? 'Closed' : value === 'open' ? 'Open' : value === 'calling' ? 'In progress' : 'Status not recorded';
 
-export function hopebotActivityHTML(data) {
+export function hopebotActivityHTML(data, { summaryOnly = false } = {}) {
+  const title = summaryOnly ? 'HopeBot summary' : 'HopeBot activity';
   const summaries = (Array.isArray(data.summaries) ? data.summaries : []).slice(0, 25);
   // Only care categories appear here. Admin/deletion workflows stay in their
   // existing managed surfaces, even if an unexpected payload includes them.
   const needs = (Array.isArray(data.needs) ? data.needs : []).filter(need => need && Object.hasOwn(reasons, need.reason)).slice(0, 50);
   const docs = data.documents || {}, files = count(docs.count), waiting = count(docs.waiting), contacts = count(data.contacts_count);
-  const empty = !data.last_inbound_at && !summaries.some(summary => text(summary?.summary, 1200)) && !needs.length && files === 0;
+  const hasSummary = summaries.some(summary => text(summary?.summary, 1200));
+  const empty = summaryOnly ? !hasSummary : !data.last_inbound_at && !hasSummary && !needs.length && files === 0;
   return `<section class="card wrap-meta" data-hopebot-activity style="padding:12px 14px;margin:8px 0 12px;overflow-wrap:anywhere">
-    <h3 style="margin:0 0 6px">HopeBot activity</h3>
+    <h3 style="margin:0 0 6px">${title}</h3>
     <p class="due-meta" style="margin:0 0 8px">Only saved contacts linked to this patient are shown.${contacts !== null ? ` ${contacts} linked contact${contacts === 1 ? '' : 's'}.` : ''}</p>
     ${data.last_inbound_at ? `<p class="due-meta">Latest inbound message: ${sanitize(when(data.last_inbound_at))}. This is when the family wrote to HopeBot.</p>` : ''}
-    ${empty ? '<p data-hb-activity-empty>No HopeBot activity is available for this patient yet. This does not confirm that they have never used HopeBot.</p>' : ''}
+    ${empty ? (summaryOnly
+      ? '<p data-hb-summary-empty>No synced conversation summary is available for this patient yet. This does not confirm that they have never used HopeBot.</p>'
+      : '<p data-hb-activity-empty>No HopeBot activity is available for this patient yet. This does not confirm that they have never used HopeBot.</p>') : ''}
     ${data.summaries_truncated || data.summaries?.length > 25 ? `<p class="due-meta" data-hb-summaries-truncated>Showing the latest ${summaries.length} of ${count(data.summaries_total) ?? contacts ?? 'the linked'} contact summaries. This is a bounded view.</p>` : ''}
     ${summaries.map(summary => {
       const body = text(summary?.summary, 1200), made = instant(summary?.summary_at), inbound = instant(summary?.last_inbound_at);
@@ -47,18 +51,20 @@ export function hopebotActivityHTML(data) {
           : '<p class="due-meta">No synced summary is available for this contact yet.</p>'}
       </div>`;
     }).join('')}
-    ${needs.length ? `<div style="margin-top:10px"><strong>Help requested through HopeBot</strong>${data.needs_truncated || data.needs?.length > 50 ? `<p class="due-meta" data-hb-needs-truncated>Showing the first ${needs.length} of ${count(data.needs_total) ?? 'the available'} care requests, with open and safety requests first. This is not the complete request history.</p>` : ''}<ul style="padding-left:20px;margin:6px 0">${needs.map(need => `<li style="margin-bottom:6px">${sanitize(reasons[need.reason])} - ${sanitize(status(need.state))}
+    ${!summaryOnly && needs.length ? `<div style="margin-top:10px"><strong>Help requested through HopeBot</strong>${data.needs_truncated || data.needs?.length > 50 ? `<p class="due-meta" data-hb-needs-truncated>Showing the first ${needs.length} of ${count(data.needs_total) ?? 'the available'} care requests, with open and safety requests first. This is not the complete request history.</p>` : ''}<ul style="padding-left:20px;margin:6px 0">${needs.map(need => `<li style="margin-bottom:6px">${sanitize(reasons[need.reason])} - ${sanitize(status(need.state))}
       <span class="due-meta">Asked ${sanitize(when(need.asked_at))}${need.closed_at ? `; closed ${sanitize(when(need.closed_at))}` : ''}</span></li>`).join('')}</ul><p class="due-meta">This is a read-only summary. Existing request assignments and actions are unchanged.</p></div>` : ''}
-    <div style="border-top:1px solid var(--line);padding-top:8px;margin-top:10px" data-hb-stored-documents>
+    ${!summaryOnly ? `<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:10px" data-hb-stored-documents>
       <strong>Stored WhatsApp originals</strong>
       <p class="due-meta">${files === null ? 'File count is unavailable.' : `${files} stored original${files === 1 ? '' : 's'}.${waiting !== null ? ` ${waiting} waiting for the reader.` : ''}`}${docs.latest_at ? ` Latest original received ${sanitize(when(docs.latest_at))}.` : ''} These are actual filed documents; AI report-reading counts are separate.${files > 100 ? ' View stored originals lists the latest 100 files.' : ''}</p>
       ${files > 0 ? '<button type="button" class="btn btn-secondary btn-sm" data-hb-show-originals>View stored originals</button><div data-hb-originals hidden></div>' : ''}
-    </div>
-    <button type="button" class="btn btn-ghost btn-sm" data-hb-activity-refresh style="margin-top:8px">Refresh activity</button>
+    </div>` : ''}
+    <button type="button" class="btn btn-ghost btn-sm" data-hb-activity-refresh style="margin-top:8px">${summaryOnly ? 'Refresh summary' : 'Refresh activity'}</button>
   </section>`;
 }
 
-export function mountHopebotActivity(el, patientId, { isCurrent = () => true } = {}) {
+export function mountHopebotActivity(el, patientId, { isCurrent = () => true, summaryOnly = false } = {}) {
+  const title = summaryOnly ? 'HopeBot summary' : 'HopeBot activity';
+  const subject = summaryOnly ? 'summary' : 'activity';
   if (!el || !patientId) return { refresh() {}, dispose() {} };
   mounts.get(el)?.dispose();
   const account = identity(); let generation = 0, disposed = false, observer, subscription;
@@ -71,22 +77,22 @@ export function mountHopebotActivity(el, patientId, { isCurrent = () => true } =
   };
   const unavailable = (denied = false) => {
     el.hidden = false;
-    el.innerHTML = `<section class="card" style="padding:12px 14px;margin:8px 0 12px;overflow-wrap:anywhere"><h3 style="margin:0 0 6px">HopeBot activity</h3>
-      <p role="status">${denied ? 'HopeBot activity is not available for this account and patient. Access could not be confirmed.' : 'HopeBot activity could not load. Refresh to try again.'}</p>
-      <button type="button" class="btn btn-ghost btn-sm" data-hb-activity-refresh>Refresh activity</button></section>`;
+    el.innerHTML = `<section class="card" style="padding:12px 14px;margin:8px 0 12px;overflow-wrap:anywhere"><h3 style="margin:0 0 6px">${title}</h3>
+      <p role="status">${denied ? `HopeBot ${subject} is not available for this account and patient. Access could not be confirmed.` : `HopeBot ${subject} could not load. Refresh to try again.`}</p>
+      <button type="button" class="btn btn-ghost btn-sm" data-hb-activity-refresh>${summaryOnly ? 'Refresh summary' : 'Refresh activity'}</button></section>`;
     el.querySelector('[data-hb-activity-refresh]').onclick = refresh;
   };
   async function refresh() {
     const seq = ++generation;
     if (!current(seq)) return;
-    el.hidden = false; el.innerHTML = '<section class="card" style="padding:12px 14px;margin:8px 0 12px"><h3>HopeBot activity</h3><p role="status">Loading activity for this patient...</p></section>';
+    el.hidden = false; el.innerHTML = `<section class="card" style="padding:12px 14px;margin:8px 0 12px"><h3>${title}</h3><p role="status">Loading ${subject} for this patient...</p></section>`;
     let response;
     try { response = await getSupabase().rpc('hopebot_activity_for_patient', { p_patient: patientId }); }
     catch { if (current(seq)) unavailable(); return; }
     if (!current(seq)) return;
     const { data, error } = response || {};
     if (error || !data || data.patient_id !== patientId) { unavailable(error?.code === '42501'); return; }
-    el.innerHTML = hopebotActivityHTML(data);
+    el.innerHTML = hopebotActivityHTML(data, { summaryOnly });
     el.querySelector('[data-hb-activity-refresh]').onclick = refresh;
     const button = el.querySelector('[data-hb-show-originals]');
     if (button) button.onclick = async () => {

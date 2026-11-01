@@ -597,7 +597,7 @@ function showPatientForm(existing = null, onSaved = null) {
 // ============================================================
 // DETAIL: WHO · ACTION · IMPACT
 // ============================================================
-const TABS = ['overview', 'support', 'wellbeing', 'calls', 'documents', 'notes'];
+const TABS = ['overview', 'support', 'wellbeing', 'calls', 'documents', 'notes', 'hopebot'];
 let activeTab = 'overview';
 
 // Which tab the URL is asking for. The tab lives in the hash as a query
@@ -799,6 +799,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
              contacting the patient". This is where the ground team writes;
              the calling portal and the morning brief are where it is read. -->
         <button class="dtab ${activeTab === 'notes' ? 'active' : ''}" data-tab="notes">${icon('message')}Notes <span class="cnt">${noteCount}</span></button>
+        <button class="dtab ${activeTab === 'hopebot' ? 'active' : ''}" data-tab="hopebot">${icon('message')}HopeBot summary</button>
       </div>
 
       <div id="tab-content"></div>
@@ -936,6 +937,14 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       else if (activeTab === 'wellbeing') renderWellbeingTab(tabContent, patient, services, assessments, sb, reload);
       else if (activeTab === 'documents') renderDocumentsTab(tabContent, patient, sb, reload);
       else if (activeTab === 'notes') renderNotesTab(tabContent, patient);
+      else if (activeTab === 'hopebot') {
+        tabContent.innerHTML = '<div id="hopebot-summary-tab"></div>';
+        const slot = tabContent.querySelector('#hopebot-summary-tab');
+        const current = () => stillHere() && activeTab === 'hopebot' && slot.isConnected;
+        import('../components/hopebotActivity.js')
+          .then(m => { if (current()) m.mountHopebotActivity(slot, patient.id, { summaryOnly: true, isCurrent: current }); })
+          .catch(() => { if (current()) slot.textContent = 'HopeBot summary could not load. Refresh to try again.'; });
+      }
       else renderCallsTab(tabContent, patient, calls, reload, callsFailed);
     };
     container.querySelectorAll('.dtab').forEach(tab => {
