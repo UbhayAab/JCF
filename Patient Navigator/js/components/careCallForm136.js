@@ -58,7 +58,7 @@ ${!contactMode ? `          <button type="button" class="btn btn-ghost btn-sm" i
             <div class="recep" id="recep">${RECEPTIVENESS.map(r => `<button type="button" class="recep-btn" data-recep="${r.key}"><div class="recep-label">${r.label}</div><div class="recep-hint">${r.hint}</div></button>`).join('')}</div>
           </div>
           <div class="field"><label>How is the patient doing?</label>
-            <div class="seg" style="grid-template-columns:repeat(5,1fr)" id="seg-condition">
+            <div class="seg" style="grid-template-columns:repeat(auto-fit,minmax(96px,1fr))" id="seg-condition">
               ${CONDITIONS.map(c => `<button type="button" class="seg-btn" data-cond="${c.key}" data-tone="${c.tone}"><span>${c.label}</span></button>`).join('')}
             </div>
           </div>

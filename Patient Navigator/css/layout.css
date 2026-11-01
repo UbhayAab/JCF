@@ -452,6 +452,9 @@
 .reveal.open { grid-template-rows: 1fr; }
 .reveal-inner { overflow: hidden; display: flex; flex-direction: column; gap: var(--s5); }
 .reveal.open .reveal-inner { overflow: visible; }
+.logform .reveal { grid-template-columns: minmax(0, 1fr); }
+.logform .fu-head { white-space: normal; flex-wrap: wrap; }
+.logform #f-details-btn, .logform #f-wellbeing-btn { max-width: 100%; white-space: normal; }
 
 .recep { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .recep-btn { text-align: left; padding: 11px 13px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface); cursor: pointer; transition: all var(--base) var(--spring); }
