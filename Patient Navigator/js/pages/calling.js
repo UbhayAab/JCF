@@ -45,6 +45,9 @@ const { CARE_CASE_FIELDS, indiaCallDay, dayPlus, activeCareCase, careCallBounds,
 // import, the #hb-requests div in mountReady() and the one call after it.
 import { mountHopebotRequests } from '../components/hopebotFamily.js';
 import { mountHopebotUsageWork } from '../components/hopebotUsageWork.js';
+import { renderCareCallForm136 } from '../components/careCallForm136.js';
+import { historyUUID136, loadFamilyHistory136, restrictContactHistory136, historyNotice136, historyIncomplete136, historyCallNumber136, renderContactHistory136 } from '../utils/familyCallHistory136.js';
+import { registrationDraft136, cleanPendingClinical136, storeClinicalDraft136, readClinicalDraft136, removeClinicalDraft136, clearClinicalDrafts136 } from '../utils/familyCallBridge136.js';
 import * as nutritionCare108 from '../components/nutritionCare.js';
 
 // ---- module state ----
@@ -63,6 +66,10 @@ let currentServices = {};       // patient_services rows by lever, for the in-ca
 let currentOpenLoops = [];      // "still to ask", read through the call claim
 let lastLoggedCall = null;      // { id, name, at } - powers "Fix that log" after submit
 let availableToday = true;
+
+let callingRequest136 = 0;
+const callingRowRequests136 = new WeakMap();
+let currentContextPatient136 = null;
 let currentContext = null;      // get_call_context row for the family on the call (sql/146)
 let listContext = new Map();    // patient_id -> get_call_context row, for today's list
 let recordingSection = null;    // the mounted recording box ({ refresh, dispose }), sql/166
@@ -76,6 +83,7 @@ let callingMount = null;
 let callingAccount = '';
 let callingRoute = '';
 let callingGeneration = 0;
+let callingTransition136 = 0;
 const callingIdentity = () => JSON.stringify([getCurrentUser()?.id, getRealProfile()?.id, getCurrentProfile()?.id, isImpersonating()]);
 function callingCurrent(generation = callingGeneration) {
   return generation === callingGeneration && callingMount?.isConnected && root() === callingMount
@@ -86,6 +94,29 @@ function callingWritable() {
   return callingCurrent() && !isImpersonating() && profile?.id === getCurrentUser()?.id && profile?.id === me?.id
     && profile.is_active === true && (!profile.ends_on || profile.ends_on >= indiaCallDay())
     && ['admin', 'manager', 'caller', 'caregiver_mentor', 'nutritionist', 'therapist'].includes(profile.role);
+}
+
+// A per-operation capability for local projections, never backend authorization.
+// The transition distinguishes a newer start/restore of the same queue/patient.
+function captureCallingOwner136(patientId = currentPatient?.patient_id, { writable = true } = {}) {
+  const generation = callingGeneration, account = callingIdentity(), transition = callingTransition136;
+  const queue = currentQueueId, patient = currentPatient?.patient_id, member = me?.id;
+  return () => callingCurrent(generation) && callingIdentity() === account && callingTransition136 === transition
+    && me?.id === member && currentQueueId === queue && currentPatient?.patient_id === patient
+    && (patientId == null || patientId === patient) && (!writable || callingWritable());
+}
+
+// Ready survives acquisition attempts and unlinked contact Return. A real
+// active call or a new page/account retires its callbacks.
+function captureCallingReady136() {
+  const generation = callingGeneration, account = callingIdentity(), member = me?.id;
+  return () => callingCurrent(generation) && callingIdentity() === account && me?.id === member
+    && currentQueueId == null && currentPatient == null;
+}
+// Superseding a request does not retire the displayed call's controls.
+function captureCallingRequest136() {
+  const owns = captureCallingOwner136(), request = ++callingRequest136, contact = hopebotUsageSection;
+  return () => owns() && request === callingRequest136 && hopebotUsageSection === contact && !contact?.hasOpenCall();
 }
 function clearHopebotUsage() { hopebotUsageSection?.dispose(); hopebotUsageSection = null; }
 function clearSaturdaySession() {
@@ -104,7 +135,7 @@ function saveActive() {
   if (!currentQueueId) return;
   try {
     localStorage.setItem(ACTIVE_KEY(), JSON.stringify({
-      queueId: currentQueueId, patient: currentPatient, history: currentHistory || [],
+      queueId: currentQueueId, patient: currentPatient, history: [],
       timerSeconds, timerRunning, timerStartEpoch, form: { ...form }, ts: Date.now(),
     }));
   } catch {}
@@ -123,44 +154,81 @@ function clearActive() { try { localStorage.removeItem(ACTIVE_KEY()); sessionSto
 let saveSoonTimer = null;
 function saveActiveSoon() { clearTimeout(saveSoonTimer); saveSoonTimer = setTimeout(saveActive, 400); }
 async function restoreActive(s) {
-  recordingSection?.dispose(); recordingSection = null;   // see startCallSession
-  // The saved draft outlives the claim. A colleague can log the call, a
-  // manager can move the patient, the row can be cancelled - all while the
-  // caller is away from the site (the draft lives for ~20 hours). Remounting
-  // a call that no longer exists leaves the caller on a screen with NO working
-  // exit: skip_call raises "This call is no longer on your list", submit
-  // cannot close the queue row, and there is no third button. That is what
-  // "upon clicking on the calling portal, the page is not moving forward"
-  // looks like. So the claim is re-checked first, against the same RPC the
-  // Today's list uses, and a dead claim drops the caller back on their list
-  // with the reason instead of stranding them.
-  let fresh = null;
-  try {
-    const { data, error } = await getSupabase().rpc('get_call_by_queue_id', { p_queue_id: s.queueId });
-    if (error) throw error;
-    if (!data || data.found === false) throw new Error('That call is no longer on your list.');
-    fresh = data;
-  } catch (e) {
-    clearActive();
-    showToast((e.message || 'That call is no longer on your list.') + ' Back to your list.', 'warning', 8000);
-    await mountReady();
-    return;
+  const generation = callingGeneration, account = callingIdentity();
+  const queue = s?.queueId, patient = s?.patient?.patient_id;
+  if (!callingCurrent(generation) || callingIdentity() !== account || !callingWritable()) return;
+  if (!historyUUID136(queue) || !historyUUID136(patient)) {
+    // A malformed cache is not an active claim. Never clear a newer open call.
+    if (currentQueueId != null || currentPatient != null) return;
+    clearActive(); await mountReady(); return;
   }
-  currentQueueId = s.queueId; currentPatient = fresh; currentHistory = s.history || [];
-  s = { ...s, patient: fresh };
+  // A restore must not replace a different call already chosen on this page.
+  if (currentQueueId != null && currentQueueId !== queue || currentPatient != null && currentPatient.patient_id !== patient) return;
+  const transition = ++callingTransition136;
+  const entryQueue = currentQueueId, entryPatient = currentPatient;
+  const current = () => callingCurrent(generation) && callingIdentity() === account && callingWritable() && callingTransition136 === transition;
+  const entryCurrent = () => current() && currentQueueId === entryQueue && currentPatient === entryPatient;
+  recordingSection?.dispose(); recordingSection = null;
+  currentHistory = []; // cached contact or patient history never grants access
+  const verify = data => {
+    if (!data || data.found === false || data.queue_id !== queue || data.patient_id !== patient) throw new Error('That call is no longer on your list.');
+    return data;
+  };
+  let fresh;
+  try {
+    const { data, error } = await getSupabase().rpc('get_call_by_queue_id', { p_queue_id: queue });
+    if (!entryCurrent()) return;
+    if (error) throw error;
+    fresh = verify(data);
+  } catch (e) {
+    if (!entryCurrent()) return;
+    clearActive(); currentHistory = [];
+    showToast((e.message || 'That call is no longer on your list.') + ' Back to your list.', 'warning', 8000);
+    await mountReady(); return;
+  }
+  currentQueueId = queue; currentPatient = fresh;
+  const sameClaim = () => current() && currentQueueId === queue && currentPatient?.patient_id === patient;
+  let history;
+  try {
+    const results = await Promise.all([loadPatientHistory(patient), loadPatientPitches(patient), loadPatientSessions(patient),
+      loadPatientPriority(patient), loadPatientServices(patient), loadOpenLoopsForCall(patient), loadContextFor(patient)]);
+    if (!sameClaim()) return;
+    history = results[0];
+    // Revalidate after the loaders: permission/assignment/consent can change
+    // while a previously valid claim is awaiting its fresh history.
+    const { data, error } = await getSupabase().rpc('get_call_by_queue_id', { p_queue_id: queue });
+    if (!sameClaim()) return;
+    if (error) throw error;
+    fresh = verify(data);
+  } catch (e) {
+    if (!sameClaim()) return;
+    currentHistory = []; clearActive();
+    showToast('The call or its access could not be refreshed. Reopen it from your list.', 'warning', 8000);
+    await mountReady(); return;
+  }
+  if (!sameClaim()) return;
+  currentPatient = fresh;
+  currentHistory = fresh.consent_given === true ? history : restrictContactHistory136(history);
   Object.assign(form, blankForm());
-  timerSeconds = s.timerSeconds || 0;
-  timerRunning = !!s.timerRunning;
-  timerStartEpoch = s.timerStartEpoch || null;
-  // If the call was timing when the page reloaded (tapping the tel: link
-  // reloads the WebView), recover the TRUE elapsed time from the wall clock
-  // instead of the stale snapshot. This is what was wiping the duration.
-  if (timerRunning && timerStartEpoch) timerSeconds = Math.floor((Date.now() - timerStartEpoch) / 1000);
-  await Promise.all([loadPatientPitches(s.patient.patient_id), loadPatientSessions(s.patient.patient_id),
-                     loadPatientPriority(s.patient.patient_id), loadContextFor(s.patient.patient_id)]);
-  currentPatient = withContextPhones(s.patient);
+  timerSeconds = Number.isInteger(s.timerSeconds) && s.timerSeconds >= 0 && s.timerSeconds <= 36000 ? s.timerSeconds : 0;
+  timerRunning = s.timerRunning === true && Number.isFinite(s.timerStartEpoch) && s.timerStartEpoch <= Date.now() && Date.now() - s.timerStartEpoch < 20 * 60 * 60 * 1000;
+  timerStartEpoch = timerRunning ? s.timerStartEpoch : null;
+  if (timerRunning) timerSeconds = Math.min(36000, Math.max(0, Math.floor((Date.now() - timerStartEpoch) / 1000)));
+  clearInterval(timerInterval); timerInterval = null;
+  currentPatient = withContextPhones(fresh);
   mountActive(currentPatient, currentHistory);
-  applySavedForm(s.form);
+  if (!sameClaim()) return;
+  if (fresh.consent_given === true) applySavedForm(s.form);
+  else {
+    // Current refusal/revocation cannot restore private notes or self-reports
+    // from an older consented draft. The real attempt/timer still survive.
+    const minimal = blankForm();
+    if (DIAL_STATUSES.some(x => x.key === s.form?.dialStatus)) minimal.dialStatus = s.form.dialStatus;
+    try { removeClinicalDraft136(localStorage, account, patient); } catch {}
+    applySavedForm(minimal);
+  }
+  if (!sameClaim()) return;
+  saveActive();
   if (timerRunning) resumeRunningTimer();
 }
 
@@ -202,6 +270,8 @@ function applySavedForm(saved) {
   // The recording box comes back as left (a transcript in flight is asked for again).
   if (saved.recording) { form.recording = saved.recording; if (currentPatient) mountRecording(currentPatient); }
   form.hopebotIntro = introContactSelection(saved.hopebotIntro);
+  form.pendingClinical136 = currentPatient?.consent_given ? cleanPendingClinical136(saved.pendingClinical136) : null;
+  mountPendingClinical136(currentPatient);
   updateSubmit();
   saveActive();
 }
@@ -212,7 +282,7 @@ function blankForm() {
     fbPatient: '', fbCaregiver: '', consent: null, dateManual: false,
     // The recording's state (callRecording.js): reminder shown, the family's
     // answer, the upload and its transcript. Here so a new call clears it.
-    recording: null, hopebotIntro: null,
+    recording: null, hopebotIntro: null, pendingClinical136: null,
     // Set by recordConsentNow(). MUST live here: Object.assign(form,
     // blankForm()) is how a new call resets the form, and a key that is
     // absent from blankForm is never cleared - so a leftover true would
@@ -266,20 +336,28 @@ function primaryPhone(p) {
 // mark, which the queue JSON from get_next_call does not. Same numbers, same
 // order apart from the mark, so they simply replace the queue's list.
 function withContextPhones(p) {
-  const phones = currentContext && Array.isArray(currentContext.phones) ? currentContext.phones : [];
+  const phones = currentContextPatient136 === p?.patient_id && currentContext && Array.isArray(currentContext.phones) ? currentContext.phones : [];
   return phones.length ? { ...p, phones } : p;
 }
 
 async function loadContextFor(patientId) {
+  const ownsCall136 = captureCallingOwner136(patientId);
+  if (!ownsCall136()) return false;
   try {
     const m = await loadCallContext([patientId]);
+    if (!ownsCall136()) return false;
+    currentContextPatient136 = patientId;
     currentContext = m.get(patientId) || null;
   } catch (e) {
     // An older deploy of the database, or a network blip: the call still works,
     // it just opens without the flags and documents cards.
+    if (!ownsCall136()) return false;
     console.warn('[portal] call context unavailable:', e.message);
+    if (!ownsCall136()) return false;
+    currentContextPatient136 = patientId;
     currentContext = null;
   }
+  return true;
 }
 
 function renderDialOrder(p) {
@@ -318,11 +396,102 @@ function overdueBadge(days) {
 function fmtTimer(s) { return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
 function badge(tone, label) { return `<span class="badge badge-${tone}"><span class="dot"></span>${label}</span>`; }
 
+
+// A lead registration transfers the same admitted call, then rejoins the
+// ordinary patient APIs. Neither a lead ID nor a work ID is a patient ID.
+async function acceptRegisteredContact136(transition, snapshot) {
+  const draft = registrationDraft136(transition, snapshot);
+  const generation = callingGeneration, account = callingIdentity();
+  const entryCurrent136 = captureCallingOwner136();
+  const valid = () => callingCurrent(generation) && callingWritable() && callingIdentity() === account;
+  if (!valid()) throw new Error('Return to your own calling account to continue.');
+  const { data, error } = await getSupabase().rpc('get_call_by_queue_id', { p_queue_id: draft.queueId });
+  if (!valid() || !entryCurrent136()) throw new Error('Your calling account changed. Reopen this call to continue.');
+  if (error) throw error;
+  if (!data || data.found === false || data.consent_given !== true || data.patient_id !== draft.patientId || String(data.queue_id) !== draft.queueId)
+    throw new Error('The registered call could not be verified. Your contact draft is kept.');
+  if (draft.form.pendingClinical136) storeClinicalDraft136(localStorage, account, draft.patientId, draft.form.pendingClinical136);
+  const sessionCurrent136 = await startCallSession(data);
+  if (!valid() || typeof sessionCurrent136 !== 'function' || !sessionCurrent136() || currentQueueId !== data.queue_id || currentPatient?.patient_id !== draft.patientId)
+    throw new Error('Reopen your registered call to continue. Your contact draft is kept.');
+  Object.assign(form, blankForm());
+  form.consent = true; form.consentSaved = true;
+  form.pendingClinical136 = draft.form.pendingClinical136;
+  timerSeconds = draft.timerRunning ? Math.min(36000, Math.max(draft.durationSeconds, Math.floor((Date.now() - draft.timerStartEpoch) / 1000))) : draft.durationSeconds;
+  timerRunning = draft.timerRunning && timerSeconds < 36000;
+  timerStartEpoch = timerRunning ? Date.now() - timerSeconds * 1000 : null;
+  mountActive(currentPatient, currentHistory);
+  applySavedForm(draft.form);
+  // The ordinary first-call questionnaire can hide later-stage controls.
+  // Keep their explicitly collected values even when no DOM control exists.
+  Object.assign(form, draft.form);
+  if (clinicalStorageProblem136) throw new Error('Draft storage is unavailable. Review and save or discard the clinical details before continuing.');
+  const time = document.getElementById('t-time'); if (time) time.textContent = fmtTimer(timerSeconds);
+  if (timerRunning) resumeRunningTimer();
+  saveActive();
+}
+
+let clinicalStorageProblem136 = false;
+function mountPendingClinical136(p) {
+  clinicalStorageProblem136 = false;
+  document.getElementById('pending-clinical136')?.remove();
+  root()?.removeEventListener('click', guardPendingClinicalExit136, true);
+  if (!p?.patient_id || p.consent_given !== true || !callingWritable()) return;
+  const owner = callingIdentity();
+  let pending = cleanPendingClinical136(form.pendingClinical136);
+  if (!pending) pending = readClinicalDraft136(localStorage, owner, p.patient_id);
+  form.pendingClinical136 = pending;
+  if (!pending) return;
+  root()?.addEventListener('click', guardPendingClinicalExit136, true);
+  const host = root()?.querySelector('.col-left'); if (!host) return;
+  const el = document.createElement('div'); el.id = 'pending-clinical136'; el.className = 'card';
+  el.innerHTML = '<h3>Details waiting for review</h3><p class="muted">Review the details collected before registration before saving to the patient record. Review and save or discard them before moving to the next call.</p><p data-storage-problem role="status" hidden>Draft storage is unavailable. Keep this screen open and review and save or discard these details before continuing.</p><button type="button" class="btn btn-secondary" data-review>Review and save</button><button type="button" class="btn btn-ghost" data-discard>Discard these draft details</button>';
+  el.querySelector('[data-review]').addEventListener('click', () => {
+    if (!callingWritable() || currentPatient?.patient_id !== p.patient_id) return;
+    const clinical = cleanPendingClinical136(form.pendingClinical136); if (!clinical) return;
+    openClinicalDetailsModal({ ...currentPatient, ...clinical }, { onSaved: () => {
+      try { removeClinicalDraft136(localStorage, owner, p.patient_id); } catch {}
+      clinicalStorageProblem136 = false;
+      form.pendingClinical136 = null; saveActive(); el.remove(); updateSubmit();
+    } });
+  });
+  el.querySelector('[data-discard]').addEventListener('click', () => {
+    if (!callingWritable() || currentPatient?.patient_id !== p.patient_id) return;
+    try { removeClinicalDraft136(localStorage, owner, p.patient_id); }
+    catch { el.querySelector('[data-storage-problem]').hidden = false; return; }
+    clinicalStorageProblem136 = false;
+    form.pendingClinical136 = null; saveActive(); el.remove(); updateSubmit();
+  });
+  host.prepend(el);
+  updateSubmit();
+  try { storeClinicalDraft136(localStorage, owner, p.patient_id, pending); clinicalStorageProblem136 = false; }
+  catch { clinicalStorageProblem136 = true; el.querySelector('[data-storage-problem]').hidden = false; }
+}
+
+function guardPendingClinicalExit136(event) {
+  if (!event.target?.closest?.('#f-submit, #f-skip') || !cleanPendingClinical136(form.pendingClinical136)) return;
+  event.preventDefault(); event.stopImmediatePropagation();
+  showToast('Review and save or discard the clinical draft before moving to the next call.', 'warning', 8000);
+  document.getElementById('pending-clinical136')?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+}
+
+let clinicalAuthObserver136 = null;
+function observeClinicalDrafts136() {
+  clearClinicalDrafts136(localStorage, callingIdentity());
+  if (clinicalAuthObserver136) return;
+  clinicalAuthObserver136 = getSupabase().auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_OUT' || session?.user && getCurrentUser()?.id && session.user.id !== getCurrentUser().id)
+      clearClinicalDrafts136(localStorage);
+  });
+}
+
 export async function renderCalling(container) {
+  observeClinicalDrafts136();
   portalFeedback?.dispose(); portalFeedback = null;
   portalSaving = null;
   clearHopebotUsage(); callingGeneration++;
   clearSaturdaySession();
+  resetState(); // The previous mount is retired, even when its cache is malformed.
   me = getCurrentProfile();
   container.innerHTML = `<div id="portal-content"></div>`;
   callingMount = container.querySelector('#portal-content'); callingAccount = callingIdentity(); callingRoute = window.location.hash;
@@ -369,26 +538,27 @@ async function mountReady() {
   if (!callingCurrent()) return;
   resetState();
   const generation = ++callingGeneration;
+  const ownsView136 = captureCallingReady136();
   const member = me.id;
   const sb = getSupabase();
   // current availability for today
   try {
     const { data } = await sb.from('caller_availability').select('available').eq('caller_id', me.id).eq('day', new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })).maybeSingle();
-    if (!callingCurrent(generation)) return;
+    if (!ownsView136() || !callingCurrent(generation)) return;
     availableToday = data ? data.available : true;
-  } catch { if (!callingCurrent(generation)) return; availableToday = true; }
-  if (!callingCurrent(generation)) return;
+  } catch { if (!ownsView136() || !callingCurrent(generation)) return; availableToday = true; }
+  if (!ownsView136() || !callingCurrent(generation)) return;
 
   let summary = { pending: 0, follow_ups: 0, new_leads: 0, done_today: 0, overdue: 0, oldest_overdue_days: 0, scheduled_ahead: 0 };
   try {
     const { data, error } = await sb.rpc('get_worklist_summary', { p_caller_id: member });
-    if (!callingCurrent(generation)) return;
+    if (!ownsView136() || !callingCurrent(generation)) return;
     if (error || !data) throw error || new Error('Summary unavailable');
     summary = data;
   } catch {
-    const el = root(); if (!callingCurrent(generation) || !el) return;
+    const el = root(); if (!ownsView136() || !callingCurrent(generation) || !el) return;
     el.innerHTML = `<div class="ready"><div class="ready-card"><h2>Could not load your daily list</h2><p>Your work has not been marked finished. Check your connection and try again.</p><button type="button" class="btn btn-primary" id="daily-list-retry">Try again</button></div></div><div id="hb-requests"></div>`;
-    document.getElementById('daily-list-retry')?.addEventListener('click', () => { if (callingCurrent(generation)) mountReady(); });
+    document.getElementById('daily-list-retry')?.addEventListener('click', () => { if (ownsView136() && callingCurrent(generation)) mountReady(); });
     mountHopebotRequests(document.getElementById('hb-requests'), { mode: 'calling' });
     return;
   }
@@ -420,7 +590,7 @@ async function mountReady() {
     </div>`;
 
   // The person may have opened another page while the summary loaded.
-  const el = root(); if (!callingCurrent(generation) || !el) return;
+  const el = root(); if (!ownsView136() || !callingCurrent(generation) || !el) return;
   el.innerHTML = `
     <div class="ready">
       <div class="ready-column">
@@ -461,28 +631,31 @@ async function mountReady() {
       </div>
     </div>`;
 
-  document.getElementById('start')?.addEventListener('click', () => { if (callingCurrent(generation)) getNextCall(); });
+  document.getElementById('start')?.addEventListener('click', () => { if (ownsView136() && callingCurrent(generation)) getNextCall(); });
   document.getElementById('goto-team')?.addEventListener('click', () => navigate('team'));
-  document.getElementById('avail-toggle')?.addEventListener('click', () => { if (callingCurrent(generation)) toggleAvailability(); });
+  document.getElementById('avail-toggle')?.addEventListener('click', () => { if (ownsView136() && callingCurrent(generation)) toggleAvailability(); });
   el.querySelectorAll('[data-goto-list]').forEach(t => t.addEventListener('click', scrollToTodayList));
   mountHopebotRequests(document.getElementById('hb-requests'), { mode: 'calling' });
   hopebotUsageSection = mountHopebotUsageWork(el.querySelector('#hopebot-usage-work'), {
     memberId: member, preview: () => isImpersonating(),
+    callHost: () => root(), listHost: () => root()?.querySelector('#tl-body'),
+    listCard: () => root()?.querySelector('#today-list'), countHost: () => root()?.querySelector('#tl-count'),
+    onRegistered: (transition, snapshot) => acceptRegisteredContact136(transition, snapshot),
     isCurrent: () => callingCurrent(generation) && !currentQueueId,
-    onReturn: () => { if (callingCurrent(generation)) return mountReady(); },
+    onReturn: () => { if (ownsView136() && callingCurrent(generation)) return mountReady(); },
   });
   // Load only in Ready: a failed optional schedule must never block calling.
   const saturdayMount = el.querySelector('#saturday-session');
   const saturdayGeneration = saturdayMountGeneration;
   const readyHash = window.location.hash;
   import('../components/saturdaySession.js').then((m) => {
-    if (saturdayMount?.isConnected && !currentQueueId
+    if (ownsView136() && saturdayMount?.isConnected && !currentQueueId
         && saturdayGeneration === saturdayMountGeneration && readyHash === window.location.hash) {
       disposeSaturdaySession = m.mountSaturdaySession(saturdayMount);
     }
   }).catch((e) => console.warn('[Saturday session]', e.message));
   import('../components/docCollection.js')
-    .then((m) => m.mountCollectionList(document.getElementById('doc-collect-due'), { scope: 'mine', compact: true }))
+    .then((m) => { if (ownsView136()) return m.mountCollectionList(document.getElementById('doc-collect-due'), { scope: 'mine', compact: true }); })
     .catch((e) => console.warn('[documents] due list:', e.message));
   loadTodayList();
 }
@@ -492,18 +665,23 @@ async function mountReady() {
 // Servable rows are tappable; resting ones stay visible, greyed, with the
 // date they resurface. No one silently vanishes.
 async function loadTodayList() {
+  const ownsView136 = captureCallingReady136();
   const generation = callingGeneration;
-  if (!callingCurrent(generation)) return;
+  if (!ownsView136() || !callingCurrent(generation)) return;
   const card = document.getElementById('today-list');
   const body = document.getElementById('tl-body');
   const countEl = document.getElementById('tl-count');
   if (!card || !body) return;
   try {
     const { data, error } = await getSupabase().rpc('get_my_worklist', { p_caller_id: me.id });
-    if (!callingCurrent(generation)) return;
+    if (!ownsView136() || !callingCurrent(generation)) return;
     if (error) throw error;
     const rows = data || [];
-    if (!rows.length) { card.style.display = 'none'; return; }
+    if (!rows.length) {
+      body.innerHTML = ''; card.style.display = '';
+      if (countEl) { countEl.dataset.patientCount = '0'; countEl.textContent = 'none to call'; }
+      hopebotUsageSection?.refreshRows?.(); return;
+    }
     const servable = rows.filter(r => r.servable).sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));
     const resting = rows.filter(r => !r.servable && r.resting && !r.no_number)
       .sort((a, b) => String(a.resting_until || '').localeCompare(String(b.resting_until || '')));
@@ -511,13 +689,14 @@ async function loadTodayList() {
     // of the queue any more. They stay listed, because the number is the work.
     const noNumber = rows.filter(r => r.no_number);
     const later = rows.length - servable.length - resting.length - noNumber.length;
-    if (countEl) countEl.textContent = servable.length ? `${servable.length} to call` : 'none to call';
+    card.style.display = '';
+    if (countEl) { countEl.dataset.patientCount = String(servable.length); countEl.textContent = servable.length ? `${servable.length} to call` : 'none to call'; }
     // What each family is flagged for, their documents and numbers, in one
     // round trip for the whole list (sql/146). If it fails the list still
     // renders exactly as it did before, just without the chips.
-    try { const contexts = await loadCallContext(rows.map(r => r.patient_id)); if (!callingCurrent(generation)) return; listContext = contexts; }
-    catch (e) { if (!callingCurrent(generation)) return; console.warn('[worklist] context unavailable:', e.message); listContext = new Map(); }
-    if (!callingCurrent(generation) || !body.isConnected) return;
+    try { const contexts = await loadCallContext(rows.map(r => r.patient_id)); if (!ownsView136() || !callingCurrent(generation)) return; listContext = contexts; }
+    catch (e) { if (!ownsView136() || !callingCurrent(generation)) return; console.warn('[worklist] context unavailable:', e.message); listContext = new Map(); }
+    if (!ownsView136() || !callingCurrent(generation) || !body.isConnected) return;
     const flaggedN = servable.filter(r => (listContext.get(r.patient_id)?.flags || []).length).length;
     body.innerHTML = `
       ${flaggedN ? `<div class="due-meta wraps" style="padding:var(--s3) var(--s5) 0;color:var(--ink-2)">${flaggedN} of today's ${servable.length === 1 ? 'call is' : 'calls are'} flagged. Tap anyone to read why before you ring.</div>` : `<div class="due-meta wraps" style="padding:var(--s3) var(--s5) 0;color:var(--ink-3)">Tap anyone to see their details before you ring.</div>`}
@@ -530,11 +709,15 @@ async function loadTodayList() {
         ${noNumber.length} ${noNumber.length === 1 ? 'person has' : 'people have'} no phone number on file, so they are held out of the call order instead of blocking it. Open the profile to add a number and they come back into the list.</div>` : ''}
       ${later > 0 ? `<div class="due-meta wraps" style="padding:0 var(--s5) var(--s4);color:var(--ink-3)">+ ${later} other open tasks waiting for a future daily plan, their date or contact rest.</div>` : ''}`;
     body.querySelectorAll('[data-wl]').forEach(row => wireWorklistRow(row, rows.find(r => r.patient_id === row.dataset.wl && String(r.queue_id) === row.dataset.q)));
+    hopebotUsageSection?.refreshRows?.();
   } catch (err) {
-    if (!callingCurrent(generation)) return;
+    if (!ownsView136() || !callingCurrent(generation)) return;
     // RPC not deployed yet or a network blip: the Start button still works.
     console.warn('Worklist error:', err);
-    card.style.display = 'none';
+    card.style.display = '';
+    body.innerHTML = '<p class="due-meta wraps" role="status" style="padding:var(--s4)">Patient calls could not load. Refresh to try again; your list is not marked finished.</p>';
+    if (countEl) { countEl.dataset.patientCount = 'unknown'; countEl.textContent = 'patient count unavailable'; }
+    hopebotUsageSection?.refreshRows?.();
   }
 }
 
@@ -606,25 +789,26 @@ function worklistPreviewHTML(r, kind) {
 }
 
 function wireWorklistRow(row, r) {
+  const ownsView136 = captureCallingReady136();
   if (!row || !r) return;
   const generation = callingGeneration;
   const kind = row.dataset.kind;
   const preview = row.querySelector('.wl-preview');
   const mainEl = row.querySelector('.wl-main');
   const fill = () => {
-    if (!callingCurrent(generation)) return;
+    if (!ownsView136() || !callingCurrent(generation)) return;
     preview.innerHTML = worklistPreviewHTML(r, kind);
-    preview.querySelector('[data-wl-start]')?.addEventListener('click', () => { if (callingCurrent(generation)) startFromList(r.queue_id, row); });
+    preview.querySelector('[data-wl-start]')?.addEventListener('click', () => { if (ownsView136() && callingCurrent(generation)) startFromList(r.queue_id, row); });
     preview.querySelector('[data-wl-open]')?.addEventListener('click', () => navigate('patients/' + r.patient_id));
     preview.querySelector('[data-doc-view]')?.addEventListener('click', () =>
       openDocumentViewer({ patientId: r.patient_id, patientName: r.full_name || r.patient_code || '' }));
     wirePhoneList(preview, r.patient_id, async () => {
-      try { const m = await loadCallContext([r.patient_id]); if (m.get(r.patient_id)) listContext.set(r.patient_id, m.get(r.patient_id)); } catch {}
+      try { const m = await loadCallContext([r.patient_id]); if (!ownsView136() || !row.isConnected) return; if (m.get(r.patient_id)) listContext.set(r.patient_id, m.get(r.patient_id)); } catch { if (!ownsView136() || !row.isConnected) return; }
       fill();
     });
   };
   const toggle = () => {
-    if (!callingCurrent(generation)) return;
+    if (!ownsView136() || !callingCurrent(generation)) return;
     const open = preview.hidden;
     // One open at a time keeps the list a list.
     document.querySelectorAll('#tl-body .wl-row.open').forEach(o => {
@@ -657,29 +841,44 @@ async function startFromList(queueId, rowEl) {
   if (hopebotUsageSection?.hasOpenCall()) return;
   const generation = callingGeneration;
   if (!queueId || currentQueueId) return;
-  if (rowEl) { rowEl.style.pointerEvents = 'none'; rowEl.style.opacity = '.6'; }
+  const ownsRequest136 = captureCallingRequest136();
+  const ready136 = captureCallingReady136(), contact136 = hopebotUsageSection, card136 = document.getElementById('today-list');
+  const oldBusy136 = rowEl && callingRowRequests136.get(rowEl);
+  const busy136 = rowEl ? { pointerEvents: oldBusy136?.pointerEvents ?? rowEl.style.pointerEvents, opacity: oldBusy136?.opacity ?? rowEl.style.opacity } : null;
+  if (rowEl) { callingRowRequests136.set(rowEl, busy136); rowEl.style.pointerEvents = 'none'; rowEl.style.opacity = '.6'; }
   try {
     const { data, error } = await getSupabase().rpc('get_call_by_queue_id', { p_queue_id: queueId });
-    if (!callingCurrent(generation) || !callingWritable()) return;
+    if (!ownsRequest136() || !callingCurrent(generation) || !callingWritable()) return;
     if (error) throw error;
     if (!data || data.found === false) { showToast('Could not open this call, refreshing your list', 'warning'); await mountReady(); return; }
     await startCallSession(data);
   } catch (err) {
-    if (!callingCurrent(generation)) return;
+    if (!ownsRequest136() || !callingCurrent(generation)) return;
     // The RPC raises human messages ('resting until…' / 'already completed').
     showToast(err.message || 'Could not open this call', 'warning');
     await mountReady();
+  } finally {
+    if (rowEl && callingRowRequests136.get(rowEl) === busy136) {
+      callingRowRequests136.delete(rowEl);
+      // Only this physical Ready row is owned. A mounted contact/active view
+      // detaches it; a newer request on the same row owns another busy token.
+      if (ready136() && hopebotUsageSection === contact136 && rowEl.isConnected && card136
+          && document.getElementById('today-list') === card136 && root()?.contains(card136) && card136.contains(rowEl)) {
+        rowEl.style.pointerEvents = busy136.pointerEvents; rowEl.style.opacity = busy136.opacity;
+      }
+    }
   }
 }
 
 async function toggleAvailability() {
+  const ownsView136 = captureCallingReady136();
   if (!callingWritable()) { if (callingCurrent()) showToast('Return to your own active account to change availability.', 'info'); return; }
   const generation = callingGeneration;
   const sb = getSupabase();
   const next = !availableToday;
   try {
     const { error } = await sb.rpc('mark_availability', { p_available: next, p_day: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) });
-    if (!callingCurrent(generation) || !callingWritable()) return;
+    if (!ownsView136() || !callingCurrent(generation) || !callingWritable()) return;
     if (error) throw error;
     availableToday = next;
     showToast(next ? "You're marked as calling today" : "You're marked off today. Your patients will be covered", next ? 'success' : 'info');
@@ -687,7 +886,7 @@ async function toggleAvailability() {
     const btn = document.getElementById('avail-toggle');
     if (badge) { badge.className = `badge ${next ? 'badge-ok' : 'badge-warn'}`; badge.innerHTML = `<span class="dot"></span>${next ? 'Calling today' : 'Off today'}`; }
     if (btn) btn.textContent = next ? 'Mark me off today' : "I'm calling today";
-  } catch (e) { if (callingCurrent(generation)) showToast('Could not update availability: ' + e.message, 'error'); }
+  } catch (e) { if (ownsView136() && callingCurrent(generation)) showToast('Could not update availability: ' + e.message, 'error'); }
 }
 
 // ============================================================ Get next
@@ -699,25 +898,28 @@ async function getNextCall(skipContext = null) {
   if (!callingWritable()) { if (callingCurrent()) showToast('Return to your own active account to log a call.', 'info'); return; }
   if (hopebotUsageSection?.hasOpenCall()) return;
   const generation = callingGeneration;
+  const ownsRequest136 = captureCallingRequest136();
   const sb = getSupabase();
   const btn = document.getElementById('start');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:20px;height:20px;border-width:2.5px"></span>Finding the next person…'; }
   // A hung request used to leave the button on "Finding the next person"
   // forever with no way back. Race the RPC against a timeout and always
   // restore the button, so a slow network reads as an error, not a freeze.
-  const withTimeout = (p, ms) => Promise.race([
-    p,
-    new Promise((_, rej) => setTimeout(() => rej(new Error('The request timed out. Check your internet and try again.')), ms)),
-  ]);
+  const withTimeout = async (p, ms) => {
+    let timer;
+    try { return await Promise.race([p, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('The request timed out. Check your internet and try again.')), ms);
+    })]); } finally { clearTimeout(timer); }
+  };
   try {
     if (!navigator.onLine) throw new Error('You appear to be offline. Check your internet and try again.');
     const { data, error } = await withTimeout(sb.rpc('get_next_call', { p_team_member_id: me.id }), 20000);
-    if (!callingCurrent(generation) || !callingWritable()) return;
+    if (!ownsRequest136() || !callingCurrent(generation) || !callingWritable()) return;
     if (error) throw error;
     if (!data || typeof data.found !== 'boolean') throw new Error('Could not confirm the next assigned call. Refresh and retry.');
     if (data.found === false) {
       if (hopebotUsageSection && await hopebotUsageSection.startNext()) return;
-      if (!callingCurrent(generation) || !callingWritable()) return;
+      if (!ownsRequest136() || !callingCurrent(generation) || !callingWritable()) return;
       await mountQueueEmpty(); return;
     }
     if (skipContext && data.queue_id === skipContext.queueId) {
@@ -729,7 +931,7 @@ async function getNextCall(skipContext = null) {
     }
     await startCallSession(data);
   } catch (err) {
-    if (!callingCurrent(generation)) return;
+    if (!ownsRequest136() || !callingCurrent(generation)) return;
     showToast('Something went wrong: ' + err.message, 'error');
     // The active view replaces this button; only restore it when we are
     // still on the ready screen (button still in the DOM and no call open).
@@ -738,15 +940,16 @@ async function getNextCall(skipContext = null) {
     else if (!document.getElementById('portal-content')) { try { await mountReady(); } catch {} }
   } finally {
     const live = document.getElementById('start');
-    if (callingCurrent(generation) && live && !currentQueueId) { live.disabled = !callingWritable(); live.innerHTML = `${icon('phoneCall')}Start calling`; }
+    if (ownsRequest136() && callingCurrent(generation) && live && !currentQueueId) { live.disabled = !callingWritable(); live.innerHTML = `${icon('phoneCall')}Start calling`; }
   }
 }
 
 // One entry into the active-call view: get_next_call and the tappable
 // Today's list both land here with the same claimed-queue JSON.
 async function startCallSession(data) {
+  const transition = ++callingTransition136;
   const generation = callingGeneration, account = callingIdentity();
-  const current = () => callingCurrent(generation) && callingWritable() && callingIdentity() === account
+  const current = () => callingCurrent(generation) && callingWritable() && callingIdentity() === account && callingTransition136 === transition
     && currentQueueId === data.queue_id && currentPatient?.patient_id === data.patient_id;
   clearHopebotUsage();
   clearSaturdaySession();
@@ -767,6 +970,7 @@ async function startCallSession(data) {
   currentPatient = withContextPhones(data);
   saveActive();
   mountActive(currentPatient, currentHistory);
+  return current;
 }
 
 // ---- Support levers and open loops, for the call itself ----
@@ -779,34 +983,46 @@ async function startCallSession(data) {
 // exists for - would have got an empty list and a toggle that failed to save.
 // So both read through the call claim instead. sql/116.
 async function loadPatientServices(patientId) {
+  const ownsCall136 = captureCallingOwner136(patientId);
+  if (!ownsCall136()) return false;
   const sb = getSupabase();
   try {
     const { data, error } = await sb.from('patient_services')
       .select('lever, done, amount, sessions, outcome, detail, updated_at')
       .eq('patient_id', patientId);
     if (error) throw error;
+    if (!ownsCall136()) return false;
     currentServices = Object.fromEntries((data || []).map(r => [r.lever, r]));
-  } catch { currentServices = {}; }
+  } catch { if (!ownsCall136()) return false; currentServices = {}; }
+  return true;
 }
 
 async function loadOpenLoopsForCall(patientId) {
+  const ownsCall136 = captureCallingOwner136(patientId);
+  if (!ownsCall136()) return false;
   const sb = getSupabase();
   try {
     const { data, error } = await sb.rpc('get_open_loops_for_call', { p_patient_id: patientId });
     if (error) throw error;
+    if (!ownsCall136()) return false;
     currentOpenLoops = data || [];
-  } catch { currentOpenLoops = []; }   // an older deploy just shows nothing
+  } catch { if (!ownsCall136()) return false; currentOpenLoops = []; }   // an older deploy just shows nothing
+  return true;
 }
 
 async function loadPatientPitches(patientId) {
+  const ownsCall136 = captureCallingOwner136(patientId);
+  if (!ownsCall136()) return false;
   const sb = getSupabase();
   try {
     const cols = SERVICES.map(s => s.column).join(',');
     // maybeSingle: callers can't always SELECT unassigned new leads (RLS).
     // Zero rows is normal there, not an error.
     const { data } = await sb.from('patients').select(cols + ',' + CARE_CASE_FIELDS).eq('id', patientId).maybeSingle();
+    if (!ownsCall136()) return false;
     currentPatientPitches = data || {};
-  } catch { currentPatientPitches = {}; }
+  } catch { if (!ownsCall136()) return false; currentPatientPitches = {}; }
+  return true;
 }
 // Live 1:1 sessions for the invitation moment + the "session coming up"
 // banner. Since sql/153 care_sessions shows a member the sessions of the
@@ -817,17 +1033,23 @@ async function loadPatientPitches(patientId) {
 // by (v_patient_priority, sql/80), so the queue, the list and this card cannot
 // tell her three different stories about the same person.
 async function loadPatientPriority(patientId) {
+  const ownsCall136 = captureCallingOwner136(patientId);
+  if (!ownsCall136()) return false;
   const sb = getSupabase();
   try {
     const { data } = await sb.from('v_patient_priority')
       .select('band, reason, concern_sev, overdue_days, fields_known, fields_total, calls_held')
       .eq('patient_id', patientId)
       .maybeSingle();
+    if (!ownsCall136()) return false;
     currentPatientPriority = data || null;
-  } catch { currentPatientPriority = null; }
+  } catch { if (!ownsCall136()) return false; currentPatientPriority = null; }
+  return true;
 }
 
 async function loadPatientSessions(patientId) {
+  const ownsCall136 = captureCallingOwner136(patientId);
+  if (!ownsCall136()) return false;
   const sb = getSupabase();
   try {
     const { data } = await sb.from('care_sessions')
@@ -835,34 +1057,17 @@ async function loadPatientSessions(patientId) {
       .eq('patient_id', patientId)
       .in('status', ['invited', 'agreed', 'scheduled'])
       .order('created_at', { ascending: false });
+    if (!ownsCall136()) return false;
     currentPatientSessions = data || [];
-  } catch { currentPatientSessions = []; }
+  } catch { if (!ownsCall136()) return false; currentPatientSessions = []; }
+  return true;
 }
 async function loadPatientHistory(patientId) {
-  const sb = getSupabase();
-  // SECURITY DEFINER RPC: the caller on this queue entry sees the FULL
-  // history, everyone's notes, not just their own (plain RLS hides those).
-  // The RPC used to allow only queue-holders, owners and managers. Anyone
-  // else (cover caller, nutritionist, a mentor reopened from history) fell
-  // to the direct SELECT below, where RLS hides other people's rows. That
-  // is why one device showed history and another showed none for the same
-  // patient: it was never the device, it was which permission path applied.
-  // sql/130 widens the RPC to can_care_for_patient; this fallback stays for
-  // older deploys and now says what it is showing.
-  try {
-    const { data, error } = await sb.rpc('get_patient_call_history', { p_patient_id: patientId });
-    if (error) throw error;
-    return data || [];
-  } catch (e) {
-    try {
-      const { data } = await sb.from('call_logs').select('*').eq('patient_id', patientId).order('call_date', { ascending: false }).limit(100);
-      const rows = (data || []).map(h => ({ ...h, caller_name: h.contacted_by_name, is_mine: h.caller_id === me?.id }));
-      if (!rows.length && e && /No active call/i.test(e.message || '')) {
-        console.warn('[history] RPC refused, RLS fallback empty:', e.message);
-      }
-      return rows;
-    } catch { return []; }
-  }
+  const generation = callingGeneration, account = callingIdentity(), queue = currentQueueId, transition = callingTransition136;
+  const current = () => callingCurrent(generation) && callingIdentity() === account && currentQueueId === queue && currentPatient?.patient_id === patientId && callingTransition136 === transition;
+  const rows = await loadFamilyHistory136(getSupabase(), patientId, { isCurrent: current, actorId: me?.id });
+  if (!current()) { const e = new Error('Calling history request is stale.'); e.code = 'HISTORY_STALE136'; throw e; }
+  return currentPatient?.consent_given === true ? rows : restrictContactHistory136(rows);
 }
 
 // ---- "Fix that log" ----
@@ -892,10 +1097,14 @@ function undoBarHTML() {
 }
 
 function wireUndoBar() {
+  const ownsCall136 = captureCallingOwner136(undefined);
   const bar = document.getElementById('undo-bar');
   if (!bar) return;
   bar.querySelector('#undo-dismiss')?.addEventListener('click', () => { lastLoggedCall = null; bar.remove(); });
   bar.querySelector('#undo-open')?.addEventListener('click', async () => {
+    if (!ownsCall136() || !bar.isConnected || !lastLoggedCall) return;
+    const callId136 = lastLoggedCall.id;
+    const current136 = () => ownsCall136() && bar.isConnected && lastLoggedCall?.id === callId136;
     const btn = bar.querySelector('#undo-open');
     btn.disabled = true;
     try {
@@ -904,14 +1113,17 @@ function wireUndoBar() {
       // made against what is actually stored.
       const { data, error } = await getSupabase().from('call_logs')
         .select('*, patients(id, full_name, assigned_to), profiles:caller_id(full_name)')
-        .eq('id', lastLoggedCall.id).maybeSingle();
+        .eq('id', callId136).maybeSingle();
+      if (!current136()) return;
       if (error) throw error;
       if (!data) throw new Error('that log could not be found any more');
       const { openEditCall } = await import('./calls.js');
+      if (!current136()) return;
       openEditCall(data);
     } catch (e) {
+      if (!current136()) return;
       showToast('Could not open that log: ' + e.message, 'error');
-    } finally { btn.disabled = false; }
+    } finally { if (current136()) btn.disabled = false; }
   });
 }
 
@@ -919,15 +1131,17 @@ function wireUndoBar() {
 // element: a fast move to the next family disconnects this mount, and a late
 // answer must not paint one family's form into another family's card.
 async function mountReferralBrief(mount, p) {
-  if (!mount || !p?.patient_id) return;
+  const ownsCall136 = captureCallingOwner136(p?.patient_id);
+  if (!ownsCall136() || !mount || !p?.patient_id) return;
   const { data, error } = await getSupabase().from('referral_forms').select(REFERRAL_COLUMNS)
     .eq('patient_id', p.patient_id).order('created_at', { ascending: false }).limit(1);
-  if (error || !data?.length || !mount.isConnected) return;
+  if (!ownsCall136() || error || !data?.length || !mount.isConnected || !root()?.contains(mount)) return;
   mount.innerHTML = referralBriefHTML(data[0], { open: p.patient_status === 'new_lead' });
 }
 
 // ============================================================ Active view
 function mountActive(p, history) {
+  const ownsCall136 = captureCallingOwner136(p?.patient_id);
   clearSaturdaySession();
   currentHistory = history || [];
   recordingSection?.dispose(); recordingSection = null;
@@ -1041,18 +1255,19 @@ function mountActive(p, history) {
   const docCollectMount = document.getElementById('doc-collect-mount');
   const activityMount = document.getElementById('hopebot-activity-call-mount');
   const activityProfile = getCurrentProfile()?.id;
-  const activityCurrent = () => activityMount?.isConnected && currentPatient?.patient_id === p.patient_id
+  const activityCurrent = () => ownsCall136() && activityMount?.isConnected && currentPatient?.patient_id === p.patient_id
     && getCurrentProfile()?.id === activityProfile && root()?.contains(activityMount);
   import('../components/hopebotActivity.js')
     .then((m) => { if (activityCurrent()) m.mountHopebotActivity(activityMount, p.patient_id, { isCurrent: activityCurrent }); })
     .catch(() => { if (activityCurrent()) activityMount.textContent = 'HopeBot activity could not load. Refresh to try again.'; });
   import('../components/docCollection.js')
-    .then((m) => m.mountCollectStatus(docCollectMount, p.patient_id,
-      { patientName: p.full_name || p.patient_code || '', preferred: 'verbal_during_call' }))
+    .then((m) => { if (ownsCall136() && docCollectMount?.isConnected && root()?.contains(docCollectMount)) return m.mountCollectStatus(docCollectMount, p.patient_id,
+      { patientName: p.full_name || p.patient_code || '', preferred: 'verbal_during_call' }); })
     .catch((e) => console.warn('[documents] collection status:', e.message));
   mountCallHopebotIntro(p);
   mountReferralBrief(document.getElementById('referral-mount'), p);
   wireActive(p);
+  mountPendingClinical136(p);
   wireGapsPanel(p);
   wireLeversPanel(p);
   wireUndoBar();
@@ -1062,15 +1277,16 @@ function mountActive(p, history) {
 // Consent can change while this call is open. Reload the same current-family
 // panel after it is saved, without selecting WhatsApp agreement on their behalf.
 function mountCallHopebotIntro(p) {
+  const ownsCall136 = captureCallingOwner136(p?.patient_id);
   const mount = document.getElementById('hopebot-intro-call-mount');
-  const isCurrent = () => mount?.isConnected && currentPatient?.patient_id === p.patient_id
+  const isCurrent = () => ownsCall136() && mount?.isConnected && currentPatient?.patient_id === p.patient_id
     && root()?.contains(mount);
   if (!isCurrent()) return;
   import('../components/hopebotIntro.js')
     .then((m) => { if (isCurrent()) return m.mountHopebotIntro(mount, p.patient_id, {
       stageForCall: true, isCurrent,
-      getStaged: () => introContactSelection(form.hopebotIntro),
-      onStageChange: (selected) => { form.hopebotIntro = introContactSelection(selected); saveActive(); },
+      getStaged: () => isCurrent() ? introContactSelection(form.hopebotIntro) : null,
+      onStageChange: (selected) => { if (!isCurrent()) return; form.hopebotIntro = introContactSelection(selected); saveActive(); },
     }); })
     .catch(() => { if (isCurrent()) mount.textContent = 'HopeBot intro is unavailable. Refresh before trying again.'; });
 }
@@ -1186,15 +1402,18 @@ function applyRecordingSuggestions(result) {
 }
 
 function wireDialArea(p) {
+  const ownsCall136 = captureCallingOwner136(p?.patient_id);
   ['dial-block', 'dial-order-mount'].forEach(id => document.getElementById(id)
     ?.querySelectorAll('.callbtn, .cg-call, .ph-num')
-    .forEach(a => a.addEventListener('click', () => { if (!timerRunning) startTimer(); })));
+    .forEach(a => a.addEventListener('click', (e) => { if (!ownsCall136()) { e.preventDefault(); e.stopImmediatePropagation(); return; } if (!timerRunning) startTimer(); })));
   guardDialLinks([...document.querySelectorAll('#dial-block a[href^="tel:"], #dial-order-mount a[href^="tel:"]')], recDialCtx());
   // Copy number: tap-to-call fails on some phones, so offer a paste-able number.
   document.getElementById('copy-num')?.addEventListener('click', async (e) => {
     const num = e.currentTarget.dataset.num || '';
+    if (!ownsCall136()) return;
     let done = false;
     try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(num); done = true; } } catch {}
+    if (!ownsCall136()) return;
     if (!done) { try { const t = document.createElement('textarea'); t.value = num; t.style.position = 'fixed'; t.style.opacity = '0'; document.body.appendChild(t); t.focus(); t.select(); done = document.execCommand('copy'); t.remove(); } catch {} }
     if (!timerRunning) startTimer();   // copying means they're about to dial
     showToast(done ? `Copied ${num}: paste it into your dialler` : 'Could not copy: long-press the number to copy it', done ? 'success' : 'warning');
@@ -1202,13 +1421,14 @@ function wireDialArea(p) {
   // No number to dial: the only useful move is adding one. The active call
   // (including this form's draft) is saved, so coming back resumes it.
   document.getElementById('open-profile-num')?.addEventListener('click', () => {
+    if (!ownsCall136()) return;
     saveActive();
     navigate('patients/' + p.patient_id);
   });
   // "Make main" on a number: saved for everyone (sql/146), then the button
   // and the dial order redraw with it first. The form is not touched.
   wirePhoneList(document.getElementById('dial-order-mount'), p.patient_id, async () => {
-    await loadContextFor(p.patient_id);
+    if (!ownsCall136() || !await loadContextFor(p.patient_id) || !ownsCall136()) return;
     currentPatient = withContextPhones(currentPatient || p);
     saveActive();
     const block = document.getElementById('dial-block');
@@ -1223,37 +1443,47 @@ function wireDialArea(p) {
 // patient's Documents tab runs. The draft is saved first, in case the phone's
 // file picker reloads the page.
 function wireDocStrip(p) {
+  const ownsCall136 = captureCallingOwner136(p?.patient_id);
   const mount = document.getElementById('doc-strip-mount');
-  if (!mount) return;
+  if (!mount || !ownsCall136()) return;
+  const current136 = () => ownsCall136() && mount.isConnected && document.getElementById('doc-strip-mount') === mount;
   const name = p.full_name || p.patient_code || '';
   // Redraw the strip from a fresh context: after an invite, or once WhatsApp
   // papers have gone to the reader.
   const refresh = async () => {
-    await loadContextFor(p.patient_id);
+    if (!current136() || !await loadContextFor(p.patient_id) || !current136()) return;
     const m = document.getElementById('doc-strip-mount');
     if (m && currentContext) { m.innerHTML = docStripHTML(currentContext.documents, { canInvite: true }); wireDocStrip(p); }
   };
   const upload = async () => {
+    if (!current136()) return;
     saveActive();
     const { openDocumentBatch } = await import('./docBatch.js');
+    if (!current136()) return;
     await openDocumentBatch(p.patient_id);
   };
-  mount.querySelector('[data-doc-view]')?.addEventListener('click', () => openDocumentViewer({
+  mount.querySelector('[data-doc-view]')?.addEventListener('click', () => { if (current136()) openDocumentViewer({
     patientId: p.patient_id, patientName: name, onUpload: upload,
-  }));
+  }); });
   mount.querySelector('[data-doc-upload]')?.addEventListener('click', upload);
   mount.querySelector('[data-doc-wa]')?.addEventListener('click', async (e) => {
+    if (!current136()) return;
     e.currentTarget.disabled = true;
     saveActive();
     const { readWhatsappDocuments } = await import('../components/whatsappDocs.js');
+    if (!current136()) return;
     await readWhatsappDocuments(p.patient_id);
+    if (!current136()) return;
     await refresh();
   });
   mount.querySelector('[data-hb-invite]')?.addEventListener('click', async (e) => {
+    if (!current136()) return;
     const btn = e.currentTarget;
     btn.disabled = true;
     const { sendHopeBotInvite } = await import('../components/whatsappDocs.js');
+    if (!current136()) return;
     const sent = await sendHopeBotInvite(p.patient_id, name);
+    if (!current136()) return;
     if (sent) await refresh(); else btn.disabled = false;
   });
 }
@@ -1261,22 +1491,24 @@ function wireDocStrip(p) {
 // Every previous conversation (everyone's notes, newest first) so the
 // caller has full context before they dial.
 function renderFullHistory(history) {
-  if (!history.length) return `<div class="history"><div class="info-label">First contact: no calls yet. You're opening this relationship.</div></div>`;
+  const notice = historyNotice136(history);
+  if (!history.length) return `<div class="history">${notice}<div class="info-label">No care calls are available in this authorized history.</div></div>`;
   return `
     <div class="history">
-      <div class="info-label" style="margin-bottom:8px">The story so far · ${history.length} call${history.length === 1 ? '' : 's'}</div>
+      <div class="info-label" style="margin-bottom:8px">The story so far · ${history.length} saved call${history.length === 1 ? '' : 's'} shown</div>${notice}
       <div style="max-height:340px;overflow-y:auto;padding-right:6px">
         ${history.map(h => {
+          if (h.anchor_type === 'lead_call') return renderContactHistory136(h);
           const ds = DIAL_STATUSES.find(d => d.key === h.dial_status) || { label: sanitize(capitalize(h.dial_status || 'N/A')), tone: 'neutral' };
-          const reqs = h.structured?.requirements || [];
+          const reqs = Array.isArray(h.structured?.requirements) ? h.structured.requirements : [];
           const cond = CONDITIONS.find(c => c.key === h.patient_condition);
           return `<div class="hist-row" style="flex-direction:column;gap:5px;align-items:stretch">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
               ${badge(ds.tone, ds.label)}
               ${h.receptiveness_bucket ? `<span class="badge badge-primary">${sanitize(capitalize(h.receptiveness_bucket))}</span>` : ''}
               ${cond ? `<span class="badge badge-${cond.tone === 'ok' ? 'ok' : cond.tone === 'danger' ? 'danger' : cond.tone === 'warn' ? 'warn' : 'neutral'}">${cond.label}</span>` : ''}
-              <span class="hist-meta">${h.is_mine ? 'You' : sanitize(capitalize((h.caller_name || 'N/A').toLowerCase()))} · ${formatRelativeTime(h.call_date)}${h.call_duration_mins ? ` · ${h.call_duration_mins} min` : ''}</span>
-              ${h.id ? `<span class="rec-slot" data-log="${sanitize(String(h.id))}"></span>` : ''}
+              <span class="hist-meta">${h.is_mine ? 'You' : sanitize(capitalize((h.caller_name || 'N/A').toLowerCase()))} · ${formatRelativeTime(h.call_date)}${Number.isFinite(Number(h.call_duration_mins)) && Number(h.call_duration_mins) > 0 ? ` · ${sanitize(String(h.call_duration_mins))} min` : ''}</span>
+              ${h.anchor_type === 'patient_call' && historyUUID136(h.id) ? `<span class="rec-slot" data-log="${sanitize(String(h.id))}"></span>` : ''}
             </div>
             ${h.caller_notes ? `<div class="hist-note">${sanitize(h.caller_notes)}</div>` : ''}
             ${h.feedback_patient ? `<div class="hist-note" style="font-style:italic">“${sanitize(h.feedback_patient)}” · patient</div>` : ''}
@@ -1381,10 +1613,11 @@ function portalLeverRow(lever, svc) {
 }
 
 function wireLeversPanel(p) {
+  const ownsCall136 = captureCallingOwner136(p?.patient_id);
   const panel = document.getElementById('levers-panel');
   if (!panel) return;
   const generation = callingGeneration, queue = currentQueueId, account = callingIdentity();
-  const current = () => callingCurrent(generation) && callingWritable() && callingIdentity() === account
+  const current = () => ownsCall136() && callingCurrent(generation) && callingWritable() && callingIdentity() === account
     && currentQueueId === queue && currentPatient?.patient_id === p.patient_id && document.getElementById('levers-panel') === panel;
   const syncCount = () => {
     const n = Object.values(currentServices || {}).filter(x => x.done).length;
@@ -1485,7 +1718,8 @@ function renderGapsPanel(p) {
 // the screen, because sql/116 refuses clinical writes without it - so the gap
 // panel is re-rendered here rather than after Submit.
 async function recordConsentNow(p) {
-  if (!p || p.consent_given) return;
+  const ownsCall136 = captureCallingOwner136(p?.patient_id);
+  if (!ownsCall136() || !p || p.consent_given) return;
   const note = document.getElementById('consent-saved');
   try {
     const { error } = await getSupabase().rpc('update_patient_from_call', {
@@ -1496,6 +1730,7 @@ async function recordConsentNow(p) {
         consent_method: 'verbal_during_call',
       },
     });
+    if (!ownsCall136()) return;
     if (error) throw error;
     p.consent_given = true;
     if (currentPatient) currentPatient.consent_given = true;
@@ -1509,16 +1744,20 @@ async function recordConsentNow(p) {
     if (badge) badge.outerHTML = consentBadge(p);
     mountCallHopebotIntro(p);
   } catch (e) {
+    if (!ownsCall136()) return;
     showToast('Could not record consent: ' + e.message, 'error');
   }
 }
 
 function wireGapsPanel(p) {
+  const ownsCall136 = captureCallingOwner136(p?.patient_id);
   const panel = document.getElementById('gaps-panel');
-  if (!panel) return;
+  if (!panel || !ownsCall136()) return;
+  const current136 = () => ownsCall136() && panel.isConnected && document.getElementById('gaps-panel') === panel;
   const callNum = callNumberOf(p);
   panel.querySelectorAll('[data-gap]').forEach(row => {
     row.addEventListener('click', (e) => {
+      if (!current136()) return;
       if (e.target.closest('[data-gap-input]')) return; // typing, not toggling
       const gap = dataGaps(p, callNum).find(g => g.key === row.dataset.gap);
       if (!gap) return;
@@ -1537,6 +1776,7 @@ function wireGapsPanel(p) {
       mount.querySelector('[data-v]').focus();
       mount.querySelector('[data-save]').addEventListener('click', async (ev) => {
         ev.stopPropagation();
+        if (!current136() || !mount.isConnected) return;
         const raw = mount.querySelector('[data-v]').value.trim();
         if (!raw) { showToast('Nothing entered yet', 'warning'); return; }
         const btn = mount.querySelector('[data-save]');
@@ -1544,6 +1784,7 @@ function wireGapsPanel(p) {
         try {
           const fields = gap.patch(raw);
           const { error } = await getSupabase().rpc('update_patient_from_call', { p_patient_id: p.patient_id, p_fields: fields });
+          if (!current136() || !row.isConnected) return;
           if (error) throw error;
           Object.assign(p, fields);
           row.classList.add('on');
@@ -1554,6 +1795,7 @@ function wireGapsPanel(p) {
           mount.remove();
           showToast(`${gap.label} recorded`, 'success');
         } catch (err) {
+          if (!current136() || !row.isConnected) return;
           showToast('Could not save: ' + err.message, 'error');
           btn.disabled = false;
         }
@@ -1566,7 +1808,7 @@ function wireGapsPanel(p) {
 // questions even appear: call 1 is relationship-only, by design.
 // call_stage is unreliable (sticks low), so trust the real call history
 // when it says the relationship is further along.
-function callNumberOf(p) { return Math.min(Math.max(p.call_stage || 0, (currentHistory || []).length) + 1, 99); }
+function callNumberOf(p) { return historyCallNumber136(p, currentHistory); }
 
 // Every patient used to be handed over identically, so a mentor met a family
 // with an open urgent concern the same way she met a calm one she had spoken to
@@ -1635,115 +1877,7 @@ function renderStageGuide(p) {
 }
 
 function renderLogForm(p) {
-  const pitches = currentPatientPitches || {};
-  const callNum = callNumberOf(p);
-  const showDeeper = callNum >= 2;   // services, WhatsApp, consent, details
-  return `
-    <div class="card card-flush logform">
-      <div class="lf-head"><h3>How did it go?</h3>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="faint" style="font-size:13px;color:var(--ink-3)">${sanitize((p.full_name || '').split(' ')[0])}</span>
-          <!-- Relabelled 2026-09-10. The RPC behind this modal has been live
-               since sql/113 and had been used ZERO times (321 concerns, 0 with
-               reassign_requested). Prachi's report on 01/09 asks for an
-               "Escalate/Flag Patient or Request Reassignment option"; the
-               button said "Raise a concern", which nobody looking for a way
-               out of a call reads as that. Text only, same handler. -->
-          <button type="button" class="btn btn-ghost btn-sm" id="f-concern" title="Flag something a supervisor must see, including how this call is going for you, and ask to be taken off this patient" style="color:var(--danger);gap:6px">${icon('alertTriangle')}Flag / hand over</button>
-          <!-- 2026-09-10: mark_patient_disinterest shipped in sql/125 and had
-               been used ZERO times, because the only way to reach it was the
-               patient record. The intern learns a family is not taking part
-               DURING the call, on this screen, and was not going to navigate
-               away mid-call to say so. Same modal, reachable where the fact
-               is learned. -->
-          <button type="button" class="btn btn-ghost btn-sm" id="f-disinterest" title="They do not want to take part. Stops them being passed round the team while that is true." style="color:var(--warn);gap:6px">${icon('skip')}Not taking part</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="f-block" title="Severe cases only: block for everyone until a manager reviews. Needs a reason." style="color:var(--danger);gap:6px">${icon('x')}Block</button>
-        </div>
-      </div>
-      <div class="lf-body">
-        ${p.consent_given ? `
-        <div class="followup" style="background:var(--ok-soft);border-color:var(--ok);padding:10px 12px">
-          <div class="fu-head" style="color:var(--ok)">${icon('shieldCheck')}<span>Consent on file</span></div>
-          <p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 0">They have already agreed. Anything they tell you today can be saved.</p>
-        </div>` : `
-        <div class="followup" id="consent-block" style="background:var(--gold-soft);border-color:var(--gold)">
-          <div class="fu-head" style="color:var(--gold-deep)">${icon('shieldCheck')}<span>Consent first</span></div>
-          <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 10px">${callNum >= 2
-            ? '“May I note down a few details about the diagnosis? It stays private and helps our team guide you better.”'
-            : '“Is it alright if we stay in touch and keep a few notes about your care? It stays private, and you can ask us to stop any time.”'}</p>
-          <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 10px">“${PRIVACY_LINE}”</p>
-          <p style="font:var(--t-xs);color:var(--ink-3);margin:0 0 10px">Until they say yes, nothing about them can be saved. Ask this before anything else.</p>
-          <div class="yesno" data-yn="consent"><button type="button" class="yn" data-v="yes">They consented</button><button type="button" class="yn" data-v="no">Not today</button></div>
-          <div class="due-meta" id="consent-saved" style="display:none;margin-top:8px;color:var(--ok)"></div>
-        </div>`}
-        <!-- sql/166, Fixboard #22: the recording, its transcript and suggested answers. -->
-        <div id="rec-mount"></div>
-        <div class="field"><label>Call outcome <span class="req">*</span></label>
-          <div class="seg seg-wrap" id="seg-outcome">
-            ${DIAL_STATUSES.map(o => `<button type="button" class="seg-btn" data-status="${o.key}" data-tone="${o.tone}">${icon(o.icon)}<span>${o.label}</span></button>`).join('')}
-          </div>
-        </div>
-        <div class="reveal" id="reveal-connected"><div class="reveal-inner">
-          <div class="field"><label>How were they doing? <span class="req">*</span></label>
-            <div class="recep" id="recep">${RECEPTIVENESS.map(r => `<button type="button" class="recep-btn" data-recep="${r.key}"><div class="recep-label">${r.label}</div><div class="recep-hint">${r.hint}</div></button>`).join('')}</div>
-          </div>
-          <div class="field"><label>How is the patient doing?</label>
-            <div class="seg" style="grid-template-columns:repeat(5,1fr)" id="seg-condition">
-              ${CONDITIONS.map(c => `<button type="button" class="seg-btn" data-cond="${c.key}" data-tone="${c.tone}"><span>${c.label}</span></button>`).join('')}
-            </div>
-          </div>
-          <div class="field"><label>What did they ask for?</label>
-            <div class="chips" id="reqs" style="display:flex;flex-wrap:wrap;gap:8px">
-              ${REQUIREMENTS.map(r => `<button type="button" class="chip seg-btn" data-req="${r.key}" data-tone="primary" style="padding:8px 12px">${icon(r.icon)}<span>${r.key}</span></button>`).join('')}
-            </div>
-            <input class="input" id="f-customreq" placeholder="Anything else they asked for…" style="margin-top:8px" />
-          </div>
-          ${showDeeper ? '<div id="invite-moment"></div>' : ''}
-          ${showDeeper ? `
-          <button type="button" class="btn btn-secondary" id="f-details-btn">${icon('stethoscope')}Add clinical details they shared</button>
-          <div class="field"><label>Services offered today</label>
-            <div class="services" id="services">
-              ${SERVICES.map(s => { const already = !!pitches[s.column];
-                return `<label class="svc${already ? ' on locked' : ''}" data-svc="${s.key}"><input type="checkbox" ${already ? 'checked disabled' : ''} />${icon(s.icon)}<span class="svc-label">${s.label}</span>${already ? '<span class="svc-note">offered earlier</span>' : ''}</label>`; }).join('')}
-            </div>
-          </div>
-          <div class="row gap5 wrap" style="display:flex;gap:20px;flex-wrap:wrap">
-            <div class="field grow" style="flex:1;min-width:140px"><label>WhatsApp link sent?</label>
-              <div class="yesno" data-yn="waLink"><button type="button" class="yn" data-v="yes">Yes</button><button type="button" class="yn" data-v="no">No</button></div></div>
-            <div class="field grow" style="flex:1;min-width:140px"><label>Joined the WhatsApp group?</label>
-              <div class="yesno" data-yn="whatsapp"><button type="button" class="yn" data-v="yes">Yes</button><button type="button" class="yn" data-v="no">No</button></div></div>
-            <div class="field grow" style="flex:1;min-width:140px"><label>Following our channels?</label>
-              <div class="yesno" data-yn="social"><button type="button" class="yn" data-v="yes">Yes</button><button type="button" class="yn" data-v="no">No</button></div></div>
-          </div>` : `
-          <p style="font:var(--t-xs);color:var(--ink-3);margin:0;padding:10px 12px;background:var(--surface-3);border-radius:var(--r-sm)">
-            ${icon('info')} First call. Focus on trust and consent. The HopeBot introduction is available today in its own panel after consent; the longer service and medical questions appear from the second call.
-          </p>`}
-          <button type="button" class="btn btn-ghost btn-sm" id="f-wellbeing-btn" style="align-self:flex-start">${icon('activity')}Record well-being scores (PHQ-4, QoL…)</button>
-          <div class="row gap5 wrap" style="display:flex;gap:20px;flex-wrap:wrap">
-            <div class="field grow" style="flex:1;min-width:170px"><label>Feedback from patient</label>
-              <input class="input" id="f-fb-patient" placeholder="In their words…" /></div>
-            <div class="field grow" style="flex:1;min-width:170px"><label>Feedback from caregiver</label>
-              <input class="input" id="f-fb-caregiver" placeholder="In their words…" /></div>
-          </div>
-        </div></div>
-        <div class="field"><label>General notes</label>
-          <textarea class="textarea" id="f-notes" placeholder="Anything worth remembering about this conversation…"></textarea></div>
-        <div class="followup">
-          <div class="fu-head">${icon('calendar')}<span>Next care call</span><span class="fu-auto" id="fu-auto" style="display:none">suggested for you</span></div>
-          <div class="field"><label>Date</label><input class="input" type="date" id="f-followup" /><div class="muted" style="font-size:12px">Doctor appointments and treatment dates belong in General notes.</div></div>
-          <div class="field" style="margin-top:12px"><label>A note to hand the next caregiver mentor</label>
-            <textarea class="textarea" id="f-strategy" placeholder="What helped, what to lead with, the best time to reach them…"></textarea></div>
-        </div>
-        ${renderLeversPanel(p)}
-      </div>
-      <!-- #f-why: a greyed Submit always says what it is waiting for, same
-           rule as "Save call" in components/callForm.js (field report 25/09). -->
-      <div class="lf-actions" style="flex-wrap:wrap">
-        <div id="f-why" role="status" aria-live="polite" style="flex:1 1 100%;font-size:12.5px;line-height:1.35;color:var(--ink-3)"></div>
-        <button class="btn btn-ghost" id="f-skip">${icon('skip')}Skip for now</button>
-        <button class="btn btn-primary grow" id="f-submit" style="flex:1" disabled>${icon('check')}Submit &amp; next call</button>
-      </div>
-    </div>`;
+  return renderCareCallForm136(p, { pitches: currentPatientPitches || {}, callNum: callNumberOf(p), services: SERVICES, leverHTML: renderLeversPanel(p), historyIncomplete: historyIncomplete136(currentHistory) });
 }
 
 // ---- "Session coming up" banner: with no WhatsApp yet, the mentor IS the
@@ -1804,8 +1938,10 @@ function inviteKindFromSignals() {
   return null;
 }
 function updateInviteMoment(p) {
+  const ownsCall136 = captureCallingOwner136(p?.patient_id);
   const mount = document.getElementById('invite-moment');
-  if (!mount || mount.dataset.done) return;
+  if (!ownsCall136() || !mount || mount.dataset.done) return;
+  const current136 = () => ownsCall136() && mount.isConnected && document.getElementById('invite-moment') === mount;
   const liveKinds = new Set((currentPatientSessions || []).map(s => s.kind));
   const kind = inviteKindFromSignals();
   if (!kind || form.dialStatus !== 'connected' || liveKinds.has(kind)) { mount.innerHTML = ''; return; }
@@ -1828,6 +1964,8 @@ function updateInviteMoment(p) {
       </div>
     </div>`;
   mount.querySelectorAll('[data-inv]').forEach(btn => btn.addEventListener('click', async () => {
+    if (!current136()) return;
+    const actor136 = me.id;
     const choice = btn.dataset.inv;
     if (choice === 'skip') { mount.dataset.done = '1'; mount.innerHTML = ''; return; }
     btn.disabled = true;
@@ -1836,7 +1974,7 @@ function updateInviteMoment(p) {
       const status = choice === 'invited' ? 'invited' : 'agreed';
       let assignee = null, continuityName = null;
       if (choice === 'agreed-self') {
-        assignee = me.id;
+        assignee = actor136;
       } else if (status === 'agreed') {
         // Continuity: whoever last worked a session of this kind with this
         // patient gets the follow-up, so the same person carries the plan.
@@ -1847,13 +1985,16 @@ function updateInviteMoment(p) {
             .in('status', ['held', 'scheduled'])
             .not('assigned_to', 'is', null)
             .order('created_at', { ascending: false }).limit(1);
+          if (!current136()) return;
           if (prev?.[0]) { assignee = prev[0].assigned_to; continuityName = prev[0].assignee?.full_name || null; }
         } catch {}
       }
-      const row = { patient_id: p.patient_id, kind, status, invited_by: me.id };
+      if (!current136()) return;
+      const row = { patient_id: p.patient_id, kind, status, invited_by: actor136 };
       if (status === 'agreed') row.agreed_at = new Date().toISOString();
       if (assignee) row.assigned_to = assignee;
       const { data, error } = await sb.from('care_sessions').insert(row).select().single();
+      if (!current136()) return;
       if (error) throw error;
       currentPatientSessions = [...(currentPatientSessions || []), data];
       mount.dataset.done = '1';
@@ -1873,6 +2014,7 @@ function updateInviteMoment(p) {
         ? (choice === 'agreed-self' ? 'Session is yours, schedule it when ready' : continuityName ? `Sent back to ${continuityName} for continuity` : 'Session request sent to the team')
         : 'Invitation noted', 'success');
     } catch (e) {
+      if (!current136()) return;
       showToast('Could not record it: ' + e.message, 'error');
       btn.disabled = false;
     }
@@ -1984,6 +2126,8 @@ function wireActive(p) {
 // ---- Raise a concern: saves IMMEDIATELY, independent of the call log.
 // A red flag must never wait for the rest of the form to be filled in.
 function openConcernModal(p) {
+  const ownsCall136 = captureCallingOwner136(p?.patient_id);
+  if (!ownsCall136()) return;
   const state = { reason: '', severity: 'high', sevTouched: false };
   const el = document.createElement('div');
   el.innerHTML = `
@@ -2025,7 +2169,8 @@ function openConcernModal(p) {
       <button class="btn btn-secondary" id="cn-cancel">Cancel</button>
       <button class="btn btn-danger" id="cn-save">${icon('alertTriangle')}Raise it now</button>
     </div>`;
-  showModal({ title: `Raise a concern · ${sanitize(p.full_name)}`, content: el, size: 'lg' });
+  const modal136 = showModal({ title: `Raise a concern · ${sanitize(p.full_name)}`, content: el, size: 'lg' });
+  const current136 = () => ownsCall136() && el.isConnected && modal136?.isCurrentModal();
 
   // One selection across BOTH chip rows: the welfare list and the two that
   // are about the caller. Picking either clears the other.
@@ -2053,8 +2198,9 @@ function openConcernModal(p) {
     el.querySelectorAll('#cn-sev .seg-btn').forEach(b => b.className = 'seg-btn');
     btn.className = `seg-btn on tone-${btn.dataset.tone}`;
   }));
-  el.querySelector('#cn-cancel').addEventListener('click', () => closeModal());
+  el.querySelector('#cn-cancel').addEventListener('click', () => modal136?.closeOwnedModal());
   el.querySelector('#cn-save').addEventListener('click', async () => {
+    if (!current136()) return;
     if (!state.reason) { showToast('Pick what you heard. That routes the help', 'warning'); return; }
     const btn = el.querySelector('#cn-save');
     const wantsOff = !!el.querySelector('#cn-reassign')?.checked;
@@ -2069,8 +2215,9 @@ function openConcernModal(p) {
           p_patient_id: p.patient_id, p_reason: state.reason,
           p_severity: state.severity, p_note: note,
         });
+        if (!current136()) return;
         if (error) throw error;
-        closeModal();
+        modal136.closeOwnedModal();
         showToast('Sent. They are off your list from now, and a supervisor will pick it up. You did the right thing.', 'success', 8000);
         // The row they were on has just been cancelled: move on rather
         // than leaving her looking at the person she asked to leave.
@@ -2087,12 +2234,14 @@ function openConcernModal(p) {
         p_patient_id: p.patient_id, p_reason: state.reason,
         p_severity: state.severity, p_note: note,
       });
+      if (!current136()) return;
       if (error) throw error;
-      closeModal();
+      modal136.closeOwnedModal();
       showToast(res?.created === false
         ? 'Added to the flag already open on them. A supervisor has it.'
         : 'Concern raised. A supervisor will see it. Well done for flagging it.', 'success');
     } catch (e) {
+      if (!current136()) return;
       showToast('Could not raise it: ' + e.message, 'error');
       btn.disabled = false; btn.innerHTML = `${icon('alertTriangle')}Raise it now`;
     }
@@ -2101,7 +2250,12 @@ function openConcernModal(p) {
 
 // Quick capture for what the patient shared verbally on the call:
 // the four details that unlock real help. Saves straight to the patient.
-function openClinicalDetailsModal(p) {
+function openClinicalDetailsModal(p, { onSaved = null } = {}) {
+  const ownsCall136 = captureCallingOwner136(p?.patient_id);
+  if (!ownsCall136()) return;
+  const generation = callingGeneration, account = callingIdentity(), patientId = p.patient_id;
+  let modal136;
+  const canSave = () => ownsCall136() && el.isConnected && modal136?.isCurrentModal() && callingCurrent(generation) && callingWritable() && callingIdentity() === account && currentPatient?.patient_id === patientId;
   const el = document.createElement('div');
   el.innerHTML = `
     <p style="font:var(--t-sm);color:var(--ink-2);margin:0 0 var(--s4)">Only fill what they actually told you. Everything is optional.</p>
@@ -2112,7 +2266,7 @@ function openClinicalDetailsModal(p) {
         </select></div>
       <div class="form-group"><label class="form-label">Stage</label>
         <select class="select" id="cd-stage">
-          ${['unknown', 'stage_i', 'stage_ii', 'stage_iii', 'stage_iv'].map(s => `<option value="${s}" ${(p.cancer_stage || 'unknown') === s ? 'selected' : ''}>${capitalize(s)}</option>`).join('')}
+          ${['unknown', 'stage_i', 'stage_ii', 'stage_iii', 'stage_iv', 'not_applicable'].map(s => `<option value="${s}" ${(p.cancer_stage || 'unknown') === s ? 'selected' : ''}>${capitalize(s)}</option>`).join('')}
         </select></div>
     </div>
     <div class="form-row">
@@ -2131,9 +2285,10 @@ function openClinicalDetailsModal(p) {
       <button class="btn btn-secondary" id="cd-cancel">Cancel</button>
       <button class="btn btn-primary" id="cd-save">${icon('check')}Save details</button>
     </div>`;
-  showModal({ title: 'Clinical details · ' + sanitize(p.full_name), content: el, size: 'lg' });
-  el.querySelector('#cd-cancel').addEventListener('click', () => closeModal());
+  modal136 = showModal({ title: 'Clinical details · ' + sanitize(p.full_name), content: el, size: 'lg' });
+  el.querySelector('#cd-cancel').addEventListener('click', () => modal136?.closeOwnedModal());
   el.querySelector('#cd-save').addEventListener('click', async () => {
+    if (!canSave()) return;
     const btn = el.querySelector('#cd-save');
     btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px"></span>';
     const v = (id) => el.querySelector('#' + id)?.value.trim() || null;
@@ -2147,9 +2302,11 @@ function openClinicalDetailsModal(p) {
     try {
       const { error } = await getSupabase().rpc('update_patient_from_call', { p_patient_id: p.patient_id, p_fields: patch });
       if (error) throw error;
-      Object.assign(p, patch);
-      closeModal(); showToast('Details saved to the patient record', 'success');
-    } catch (e) { showToast('Could not save: ' + e.message, 'error'); btn.disabled = false; btn.innerHTML = `${icon('check')}Save details`; }
+      if (!canSave()) return;
+      Object.assign(p, patch); Object.assign(currentPatient, patch);
+      if (typeof onSaved === 'function') onSaved(patch);
+      modal136.closeOwnedModal(); showToast('Details saved to the patient record', 'success');
+    } catch (e) { if (!canSave()) return; showToast('Could not save: ' + e.message, 'error'); btn.disabled = false; btn.innerHTML = `${icon('check')}Save details`; }
   });
 }
 
@@ -2175,6 +2332,7 @@ function suggestFollowup() {
 function updateSubmit() {
   const btn = document.getElementById('f-submit'); if (!btn) return;
   const missing = [];
+  if (cleanPendingClinical136(form.pendingClinical136)) missing.push('review and save or discard the clinical draft');
   if (!form.dialStatus) missing.push('tap how the call went');
   else if (form.dialStatus === 'connected' && !form.receptiveness) missing.push('tap how they were doing');
   btn.disabled = missing.length > 0;
@@ -2225,12 +2383,13 @@ function resumeRunningTimer() { paintTimerRunning(); }
 // today's list and come back after the rest. Only a submitted outcome
 // (connected / not-picked-up) actually removes them from today.
 async function skipPatient() {
+  const ownsCall136 = captureCallingOwner136(currentPatient?.patient_id);
   if (!callingWritable() || portalFeedback || portalSaving || portalSkipping || !currentQueueId || !currentPatient) return;
   const operation = {}, generation = callingGeneration, account = callingIdentity();
   const queueId = currentQueueId, patientId = currentPatient.patient_id;
   const name = (currentPatient.full_name || 'They').split(' ')[0];
   const btn = document.getElementById('f-skip');
-  const current = () => portalSkipping === operation && callingCurrent(generation) && callingWritable()
+  const current = () => ownsCall136() && portalSkipping === operation && callingCurrent(generation) && callingWritable()
     && callingIdentity() === account && currentQueueId === queueId && currentPatient?.patient_id === patientId;
   portalSkipping = operation;
   if (btn) btn.disabled = true;
@@ -2278,12 +2437,13 @@ async function skipPatient() {
 }
 
 async function submitCallLog() {
+  const ownsCall136 = captureCallingOwner136(currentPatient?.patient_id);
   if (!callingWritable() || portalFeedback || portalSaving || portalSkipping) return;
   if (!currentPatient || !currentQueueId) return;
   const sb = getSupabase();
   const operation = {}, generation = callingGeneration, identity = callingIdentity();
   const patientId = currentPatient.patient_id, queueId = currentQueueId, callerId = me.id;
-  const stillCurrent = () => portalSaving === operation && callingCurrent(generation) && identity === callingIdentity()
+  const stillCurrent = () => ownsCall136() && portalSaving === operation && callingCurrent(generation) && identity === callingIdentity()
     && callingWritable() && currentPatient?.patient_id === patientId && currentQueueId === queueId && me?.id === callerId;
   let confirmedCallId = null;
   const btn = document.getElementById('f-submit');
@@ -2446,6 +2606,7 @@ async function submitCallLog() {
 }
 
 async function offerSavedCallFeedback(callId) {
+  const ownsCall136 = captureCallingOwner136(currentPatient?.patient_id);
   const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
   if (!callingWritable() || portalFeedback) return;
   if (!uuid(callId)) { showToast('Check the saved call in Call Logs before recording feedback.', 'warning'); await mountReady(); return; }
@@ -2453,12 +2614,12 @@ async function offerSavedCallFeedback(callId) {
   const portal = root(); let feedback = null, subscription, observer, disposed = false, modal;
   const body = document.createElement('div');
   body.innerHTML = '<p>Your call is saved. Record what was said about HopeBot, or continue with usage left Not asked / unknown. Use Save feedback before leaving this screen.</p><div data-portal-feedback></div><p data-portal-feedback-error role="status"></p><div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:14px"><button type="button" class="btn btn-primary" data-portal-next>Continue to next call</button><button type="button" class="btn btn-secondary" data-portal-list>Return to daily list</button></div>';
-  const current = () => !disposed && portalFeedback === controller && modal?.isCurrentModal() && callingCurrent(generation)
+  const current = () => ownsCall136() && !disposed && portalFeedback === controller && modal?.isCurrentModal() && callingCurrent(generation)
     && identity === callingIdentity() && route === window.location.hash && callingWritable();
   const dispose = () => {
     if (disposed) return;
     disposed = true; feedback?.dispose(); subscription?.unsubscribe(); observer?.disconnect();
-    window.removeEventListener('hashchange', check); if (portal) portal.inert = false;
+    window.removeEventListener('hashchange', check); if (portal && portalFeedback === controller) portal.inert = false;
     body.replaceChildren(); modal?.closeOwnedModal(); if (portalFeedback === controller) portalFeedback = null;
   };
   const check = () => { if (!current()) dispose(); };
@@ -2473,11 +2634,14 @@ async function offerSavedCallFeedback(callId) {
     const dirty = [...body.querySelectorAll('[data-portal-feedback] input,[data-portal-feedback] textarea')].some(control =>
       ['radio','checkbox'].includes(control.type) ? control.checked !== control.defaultChecked : control.value !== control.defaultValue);
     if (dirty && !window.confirm('Leave these unsaved HopeBot feedback entries? Your call is already saved.')) return;
-    dispose(); await mountReady();
-    if (next && callingWritable()) await getNextCall();
+    dispose();
+    const account136 = callingIdentity(), mount136 = callingMount;
+    const ready136 = mountReady(), readyGeneration136 = callingGeneration;
+    await ready136;
+    if (next && callingWritable() && callingGeneration === readyGeneration136 && callingMount === mount136 && callingIdentity() === account136 && !currentQueueId) await getNextCall();
   }
-  body.querySelector('[data-portal-next]').onclick = () => { finish(true).catch(() => { if (callingCurrent()) showToast('Call saved. Refresh your daily list to continue.', 'warning'); }); };
-  body.querySelector('[data-portal-list]').onclick = () => { finish(false).catch(() => { if (callingCurrent()) showToast('Call saved. Refresh your daily list.', 'warning'); }); };
+  body.querySelector('[data-portal-next]').onclick = () => { finish(true).catch(() => { if (ownsCall136() && callingCurrent()) showToast('Call saved. Refresh your daily list to continue.', 'warning'); }); };
+  body.querySelector('[data-portal-list]').onclick = () => { finish(false).catch(() => { if (ownsCall136() && callingCurrent()) showToast('Call saved. Refresh your daily list.', 'warning'); }); };
   try {
     const module = await import('../components/hopebotFeedback.js');
     if (!current()) return;
@@ -2486,6 +2650,9 @@ async function offerSavedCallFeedback(callId) {
 }
 
 async function mountQueueEmpty() {
+  if (!callingCurrent()) return;
+  clearActive(); resetState(); callingGeneration++; callingTransition136++;
+  const ownsView136 = captureCallingReady136();
   recordingSection?.dispose(); recordingSection = null;
   clearActive();
   const el = root(); if (!el) return;
@@ -2496,8 +2663,10 @@ async function mountQueueEmpty() {
   let summary = { pending: 0, done_today: 0 };
   try {
     const { data } = await getSupabase().rpc('get_worklist_summary', { p_caller_id: me.id });
+    if (!ownsView136()) return;
     if (data) summary = data;
   } catch { /* fall through to the empty screen */ }
+  if (!ownsView136()) return;
   if (summary.pending > 0) { await mountReady(); return; }
 
   const finished = summary.done_today > 0;
@@ -2523,7 +2692,8 @@ function resetState() {
   clearSaturdaySession();
   recordingSection?.dispose(); recordingSection = null;
   currentQueueId = null; currentPatient = null; currentPatientPitches = null; currentPatientPriority = null; currentHistory = []; currentPatientSessions = [];
-  currentContext = null;
+  currentContext = null; currentContextPatient136 = null;
+  currentServices = {}; currentOpenLoops = [];
   Object.assign(form, blankForm()); timerSeconds = 0; timerRunning = false; timerStartEpoch = null;
   clearInterval(timerInterval); timerInterval = null;
 }
