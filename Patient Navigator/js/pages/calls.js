@@ -156,8 +156,8 @@ export async function renderCalls(container) {
     } catch (err) { showToast('Export failed: ' + err.message, 'error'); }
   });
 
-  const sessionHistory=document.createElement('div');container.querySelector('#history-view')?.append(sessionHistory);
-  completedSessions128.mountCompletedSessions128?.(sessionHistory);
+  const sessionHistory=document.createElement('div');container.querySelector('#history-view')?.prepend(sessionHistory);
+  completedSessions128.mountCompletedSessions128?.(sessionHistory,{phoneHistory:container.querySelector('#call-search')});
   await loadCalls();
 }
 

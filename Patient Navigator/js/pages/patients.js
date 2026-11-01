@@ -2084,6 +2084,12 @@ function renderCallsTab(el, p, calls, reload, failed = false) {
   `;
   el.querySelector('#tab-log-call')?.addEventListener('click', () =>
     openCallForm({ patient: { id: p.id, full_name: p.full_name }, onSaved: reload }));
-  const sessionHistory=document.createElement('div');el.append(sessionHistory);
-  completedSessions128.mountCompletedSessions128?.(sessionHistory,{patientId:p.id});
+  const sessionHistory=document.createElement('div');el.prepend(sessionHistory);
+  const phoneHeading=el.querySelector('.card-header');if(phoneHeading){phoneHeading.tabIndex=-1;phoneHeading.setAttribute('role','region');phoneHeading.setAttribute('aria-label','Phone-call history');}
+  const sessionController=completedSessions128.mountCompletedSessions128?.(sessionHistory,{patientId:p.id,phoneHistory:phoneHeading});
+  const callsRoute=location.hash;
+  if(callsRoute.split('?')[0].toLowerCase()===('#patients/'+p.id).toLowerCase()&&new URLSearchParams(callsRoute.split('?')[1]||'').get('tab')==='calls'){
+    sessionHistory.tabIndex=-1;sessionHistory.setAttribute('role','region');sessionHistory.setAttribute('aria-label','Saved sessions and phone calls');
+    sessionController?.ready?.then(()=>requestAnimationFrame(()=>{if(!sessionHistory.isConnected||location.hash!==callsRoute||!sessionHistory.querySelector('[data-completed-sessions128]'))return;const header=document.querySelector('header.header');sessionHistory.style.scrollMarginTop=(header?header.getBoundingClientRect().height+12:0)+'px';sessionHistory.focus({preventScroll:true});sessionHistory.scrollIntoView({block:'start'});}));
+  }
 }

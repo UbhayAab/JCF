@@ -115,7 +115,7 @@ export async function openSessionRecording128(sessionId, onSaved = () => {}) {
           await mustWrite(sb.from('care_sessions').update({ status: 'held', held_at: s.held_at || new Date().toISOString(), duration_mins: mins, session_notes: notes.value.trim() || null }).eq('id', sessionId).eq('updated_at', s.updated_at), 'session');
         }
         if (!current()) return;
-        overlay.closeOwnedModal(dispose); showToast('Session saved with your notes.', 'success'); await onSaved();
+        overlay.closeOwnedModal(dispose); showToast("Original session saved. Find your notes in Call Logs or the patient's Calls tab.", 'success'); await onSaved();
       } catch (e) { if (current()) state.textContent = `Could not confirm the save: ${e.message || 'check your connection'}. Your draft is kept here. Reopen the session to check before making a different save.`; }
       finally { saving = false; sync(); }
     });
