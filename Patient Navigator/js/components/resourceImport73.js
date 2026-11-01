@@ -75,7 +75,7 @@ export async function openResourceImport73({onChanged=()=>{}}={}) {
     if(item.old){if(!item.old.updated_at)throw definite('Missing update preimage. Reopen the pack.');request=sb.from('resources').update(item.patch).eq('id',item.id).eq('updated_at',item.old.updated_at);}
     else request=sb.from('resources').insert({...item.patch,id:item.id,created_by:actor});
     const r=await request.select(columns);
-    if(r.error)throw definite('Save refused for '+item.row.fields.title+'. Reopen the pack to check its state before resuming.');
+    if(r.error)throw definite('Could not confirm the save for '+item.row.fields.title+'. Reopen the pack to check its state before resuming.');
     if(!Array.isArray(r.data)||r.data.length!==1)throw definite('The entry changed or access was refused. Reopen the pack before continuing.');
     return r.data[0];
    },

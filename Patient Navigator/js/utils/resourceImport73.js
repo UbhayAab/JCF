@@ -85,7 +85,13 @@ export async function planImport73(pack,existing) {
  for(const old of existing){if(old.content?.resource_import73?.key){const k=old.content.resource_import73.key;byKey.set(k,[...(byKey.get(k)||[]),old]);}const identity=identity73(old);byIdentity.set(identity,[...(byIdentity.get(identity)||[]),old]);}
  const plan=[];
  for(const row of pack.rows){
-  const exact=byKey.get(row.key)||byIdentity.get(row.identity)||[],entryDigest=await digest73({fields:row.fields,references:row.references,publication:row.publication,sources:pack.sources.filter(s=>row.references.some(x=>x.source_id===s.id))});
+  let exact=byKey.get(row.key)||byIdentity.get(row.identity)||[];
+  if(exact.length>1&&row.fields.contact_phone&&row.fields.address){
+   const digits=s=>String(s||'').replace(/\D/g,''),phone=digits(row.fields.contact_phone),address=normalizedName(row.fields.address);
+   const sourceMatches=exact.filter(old=>phone&&address&&digits(old.contact_phone)===phone&&normalizedName(old.address)===address);
+   if(sourceMatches.length===1)exact=sourceMatches;
+  }
+  const entryDigest=await digest73({fields:row.fields,references:row.references,publication:row.publication,sources:pack.sources.filter(s=>row.references.some(x=>x.source_id===s.id))});
   if(exact.length>1){plan.push({row,status:'ambiguous',reason:'Several existing resources match; review them separately.'});continue;}
   const old=exact[0]||null;
   if(old&&(old.is_active===false||old.is_public===false||old.is_sample===true)){plan.push({row,old,status:'blocked',reason:'Existing private, retired or sample entry is preserved.'});continue;}
