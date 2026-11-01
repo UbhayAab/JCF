@@ -8,6 +8,7 @@ import { showToast } from '../components/toast.js';
 import { confirmMyPhone, normalizeTeamPhone, formatTeamPhone } from '../components/phonePrompt.js';
 import { formatDate, capitalize } from '../utils/formatters.js';
 import { validatePassword, sanitize } from '../utils/validators.js';
+import { mountChatbotTestingNumbers } from '../components/chatbotTestingNumbers.js';
 
 /** Whether HopeBot knows this member by their number (sql/157, Fixboard #10). */
 function phoneStatus(profile) {
@@ -23,7 +24,7 @@ export async function renderProfile(container) {
   container.innerHTML = `
     <div class="page-header"><h1>My Profile</h1></div>
     <div class="content-grid">
-      <div class="col-span-6">
+      <div class="col-span-6" style="min-width:0">
         <div class="card">
           <h4 class="mb-4">Personal Information</h4>
           <form id="profile-form">
@@ -51,6 +52,7 @@ export async function renderProfile(container) {
             </div>
           </form>
         </div>
+        <section class="card" id="profile-testing-numbers" style="margin-top:var(--space-5)"></section>
       </div>
       <div class="col-span-6">
         <div class="card">
@@ -85,6 +87,10 @@ export async function renderProfile(container) {
       </div>
     </div>
   `;
+
+  const testingHost = container.querySelector('#profile-testing-numbers');
+  mountChatbotTestingNumbers(testingHost, { mode: 'self',
+    current: () => container.isConnected && container.querySelector('#profile-testing-numbers') === testingHost });
 
   document.getElementById('diag-run')?.addEventListener('click', async () => {
     const btn = document.getElementById('diag-run');

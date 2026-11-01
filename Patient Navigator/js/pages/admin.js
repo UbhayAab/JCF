@@ -365,6 +365,7 @@ async function loadUsers() {
       <h2>${active ? 'Active profiles' : 'Inactive Profiles'}</h2>
       <p class="text-muted" role="status" style="margin:0 0 var(--s3)">${(profiles || []).length} ${active ? 'active' : 'inactive'} profile${profiles?.length === 1 ? '' : 's'} shown.</p>
       <p class="muted" style="margin:0 0 var(--s4);color:var(--ink-3);font:var(--t-sm)">Change a role, assign managers, reset a password, open an account, or deactivate one. For day-to-day “off today”, use Team &amp; Queue → Availability.</p>
+      <section class="card" data-user-testing-numbers style="margin-bottom:var(--s4)"><p role="status">Loading testing-number controls...</p></section>
       ${!profiles?.length ? `<div class="empty-state"><h3>No ${active ? 'active' : 'inactive'} profiles</h3><p>${active ? 'Previous interns are in Inactive Profiles.' : 'Deactivated accounts will appear here. Active accounts remain in User Management.'}</p></div>` : ''}
       <div class="user-list">
         ${(profiles || []).map(u => `
@@ -381,6 +382,22 @@ async function loadUsers() {
     `;
 
     // Role change handlers
+    const testingHost = content.querySelector('[data-user-testing-numbers]');
+    if (getCurrentProfile()?.id !== getCurrentUser()?.id) {
+      testingHost.textContent = 'Exit Open as to manage testing numbers with your own account.';
+    } else if (getCurrentProfile()?.is_active !== true) {
+      testingHost.textContent = 'An active own-account sign-in is required for testing numbers.';
+    } else {
+      // Load this independent panel only for the actual active manager view.
+      // A failed/new module does not remove existing account-management controls.
+      import('../components/chatbotTestingNumbers.js').then(({ mountChatbotTestingNumbers }) => {
+        if (current() && testingHost.isConnected) mountChatbotTestingNumbers(testingHost,
+          { mode: 'manager', activeOwners: active, current });
+      }).catch(() => {
+        if (current() && testingHost.isConnected) testingHost.textContent = 'Testing-number controls could not load. Refresh this page to retry.';
+      });
+    }
+
     content.querySelectorAll('select[data-action="role"]').forEach(sel => {
       sel.addEventListener('change', async () => {
         if (!current()) return;

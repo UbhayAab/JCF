@@ -60,7 +60,7 @@ export async function renderLeads(container) {
         <button type="button" class="fchip" data-f="all">All</button>
         ${isManagerOrAdmin() ? '<button type="button" class="fchip" data-f="nocaller">No caller yet</button>' : ''}
         <button type="button" class="fchip" data-f="review">Needs review</button>
-        <button type="button" class="fchip" data-f="team" title="Confirmed staff test numbers, separate from families">Team tests</button>
+        <button type="button" class="fchip" data-f="team" title="Confirmed primary staff or manager-reviewed internal testing numbers, separate from families">Team tests</button>
       </div>
       <div class="table-search" style="max-width:420px;flex:1 1 260px">
         ${icon('search')}
@@ -162,7 +162,7 @@ export async function renderLeads(container) {
     }
     body.innerHTML = `
       <div class="due-meta wraps" style="margin-bottom:8px">${filter === 'team'
-        ? `${list.length} team member${list.length === 1 ? '' : 's'} who wrote to HopeBot from their own number. Separate from family leads. Use the patient testing instructions above; linked actual families remain family records.`
+        ? `${list.length} team member${list.length === 1 ? '' : 's'} using a confirmed primary or manager-reviewed testing number. Separate from family leads. Use the patient testing instructions above; linked actual families remain family records.`
         : `${fresh} new lead${fresh === 1 ? '' : 's'}`}</div>
       <div style="display:flex;flex-direction:column;gap:8px">
       ${list.map(r => `
@@ -170,7 +170,7 @@ export async function renderLeads(container) {
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <span style="font-weight:700">${sanitize(r.name || 'Unknown')}</span>
             <a class="tnum" href="tel:${sanitize(String(r.phone).replace(/[^+\d]/g, ''))}">${sanitize(r.phone)}</a>
-            ${r.is_team ? '<span class="badge badge-warn" title="Confirmed staff test number">Team test</span>'
+            ${r.is_team ? '<span class="badge badge-warn" title="Confirmed primary staff or manager-reviewed internal testing number">Team test</span>'
               : r.contacted ? '<span class="badge badge-ok">Contacted</span>' : '<span class="badge badge-info">New</span>'}
             ${!r.is_team ? `<span class="badge badge-neutral">${sanitize(LEAD_LABELS[leadKind(r)])}</span>` : ''}
             <span style="flex:1"></span>
@@ -185,7 +185,7 @@ export async function renderLeads(container) {
           </div>
           ${!r.is_team && !r.patient_id && !openReqs.has(r.id) && (isManagerOrAdmin() || r.assigned_to === getCurrentProfile()?.id) ? `<div style="margin-top:8px"><button type="button" class="btn btn-secondary btn-sm" data-log-followup="${sanitize(r.id)}" ${requestsKnown ? '' : 'disabled'} title="${requestsKnown ? 'Record a follow-up already completed with this assigned lead' : 'Refresh to check existing callback requests first'}">Log follow-up</button></div>` : ''}
           ${r.is_team ? '' : callerLine(r)}
-          ${r.is_team ? '<p class="due-meta wraps">Staff test number, excluded from family leads and clinical patient counts.</p>' : `<div class="due-meta" style="margin-top:4px">${[
+          ${r.is_team ? '<p class="due-meta wraps">Confirmed internal/team testing, excluded from family leads and clinical patient counts.</p>' : `<div class="due-meta" style="margin-top:4px">${[
             r.role === 'caregiver' ? 'Caregiver' : r.role === 'patient' ? 'Patient' : null,
             r.city && r.city !== 'other' ? sanitize(r.city) : 'City not pinned',
             r.cancer_type ? sanitize(cancerLabel(r.cancer_type)) : null,
