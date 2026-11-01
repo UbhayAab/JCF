@@ -269,32 +269,39 @@ async function loadSpecialistPeople(role) {
       // yet must not open the app to an empty screen while dozens wait.
       const mine = rows.filter(r => r.continuity_id === me.id);   // worklist is oldest-contact-first already
       const unclaimed = rows.filter(r => !r.continuity_id);
-      const shown = (training ? rows : [...mine, ...unclaimed]).slice(0, 8);
-      if (countEl) countEl.textContent = training ? `${rows.length} assigned to you` : mine.length
-        ? `${mine.length} yours · ${unclaimed.length} waiting`
-        : `${unclaimed.length} waiting`;
-      if (!rows.length) {
-        el.innerHTML = `<div class="empty" style="padding:var(--s6)"><div class="ico-wrap">${icon('leaf')}</div>
-          <h4>${training ? 'No nutrition families assigned yet' : 'Nobody is in nutrition care yet'}</h4>
-          <p>${training ? 'Your lead can assign families for you to support during training.' : 'People arrive here when a mentor marks <strong>Nutritionist assigned</strong>, when nutrition work is logged, or when a lead assigns them to you.'}</p></div>`;
-        return;
+      const assigned = training ? rows : mine;
+      const assignedShown = assigned.slice(0, training ? 8 : 4);
+      const unclaimedShown = training ? [] : unclaimed.slice(0, 4);
+      if (countEl) {
+        countEl.textContent = training ? `${assigned.length} assigned to you` : `${mine.length} assigned · ${unclaimed.length} unclaimed`;
+        countEl.style.whiteSpace = 'normal';
+        countEl.style.textAlign = 'right';
       }
-      el.innerHTML = `<div class="due-list">${shown.map(p => {
-        const mineRow = p.continuity_id === me.id;
+      const renderRows = items => items.map(p => {
         const name = p.full_name || p.patient_code || 'Patient';
         const mustChip = p.must_score != null
           ? ` · <span style="color:var(--${Number(p.must_score) >= 2 ? 'danger' : Number(p.must_score) === 1 ? 'warn' : 'ok'})">MUST ${p.must_score}</span>`
           : '';
         const meta = sanitize([p.city, p.gi_subtype || p.cancer_type].filter(Boolean).join(' · ') || (p.patient_code || '')) + mustChip;
-        const tag = training ? '<span class="badge badge-primary">Assigned</span>' : mineRow
-          ? `<span class="badge badge-primary" title="Yours. You claimed them, or a lead assigned them to you.">Yours</span>`
-          : `<span class="badge badge-gold" title="Nobody is holding them yet. Press Claim on the Nutrition page.">Unclaimed</span>`;
+        const tag = training || p.continuity_id === me.id
+          ? '<span class="badge badge-primary">Assigned</span>'
+          : '<span class="badge badge-gold">Unclaimed</span>';
         return `<div class="due-row clickable" data-pid="${p.patient_id}" style="cursor:pointer"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span><div class="grow" style="flex:1;min-width:0"><div class="due-name">${sanitize(name)}</div><div class="due-meta">${meta}</div></div>${tag}</div>`;
-      }).join('')}</div>${training && shown.length < rows.length
-        ? `<div class="due-meta" style="padding:10px 14px;color:var(--ink-3)">+ ${rows.length - shown.length} more assigned families in your worklist.</div>`
-        : unclaimed.length && shown.length < (mine.length + unclaimed.length)
-        ? `<div class="due-meta" style="padding:10px 14px;color:var(--ink-3)">+ ${mine.length + unclaimed.length - shown.length} more in the nutrition pool: open the full worklist to claim them.</div>`
-        : ''}`;
+      }).join('');
+      el.innerHTML = `
+        <section aria-label="Assigned nutrition families" data-assigned-families>
+          <div class="card-head"><h4>Assigned to you</h4><span class="badge badge-primary">${assigned.length}</span></div>
+          ${assignedShown.length ? `<div class="due-list">${renderRows(assignedShown)}</div>`
+            : `<div class="empty" style="padding:var(--s5)"><h4>No nutrition families assigned yet</h4><p>${training ? 'Your lead can assign families for you to support during training.' : 'The shared pool below is not assigned to you.'}</p></div>`}
+          ${assigned.length > assignedShown.length ? `<p class="due-meta wraps" style="padding:10px var(--s5)">+ ${assigned.length - assignedShown.length} more assigned families in your full worklist.</p>` : ''}
+        </section>
+        ${!training ? `<section aria-label="Unclaimed nutrition families" data-unclaimed-families>
+          <div class="card-head"><h4>Unclaimed - shared pool</h4><span class="badge badge-gold">${unclaimed.length}</span></div>
+          <p class="due-meta wraps" style="padding:0 var(--s5) 10px">Available to claim; not assigned to you.</p>
+          ${unclaimedShown.length ? `<div class="due-list">${renderRows(unclaimedShown)}</div>`
+            : '<p class="due-meta wraps" style="padding:10px var(--s5)">No unclaimed families in the shared pool.</p>'}
+          ${unclaimed.length > unclaimedShown.length ? `<p class="due-meta wraps" style="padding:10px var(--s5)">+ ${unclaimed.length - unclaimedShown.length} more unclaimed families in the full worklist.</p>` : ''}
+        </section>` : ''}`;
       el.querySelectorAll('[data-pid]').forEach(r => r.addEventListener('click', () => navigate('patients/' + r.dataset.pid)));
     } else {
       const { data, error } = await sb.from('care_sessions')
