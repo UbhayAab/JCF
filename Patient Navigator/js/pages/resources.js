@@ -68,6 +68,7 @@ import { showModal, closeModal } from '../components/modal.js';
 import { icon } from '../components/icons.js';
 import { RESOURCE_CATEGORIES } from '../utils/catalog.js';
 import { openResourcePublication73 } from '../components/resourcePublication73.js';
+import { openResourceImport73 } from '../components/resourceImport73.js';
 import { reasonLabels } from '../utils/matchReasons.js';
 import { navigate } from '../router.js';
 import { exportToCSV } from '../utils/formatters.js';
@@ -229,10 +230,12 @@ export async function renderResources(container, params = {}) {
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm" id="rs-recheck" hidden>${icon('alertTriangle')}<span>Needs re-check</span></button>
         ${isManagerOrAdmin() ? `<button class="btn btn-primary btn-sm" id="rs-add">${icon('plus')}Add resource</button>` : ''}
+        ${isManagerOrAdmin() ? '<button class="btn btn-secondary btn-sm" id="rs-import73">Import verified resources</button>' : ''}
       </div>
     </div>
     <div id="rs-body"><div class="card" style="padding:28px;text-align:center;color:var(--ink-3)">Opening the shelf…</div></div>`;
   container.querySelector('#rs-add')?.addEventListener('click', () => openResourceModal(null));
+  container.querySelector('#rs-import73')?.addEventListener('click', () => openResourceImport73({ onChanged: () => load() }));
   container.querySelector('#rs-recheck')?.addEventListener('click', () => {
     navigate(S.view === 'recheck' ? 'resources' : 'resources/recheck');
   });
