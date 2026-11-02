@@ -1,5 +1,6 @@
 // Nutrition requests are separate from ownership and can be raised again in care.
 import { getSupabase } from '../supabase.js';
+import { mountMedicalRequest130 } from './medicalRequest130.js';
 import { getCurrentUser, isImpersonating } from '../auth.js';
 import { showModal } from './modal.js';
 import { showToast } from './toast.js';
@@ -82,6 +83,9 @@ export async function mountNutritionRequest(mount, patient, { onSaved } = {}) {
     if (data !== true) return;
     mount.innerHTML = `<div class="card nw-request-prompt"><div><h3>Nutrition support</h3><p class="nw-muted">Raise a new need, even if a nutritionist is already assigned. Follow assignment, calls and the plan in Nutrition tracker.</p></div><button type="button" class="btn btn-primary" data-raise-nutrition>Raise nutrition request</button><a class="btn btn-secondary" href="#nutrition-tracker">Open tracker</a></div>`;
     mount.querySelector('[data-raise-nutrition]').addEventListener('click', () => openNutritionRequest({ patient, onSaved }));
+    const medicalMount = document.createElement('div');
+    mount.appendChild(medicalMount);
+    void mountMedicalRequest130(medicalMount, patient);
   } catch (error) {
     if (!mount.isConnected || getCurrentUser()?.id !== userId) return;
     mount.innerHTML = '<p class="nw-error" role="status"></p>';
