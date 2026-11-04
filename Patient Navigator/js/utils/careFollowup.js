@@ -1,4 +1,5 @@
 // Care-call calendar policy. Appointment/review dates do not pass through here.
+import { processing153, retry153 } from './recordingProcessing153.js';
 export const CARE_CALL_PROVENANCE = 'care-call-v1';
 export const CARE_CASE_FIELDS = 'is_active,do_not_call,patient_status,is_blacklisted,date_of_death,disinterest_level,engagement_hold_until';
 
@@ -63,6 +64,8 @@ export function recordingResultForForm(res, durationS = null) {
     suggestions: auto_apply ? res.suggestions || {} : {}, call_day: res.call_day, dropped: res.dropped || 0,
     quality: res.quality, language: res.language, durationS, auto_apply,
     transcription_complete: res.transcription_complete === true,
+    rejected_proposals153: Array.isArray(res.rejected_proposals153) ? res.rejected_proposals153 : [],
+    processing153: processing153(res.processing153), retry153: retry153(res.retry153),
     review: {required:!auto_apply, reasons:res.review?.reasons||[]},
     draft_summary: res.draft_summary || res.summary || '' };
 }
@@ -81,11 +84,11 @@ function savedQuoteSources(turns, evidence) {
     .filter(({ turn }) => ` ${savedQuotePlain(turn.text)} `.includes(` ${quote} `));
 }
 // These are the existing bounded note checks, not translation or truth proof.
-const savedNorm = value => String(value ?? '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-const SAVED_RESOLVED = /\b(resolved|no longer (?:need|needs|needed|require|requires|have|has|having)|(?:do|does) not (?:need|require)|(?:don t|doesn t) (?:need|require)|no .{0,22}(?:anymore|any more)|ab .{0,18}(?:nahi|nahin|nhi)|ab (?:theek|thik))\b/i;
+const savedNorm = value => String(value ?? '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim();
+const SAVED_RESOLVED = /(?:अब.{0,24}(?:नहीं|नही)|(?:ठीक|सुलझ|समाप्त|खत्म) हो (?:गया|गई|गए))|\b(resolved|no longer (?:need|needs|needed|require|requires|have|has|having)|(?:do|does) not (?:need|require)|(?:don t|doesn t) (?:need|require)|no .{0,22}(?:anymore|any more)|ab .{0,18}(?:nahi|nahin|nhi)|ab (?:theek|thik))\b/i;
 const SAVED_CURRENT = /\b(still|currently|ongoing|active|continues?|persists?|needs?|requires?|has|having|suffers?)\b/i;
 const SAVED_HISTORICAL = /\b(previously|earlier|used to|last week|no longer|resolved|does not|do not|not needed|no .{0,18}(?:anymore|any more))\b/i;
-const SAVED_QUESTION = /\?|^(?:(?:is|are|was|were|do|does|did|can|could|would|will|have|has)\s+(?:you|we|they|it|there|he|she|the|your|our|any|a|i)\b|kya\b)/i;
+const SAVED_QUESTION = /^(?:क्या|कब|क्यों|कैसे|कहाँ|कहां)(?:\s|[?।])|\?|^(?:(?:is|are|was|were|do|does|did|can|could|would|will|have|has)\s+(?:you|we|they|it|there|he|she|the|your|our|any|a|i)\b|kya\b)/i;
 const SAVED_STOP = new Set('the a an and or of for from with without this that it is are was were be been to in on at now today still no not any more anymore longer problem needs need have has had do does patient family caller please'.split(' '));
 const savedTopics = value => new Set(savedNorm(value).split(' ').filter(word => word.length >= 4 && !SAVED_STOP.has(word) && !SAVED_RESOLVED.test(word)));
 const SAVED_CLOCK = /\b(?:after|before|at|around)\s+\d{1,2}(?::\d{2})?(?:\s*(?:a\.?m\.?|p\.?m\.?|in the (?:morning|afternoon|evening|night)))\b|\b\d{1,2}:\d{2}\b/i;
@@ -114,6 +117,7 @@ export function recordingResultForRead(row) {
   const turns = Array.isArray(row?.transcript) ? row.transcript.slice(0, 3000)
     .filter(turn => turn && typeof turn.text === 'string' && typeof turn.speaker === 'string') : [];
   const reasons = [];
+  if (row?.transcription_complete === true && stored.processing153?.audio_coverage_confirmed !== true) reasons.push('This older draft has no aligned-audio completeness proof. Check the retained recording before using it.');
   if (row?.transcription_complete !== true) reasons.push('The service has not confirmed a complete written transcript and note.');
   if (row?.audio_quality !== 'clear') reasons.push('Some speech is unclear or no conversation was heard.');
   if (stored.note_review?.required === true) reasons.push('Some proposed facts need checking against the transcript or recording.');
@@ -159,5 +163,7 @@ export function recordingResultForRead(row) {
     reasons.push('More safety proposals exist than fit in this view. Check the complete stored note and source.');
   }
   return { note, points, draft_summary: typeof row?.summary === 'string' ? row.summary : '', show_fallback: !hadSections,
+    rejected_proposals153: Array.isArray(row.dropped) ? row.dropped.filter(d => /^note[.]/.test(String(d?.field)) && typeof d?.value === 'string').slice(0,100) : [],
+    processing153: processing153(stored.processing153),
     review: { required: reasons.length > 0, reasons: [...new Set(reasons)].slice(0, 12) }, auto_apply: false, suggestions: {} };
 }
