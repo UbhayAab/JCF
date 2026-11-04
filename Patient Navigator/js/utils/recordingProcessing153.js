@@ -7,7 +7,7 @@ export function processing153(value) {
   if (!finish(value.transcript_finish) || !finish(value.note_finish)
       || value.transcript_complete && (value.transcript_finish !== 'STOP' || value.audio_coverage_confirmed !== true)
       || value.notes_complete && (!value.transcript_complete || value.note_finish !== 'STOP' || !value.coverage_confirmed)) return null;
-  return { transcript_complete: value.transcript_complete, notes_complete: value.notes_complete };
+  return { transcript_complete: value.transcript_complete, notes_complete: value.notes_complete && value.review_checked === true };
 }
 export function retry153(value) {
   return value?.allowed === true && typeof value.version === 'string' && value.version.length <= 80

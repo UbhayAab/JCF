@@ -164,6 +164,6 @@ export function recordingResultForRead(row) {
   }
   return { note, points, draft_summary: typeof row?.summary === 'string' ? row.summary : '', show_fallback: !hadSections,
     rejected_proposals153: Array.isArray(row.dropped) ? row.dropped.filter(d => /^note[.]/.test(String(d?.field)) && typeof d?.value === 'string').slice(0,100) : [],
-    processing153: processing153(stored.processing153),
+    processing153: processing153(stored.processing153) ? { ...processing153(stored.processing153), notes_complete: reasons.length === 0 && processing153(stored.processing153).notes_complete } : null,
     review: { required: reasons.length > 0, reasons: [...new Set(reasons)].slice(0, 12) }, auto_apply: false, suggestions: {} };
 }
