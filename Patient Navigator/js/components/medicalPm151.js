@@ -86,7 +86,7 @@ export function mountMedicalPm151(host,{isCurrent=()=>true,onAssigned=()=>{},onO
    message('');
   }catch(e){if(current()&&stamp===generation&&e.message!=='Stale PM response ignored')unavailable(e.message);}
  }
- const recheck=()=>{if(current()&&!busy&&!document.hidden)void refresh();};
+ const recheck=()=>{if(current()&&!busy&&!document.hidden&&!host.contains(document.activeElement))void refresh();};
  const timer=setInterval(recheck,30000);window.addEventListener('focus',recheck);document.addEventListener('visibilitychange',recheck);
  const dispose=()=>{stopped=true;generation++;state=null;rows=[];members=[];clearInterval(timer);window.removeEventListener('focus',recheck);document.removeEventListener('visibilitychange',recheck);host.replaceChildren();};
  if(current())void refresh();
