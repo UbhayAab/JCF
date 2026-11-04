@@ -301,7 +301,7 @@ export async function renderMedicalNavigation(container) {
   const actor = getCurrentUser()?.id;
   const initialRole = getCurrentProfile()?.role;
   let disposed = false, epoch = 0, queueOffset = 0, selected = null, context = null;
-  let observer = null, subscription = null, refreshTimer = null;
+  let observer = null, subscription = null, refreshTimer = null, pmPanel151 = null;
   let busy = false, submitting = false, submission = null, historyEpoch = 0;
   let historyRows = [], historyOffset = 0, historyKind = 'medical', assignees = [];
   const urls = new Set();
@@ -319,7 +319,7 @@ export async function renderMedicalNavigation(container) {
   function dispose(text) {
     if(disposed) return;
     clearContext(); disposed=true; clearFiles(); for(const timer of timers) clearTimeout(timer); timers.clear();
-    clearInterval(refreshTimer); window.removeEventListener('hashchange',onRoute); window.removeEventListener('focus',onFocus);
+    clearInterval(refreshTimer); pmPanel151?.dispose(); pmPanel151 = null; window.removeEventListener('hashchange',onRoute); window.removeEventListener('focus',onFocus);
     document.removeEventListener('visibilitychange',onVisibility); observer?.disconnect(); subscription?.unsubscribe();
     container.replaceChildren(); if(text) container.textContent=text;
     if(releaseView===dispose) releaseView=null;
@@ -351,7 +351,7 @@ export async function renderMedicalNavigation(container) {
       '<h1>Medical navigation</h1><p>'+(initialRole==='medical_navigator'?'Only patients currently assigned to you appear here.':'Raise a request for a patient you support. Managers assign requests to medical navigators.')+'</p>'+
       '<p role="status" aria-live="polite" data-message></p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary" data-refresh>Refresh work</button></div>'+
       (initialRole==='medical_navigator'?'':'<form data-request-form class="card" style="padding:16px;margin-top:16px"><h2>Request medical support</h2><label>Find your patient<input class="form-control" name="search" maxlength="120" autocomplete="off"></label><button class="btn btn-secondary" type="button" data-search>Find patients</button><div data-patients></div><button type="button" data-more-patients hidden>More patients</button><label>Reason<textarea class="form-control" name="reason" maxlength="4000" required></textarea></label><button class="btn btn-primary" type="submit">Raise request</button></form>')+
-      '<div data-queue style="margin-top:16px"></div><div style="display:flex;gap:8px"><button class="btn btn-secondary" data-prev hidden>Previous</button><button class="btn btn-secondary" data-next hidden>More requests</button></div><div data-context></div></section>';
+      '<div data-medical-pm151></div><div data-queue style="margin-top:16px"></div><div style="display:flex;gap:8px"><button class="btn btn-secondary" data-prev hidden>Previous</button><button class="btn btn-secondary" data-next hidden>More requests</button></div><div data-context></div></section>';
     container.querySelector('[data-refresh]').onclick=e=>act(e.target,()=>loadQueue(true));
     container.querySelector('[data-prev]').onclick=e=>act(e.target,async()=>{queueOffset=Math.max(0,queueOffset-50);await loadQueue();});
     container.querySelector('[data-next]').onclick=e=>act(e.target,async()=>{queueOffset+=50;await loadQueue();});
@@ -486,6 +486,13 @@ export async function renderMedicalNavigation(container) {
   releaseView=dispose;
   if(!actor || !ROLES.includes(initialRole) || !current()){dispose('Use your own active authorised account to open Medical navigation.');return;}
   queueShell();
+  // Optional new panel cannot prevent the existing clinical worklist loading.
+  if(['admin','manager','medical_navigator'].includes(initialRole)) {
+    import('../components/medicalPm151.js').then(({mountMedicalPm151})=>{
+      if(current())pmPanel151=mountMedicalPm151(container.querySelector('[data-medical-pm151]'),
+        {isCurrent:current,onAssigned:()=>loadQueue(true),onOpen:id=>openRequest(id)});
+    }).catch(()=>{if(current())container.querySelector('[data-medical-pm151]').textContent='PM controls could not load. Refresh to retry. Your existing clinical worklist remains below.';});
+  }
   try{
     if(['admin','manager'].includes(initialRole))assignees=await rpc('medical_navigation_assignees');
     await loadQueue();
