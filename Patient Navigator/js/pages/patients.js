@@ -28,6 +28,7 @@ import { sanitize } from '../utils/validators.js';
 import { REFERRAL_COLUMNS, referralFieldsHTML, consentHTML, outcomeBadge } from '../utils/referralForm.js';
 import { navigate, goBack } from '../router.js';
 import { icon } from '../components/icons.js';
+import {openPatientMerge154,renderMergedHistory154,openMergeAudit154} from '../components/patientMerge154.js';
 import {
   PATIENT_STATUSES, statusBadge, GI_SUBTYPES, giLabel, TRAJECTORIES, STOMA_TYPES,
   HEALTH_LITERACY, ECOG, SCHOOL_RETENTION, LEVER_GROUPS, OUTCOME_FLAGS,
@@ -63,7 +64,7 @@ async function renderPatientList(container) {
         <p class="header-subtitle" style="margin:4px 0 0">${onProbation ? 'Only the families assigned to you' : 'Everyone in the care program'}</p>
       </div>
       <div class="flex gap-2" style="display:flex;gap:9px">
-        ${canExport ? `<button class="btn btn-secondary" id="export-patients-btn">${icon('download')}Export CSV</button>` : ''}
+        ${canExport ? `<button class="btn btn-secondary" id="merge-history-btn">Merge history</button><button class="btn btn-secondary" id="export-patients-btn">${icon('download')}Export CSV</button>` : ''}
         ${!onProbation ? `<button class="btn btn-primary" id="add-patient-btn">${icon('plus')}Register patient</button>` : ''}
       </div>
     </div>
@@ -77,7 +78,7 @@ async function renderPatientList(container) {
       <div class="table-toolbar">
         <div class="table-search">
           ${icon('search')}
-          <input class="form-input" id="patient-search" placeholder="Search name, ID, city, cancer type…" />
+          <input class="form-input" id="patient-search" placeholder="Search name, linked phone, ID, city, cancer type…" />
         </div>
         <div class="table-filters">
           <select class="form-select" id="filter-sort" style="width:auto;min-width:150px"
@@ -107,6 +108,7 @@ async function renderPatientList(container) {
     sortMode = e.target.value; currentPage = 1; loadPatients();
   });
   container.querySelector('#add-patient-btn')?.addEventListener('click', () => showPatientForm(null, loadPatients));
+  container.querySelector('#merge-history-btn')?.addEventListener('click', () => openMergeAudit154());
   container.querySelectorAll('#status-chips .fchip').forEach(chip => {
     chip.addEventListener('click', () => {
       statusFilter = chip.dataset.status;
@@ -281,8 +283,12 @@ async function loadPatients() {
     if (giFilter === '__none') query = query.is('gi_subtype', null);
     else if (giFilter) query = query.eq('gi_subtype', giFilter);
     if (search) {
-      const v = orIlikeValue(search);
-      query = query.or(`full_name.ilike.${v},patient_code.ilike.${v},cancer_type.ilike.${v},city.ilike.${v},state.ilike.${v}`);
+      const identity=await sb.rpc('lookup_patient_identity154',{p_query:search});
+      if(seq!==searchSeq)return;
+      if(identity.error)throw identity.error;
+      if(identity.data?.length)query=query.in('id',identity.data.map(p=>p.id));
+      else if(/^[+0-9 ()-]+$/.test(search)&&search.replace(/\D/g,'').length>=7)query=query.in('id',[]);
+      else{const v=orIlikeValue(search);query=query.or(`full_name.ilike.${v},patient_code.ilike.${v},cancer_type.ilike.${v},city.ilike.${v},state.ilike.${v}`);}
     }
 
     const { data, count, error } = await query;
@@ -597,7 +603,7 @@ function showPatientForm(existing = null, onSaved = null) {
 // ============================================================
 // DETAIL: WHO · ACTION · IMPACT
 // ============================================================
-const TABS = ['overview', 'support', 'wellbeing', 'calls', 'documents', 'notes', 'hopebot'];
+const TABS = ['overview', 'support', 'wellbeing', 'calls', 'documents', 'notes', 'hopebot','merged-history'];
 let activeTab = 'overview';
 
 // Which tab the URL is asking for. The tab lives in the hash as a query
@@ -630,6 +636,15 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
   const sb = getSupabase();
 
   try {
+    const identity = await sb.rpc('patient_merge_status154', {p_patient:patientId});
+    if (!stillHere()) return;
+    if (identity.error) throw identity.error;
+    if (identity.data?.dormant) {
+      const info=identity.data;
+      container.innerHTML=`<section class="card"><h1>Dormant (Merged)</h1><p>${sanitize(info.original_code)} was merged into ${sanitize(info.main.code)} on ${sanitize(formatDate(info.merged_at))} by ${sanitize(info.merged_by||'Former team member')}.</p><p>This original ID and phone remain in the history. Make changes and log calls from Main.</p><button class="btn btn-primary" id="open-merge-main">Open Main profile</button></section>`;
+      container.querySelector('#open-merge-main').addEventListener('click',()=>navigate('patients/'+info.main.id));
+      return;
+    }
     const [pRes, cRes, sRes, aRes, hRes] = await Promise.all([
       sb.from('patients').select('*, mentor:profiles!patients_assigned_to_fkey(full_name), nutritionist:profiles!patients_nutrition_owner_id_fkey(full_name)').eq('id', patientId).single(),
       // The record shows EVERY call on this patient, not just the ones this
@@ -771,6 +786,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
                only (the database refuses anyone else, sql/155); the record of
                who erased what keeps no content. js/components/fileErasure.js -->
           ${getUserRole() === 'admin' ? `<button class="btn btn-secondary pa-more" id="erase-files-btn" style="color:var(--danger)" title="Delete every stored page, thumbnail, WhatsApp file and call recording of this family, for good">${icon('trash')}Erase files</button>` : ''}
+          ${isManagerOrAdmin() ? '<button class="btn btn-secondary pa-more" id="merge-profiles-btn">Merge profiles</button>' : ''}
           <button class="btn btn-secondary pa-more" id="assess-btn">${icon('activity')}Record wellbeing</button>
           ${!deceased ? `<button class="btn btn-secondary pa-more" id="org-report-btn" title="Record what happened when this family contacted an NGO or organisation">${icon('message')}Report an NGO</button>` : ''}
           ${!deceased ? `<button class="btn btn-gold pa-main" id="wa-share-btn">${icon('phone')}WhatsApp</button>` : ''}
@@ -800,6 +816,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
              the calling portal and the morning brief are where it is read. -->
         <button class="dtab ${activeTab === 'notes' ? 'active' : ''}" data-tab="notes">${icon('message')}Notes <span class="cnt">${noteCount}</span></button>
         <button class="dtab ${activeTab === 'hopebot' ? 'active' : ''}" data-tab="hopebot">${icon('message')}HopeBot summary</button>
+        <button class="dtab ${activeTab === 'merged-history' ? 'active' : ''}" data-tab="merged-history">Combined history</button>
       </div>
 
       <div id="tab-content"></div>
@@ -817,6 +834,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       if (label) label.textContent = open ? 'Fewer actions' : 'More actions';
     });
     container.querySelector('#edit-patient-btn').addEventListener('click', () => showPatientForm(patient, reload));
+    container.querySelector('#merge-profiles-btn')?.addEventListener('click',()=>openPatientMerge154(patient));
     const activityMount = container.querySelector('#hb-family-card');
     import('../components/hopebotActivity.js')
       .then((m) => { if (stillHere()) m.mountHopebotActivity(activityMount, patientId, { isCurrent: stillHere }); })
@@ -937,6 +955,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       else if (activeTab === 'wellbeing') renderWellbeingTab(tabContent, patient, services, assessments, sb, reload);
       else if (activeTab === 'documents') renderDocumentsTab(tabContent, patient, sb, reload);
       else if (activeTab === 'notes') renderNotesTab(tabContent, patient);
+      else if (activeTab === 'merged-history') renderMergedHistory154(tabContent,patientId,{isCurrent:()=>stillHere()&&activeTab==='merged-history'});
       else if (activeTab === 'hopebot') {
         tabContent.innerHTML = '<div id="hopebot-summary-tab"></div>';
         const slot = tabContent.querySelector('#hopebot-summary-tab');
