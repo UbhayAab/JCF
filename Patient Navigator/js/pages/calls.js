@@ -21,6 +21,7 @@ import { showModal, closeModal } from '../components/modal.js';
 import { openCallForm } from '../components/callForm.js';
 import { formatDate, formatDateTime, capitalize, getDialStatusBadge, exportToCSV, renderSkeleton } from '../utils/formatters.js';
 import { sanitize } from '../utils/validators.js';
+import { callPatientIdentity150 } from '../utils/callPatientIdentity150.js';
 import { navigate } from '../router.js';
 import { icon } from '../components/icons.js';
 import { CONDITIONS, DIAL_STATUSES, RECEPTIVENESS } from '../utils/catalog.js';
@@ -131,13 +132,13 @@ export async function renderCalls(container) {
     showToast('Preparing CSV export…', 'info');
     try {
       const { data, error } = await sb.from('call_logs')
-        .select('*, patients(patient_code, full_name), profiles:caller_id(full_name)')
+        .select('*, patients(id, patient_code, full_name), profiles:caller_id(full_name)')
         .order('call_date', { ascending: false }).limit(5000);
       if (error) throw error;
       exportToCSV(data, 'call_logs_export', [
         { label: 'Date', key: 'call_date' },
-        { label: 'Patient ID', accessor: r => r.patients?.patient_code || '' },
-        { label: 'Patient', accessor: r => r.patients?.full_name || '' },
+        { label: 'Patient ID', accessor: r => callPatientIdentity150(r).code },
+        { label: 'Patient', accessor: r => callPatientIdentity150(r).name },
         { label: 'Called by', accessor: r => r.profiles?.full_name || r.contacted_by_name || '' },
         { label: 'Spoke with family', accessor: r => spokeWith(r) },
         { label: 'Outcome', key: 'dial_status' },
@@ -248,12 +249,14 @@ function callCards(rows) {
       const time = new Date(c.call_date).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
       const dur = c.call_duration_mins ? ` · ${c.call_duration_mins} min` : '';
       const spoke = spokeWith(c);
+      const identity = callPatientIdentity150(c);
       return `
       <article class="cc" data-call="${c.id}" tabindex="0">
         <span class="cc-ico tone-${tone}">${icon(ico)}</span>
         <div class="cc-main">
-          <div class="cc-top"><span class="cc-name">${sanitize(c.patients?.full_name || c.patients?.patient_code || 'Patient')}</span><span class="cc-when">${time}${dur}</span></div>
-          <div class="cc-sub">${sanitize(c.patients?.patient_code || '')} · by ${sanitize(loggedBy(c))}${spoke ? ` · spoke with ${sanitize(spoke)}` : ''}</div>
+          <div class="cc-top"><span class="cc-name">${sanitize(identity.name)}</span><span class="cc-when">${time}${dur}</span></div>
+          <div class="cc-sub">${identity.code ? sanitize(identity.code) + ' · ' : ''}by ${sanitize(loggedBy(c))}${spoke ? ` · spoke with ${sanitize(spoke)}` : ''}</div>
+          ${!identity.hasCurrentRecord ? `<div class="cc-sub">${sanitize(identity.detail)}</div>` : ''}
           <div class="cc-chips">${getDialStatusBadge(c.dial_status)}${cond ? `<span class="badge badge-${cond.tone === 'ok' ? 'ok' : cond.tone === 'danger' ? 'danger' : cond.tone === 'warn' ? 'warn' : 'neutral'}">${cond.label}</span>` : ''}</div>
           ${c.requirements_noted ? `<div class="cc-note">Asked for: ${sanitize(c.requirements_noted)}</div>` : ''}
           ${c.follow_up_date ? `<div class="cc-next">Next check-in ${new Date(c.follow_up_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</div>` : ''}
@@ -323,10 +326,11 @@ async function loadCalls() {
             const cond = CONDITIONS.find(x => x.key === c.patient_condition);
             const caller = loggedBy(c);
             const spoke = spokeWith(c);
+            const identity = callPatientIdentity150(c);
             return `
-            <tr class="row-link" data-call='${c.id}' data-patient="${c.patients?.id || ''}" tabindex="0">
+            <tr class="row-link" data-call='${c.id}' data-patient="${identity.id || ''}" tabindex="0">
               <td>${formatDate(c.call_date)}</td>
-              <td><strong style="color:var(--primary-ink)">${c.patients?.patient_code || 'N/A'}</strong><br><span style="font-weight:600">${sanitize(c.patients?.full_name || '')}</span></td>
+              <td><strong style="color:var(--primary-ink)">${sanitize(identity.code || 'Call saved')}</strong><br><span style="font-weight:600">${sanitize(identity.name)}</span>${!identity.hasCurrentRecord ? `<div class="small text-muted">${sanitize(identity.detail)}</div>` : ''}</td>
               <td>${sanitize(caller)}${spoke ? `<br><span style="font-size:12px;color:var(--ink-3)">spoke: ${sanitize(spoke)}</span>` : ''}</td>
               <td>${getDialStatusBadge(c.dial_status)}</td>
               <td>${cond ? `<span class="badge badge-${cond.tone === 'ok' ? 'ok' : cond.tone === 'danger' ? 'danger' : cond.tone === 'warn' ? 'warn' : 'neutral'}">${cond.label}</span>` : '<span style="color:var(--ink-4)">N/A</span>'}</td>
@@ -369,6 +373,7 @@ async function loadCalls() {
 
 function showCallDetail(c) {
   if (!c) return;
+  const identity = callPatientIdentity150(c);
   const account = callAccount(), route = window.location.hash;
   let feedback = null, modal;
   const current = () => el.isConnected && modal?.isCurrentModal?.() && account === callAccount() && route === window.location.hash;
@@ -378,7 +383,7 @@ function showCallDetail(c) {
   const el = document.createElement('div');
   el.innerHTML = `
     <div class="kv" style="margin-bottom:var(--s4)">
-      <div><div class="k">Patient</div><div class="v">${sanitize(c.patients?.full_name || 'N/A')}</div></div>
+      <div><div class="k">Patient</div><div class="v">${sanitize(identity.name)}</div></div>
       <div><div class="k">Logged by</div><div class="v">${sanitize(loggedBy(c))}</div></div>
       ${spokeWith(c) ? `<div><div class="k">Spoke with the family</div><div class="v">${sanitize(spokeWith(c))}</div></div>` : ''}
       <div><div class="k">When</div><div class="v">${formatDateTime(c.call_date)}</div></div>
@@ -397,14 +402,15 @@ function showCallDetail(c) {
     ${c.feedback_patient ? `<p style="font:var(--t-sm);font-style:italic;color:var(--ink-2);margin:0 0 6px">“${sanitize(c.feedback_patient)}” · patient</p>` : ''}
     ${c.feedback_caregiver ? `<p style="font:var(--t-sm);font-style:italic;color:var(--ink-2);margin:0 0 6px">“${sanitize(c.feedback_caregiver)}” · caregiver</p>` : ''}
     ${c.followup_strategy_notes ? `<div class="strategy" style="margin-top:var(--s3)"><div class="strategy-title" style="margin-bottom:4px">Note for the next caller</div><div class="strategy-body">${sanitize(c.followup_strategy_notes)}</div></div>` : ''}
+    ${!identity.hasCurrentRecord ? `<p class="text-muted">${sanitize(identity.detail)}</p>` : ''}
     <div data-call-hopebot-feedback style="margin-top:16px;min-width:0"></div>
     <div class="form-actions">
       ${!isImpersonating() && canCorrectCall(c) ? `<button class="btn btn-ghost" id="cd-edit" style="margin-right:auto">${icon('edit')}Edit call</button>` : ''}
       <button class="btn btn-secondary" id="cd-close">Close</button>
-      ${c.patients?.id ? `<button class="btn btn-primary" id="cd-open-patient">${icon('user')}Open patient</button>` : ''}
+      ${identity.id ? `<button class="btn btn-primary" id="cd-open-patient">${icon('user')}Open patient</button>` : ''}
     </div>
   `;
-  modal = showModal({ title: `Call · ${sanitize(c.patients?.full_name || '')}`, content: el, size: 'lg', onClose: disposeFeedback });
+  modal = showModal({ title: `Call · ${sanitize(identity.name)}`, content: el, size: 'lg', onClose: disposeFeedback });
   if (callUuid(c.id)) import('../components/hopebotFeedback.js').then(module => {
     if (!current()) return;
     feedback = module.mountHopebotFeedback(el.querySelector('[data-call-hopebot-feedback]'), c.id,
@@ -416,7 +422,7 @@ function showCallDetail(c) {
   recording.decorateRecordings(el).catch((e) => console.warn('[calls] recording unavailable:', e.message));
   el.querySelector('#cd-close').addEventListener('click', () => { if (current()) { disposeFeedback(); modal.closeOwnedModal(); } });
   el.querySelector('#cd-edit')?.addEventListener('click', () => { if (current() && !isImpersonating()) { disposeFeedback(); openEditCall(c); } });
-  el.querySelector('#cd-open-patient')?.addEventListener('click', () => { if (current() && callUuid(c.patients.id)) { disposeFeedback(); modal.closeOwnedModal(); navigate('patients/' + c.patients.id); } });
+  el.querySelector('#cd-open-patient')?.addEventListener('click', () => { if (current() && callUuid(identity.id)) { disposeFeedback(); modal.closeOwnedModal(); navigate('patients/' + identity.id); } });
 }
 
 // ---- Who may correct a logged call ----
@@ -459,7 +465,7 @@ export async function openEditCall(c) {
   const val = (v) => sanitize(v == null ? '' : String(v));
   el.innerHTML = `
     <p style="font:var(--t-sm);color:var(--ink-2);margin:0 0 var(--s4)">
-      Correcting <strong>${sanitize(c.patients?.full_name || 'this call')}</strong> ·
+      Correcting <strong>${sanitize(callPatientIdentity150(c).name)}</strong> ·
       logged ${formatDateTime(c.call_date)} by ${sanitize(loggedBy(c))}.
       Leave anything you don't know exactly as it is.
     </p>

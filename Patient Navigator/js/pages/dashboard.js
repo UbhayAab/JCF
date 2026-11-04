@@ -18,6 +18,7 @@ import { icon } from '../components/icons.js';
 import { avatarColor, initials } from '../utils/avatar.js';
 // Family names and places come from outside (referral form, WhatsApp, uploads).
 import { sanitize } from '../utils/validators.js';
+import { callPatientIdentity150 } from '../utils/callPatientIdentity150.js';
 import { loadSaturdayCard, loadResourceReplies, loadDocsWaitingCard } from '../components/dashCards.js';
 import { renderAdminDashboard } from './dashboardAdmin.js';
 import { mountCareNotifications } from '../components/careNotifications.js';
@@ -398,23 +399,32 @@ async function loadStats() {
 }
 
 async function loadRecentCalls() {
+  const scope = captureSpecialistScope(), route = window.location.hash;
+  const el = document.getElementById('recent-calls');
+  if (!scope || !el) return;
+  const current = () => specialistScopeCurrent(scope, el) && document.getElementById('recent-calls') === el && window.location.hash === route;
   const sb = getSupabase();
   try {
     // Recent conversations are scoped to the effective user (caller / "Open as"); managers see org-wide.
-    let q = sb.from('call_logs').select('*, patients(patient_code, full_name, cancer_type)').order('call_date', { ascending: false }).limit(6);
+    let q = sb.from('call_logs').select('*, patients(id, patient_code, full_name, cancer_type)').order('call_date', { ascending: false }).limit(6);
     if (!isManagerOrAdmin()) { const me = getCurrentProfile(); if (me?.id) q = q.eq('caller_id', me.id); }
     const { data, error } = await q;
+    if (!current()) return;
     if (error) throw error;
-    const el = document.getElementById('recent-calls'); if (!el) return;
+    if (!Array.isArray(data)) throw new Error('The saved call response was incomplete.');
     if (!data || data.length === 0) { el.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('phoneCall')}</div><h4>No conversations yet</h4><p>Once you start logging calls, they'll appear here.</p></div>`; return; }
     const condBadge = (k) => { const m = { improving: ['ok', 'Improving'], stable: ['info', 'Stable'], declining: ['warn', 'Declining'], critical: ['danger', 'Critical'] }[k]; return m ? `<span class="badge badge-${m[0]}">${m[1]}</span>` : '<span style="color:var(--ink-3)">N/A</span>'; };
     el.innerHTML = `<div class="table-wrap"><table class="data"><thead><tr><th>Patient</th><th>Outcome</th><th class="col-hide-sm">Duration</th><th class="col-hide-sm">Condition</th><th>When</th></tr></thead><tbody>
-      ${data.map(c => { const name = c.patients?.full_name || c.patients?.patient_code || 'N/A'; const dur = c.call_duration_mins ? `${c.call_duration_mins} min` : '<span style="color:var(--ink-3)">N/A</span>';
-        return `<tr class="clickable" data-id="${c.patient_id || ''}"><td><div style="display:flex;align-items:center;gap:8px"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span>${sanitize(name)}</div></td>
+      ${data.map(c => { const identity = callPatientIdentity150(c); const name = identity.name; const dur = c.call_duration_mins ? `${c.call_duration_mins} min` : '<span style="color:var(--ink-3)">N/A</span>';
+        return `<tr class="${identity.id ? 'clickable' : ''}" data-id="${identity.id || ''}" title="${sanitize(identity.detail)}"><td><div style="display:flex;align-items:center;gap:8px"><span class="avatar avatar-sm" style="background:${avatarColor(name)}">${sanitize(initials(name))}</span>${sanitize(name)}</div></td>
           <td>${outcomeBadge(c.dial_status)}</td><td class="cell-mono col-hide-sm">${dur}</td><td class="col-hide-sm">${condBadge(c.patient_condition)}</td><td style="color:var(--ink-2)">${formatRelativeTime(c.call_date)}</td></tr>`; }).join('')}
       </tbody></table></div>`;
-    el.querySelectorAll('tr.clickable').forEach(tr => tr.addEventListener('click', () => { if (tr.dataset.id) navigate(`patients/${tr.dataset.id}`); }));
-  } catch (err) { console.error('Recent calls error:', err); }
+    el.querySelectorAll('tr.clickable').forEach(tr => tr.addEventListener('click', () => { if (current() && tr.dataset.id) navigate(`patients/${tr.dataset.id}`); }));
+  } catch (err) {
+    if (!current()) return;
+    console.error('Recent calls error:', err);
+    el.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertTriangle')}</div><h4>Could not load saved calls</h4><p>Refresh to try again. This does not mean your calls were lost.</p></div>`;
+  }
 }
 
 async function loadDueToday(isIntake = false) {
