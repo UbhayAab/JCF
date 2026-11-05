@@ -347,7 +347,7 @@ function renderAppShell() {
   // Exit "open as user" (master access) impersonation → reload as the real account.
   document.getElementById('imp-exit')?.addEventListener('click', () => {
     stopImpersonation();
-    location.hash = 'admin';
+    history.pushState(null, '', '#admin');
     location.reload();
   });
 
@@ -535,7 +535,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261105b';  // bumped on every breaking deploy
+const APP_BUILD = '20261106a';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -552,8 +552,10 @@ function bootApp() {
   // Set the target hash BEFORE mounting the shell so the router's first
   // read doesn't trigger the login handler (which would overwrite the shell).
   const hash = window.location.hash.slice(1);
-  const isIntakeRole = INTAKE_ROLES.includes(getUserRole());
-  if (!hash || hash === 'login' || (isIntakeRole && ['calling', 'calls', 'learn'].includes(hash.split('/')[0]))) {
+  const role = getUserRole();
+  const isIntakeRole = INTAKE_ROLES.includes(role);
+  if (!hash || hash === 'login' || (role === 'medical_navigator' && hash === 'dashboard')
+      || (isIntakeRole && ['calling', 'calls', 'learn'].includes(hash.split('/')[0]))) {
     history.replaceState(null, '', '#' + homeRoute());
   }
   try {
@@ -661,7 +663,8 @@ async function init() {
 
   // Set guards
   setAuthGuard(() => !!getCurrentUser());
-  setRoleGuard((roles) => roles.includes(getUserRole()));
+  setRoleGuard((roles) => roles.includes(getUserRole()),
+    () => getUserRole() === 'medical_navigator' ? homeRoute() : 'dashboard');
 
   // On probation (Fixboard #23): a tab that is not open yet is closed to a
   // saved link too. Loaded on use: a phone still holding yesterday's
@@ -684,10 +687,14 @@ async function init() {
   // Defer ALL work to the next tick so the lock is released first.
   const { getSupabase } = await import('./supabase.js');
   let authEventVersion = 0;
+  let startupAuth = null;
   getSupabase().auth.onAuthStateChange((event, session) => {
     if (!['SIGNED_IN', 'SIGNED_OUT'].includes(event)) return;
     const version = ++authEventVersion;
     setTimeout(async () => {
+      // The real profile can be ready while Open as is still restoring the
+      // selected profile. Let initial auth finish before mounting either shell.
+      if (event === 'SIGNED_IN' && startupAuth) await startupAuth.catch(() => null);
       if (version !== authEventVersion) return;
       if (event === 'SIGNED_OUT') {
         appBooted = false;
@@ -712,7 +719,8 @@ async function init() {
 
   // Check for existing session
   console.log('[init] checking existing session…');
-  const session = await initAuth();
+  startupAuth = initAuth();
+  const session = await startupAuth.finally(() => { startupAuth = null; });
   console.log('[init] session?', !!session);
   if (session) {
     gateAndBoot();

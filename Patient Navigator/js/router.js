@@ -6,6 +6,7 @@ const routes = {};
 let currentRoute = null;
 let authGuard = null;
 let roleGuard = null;
+let roleFallback = () => 'dashboard';
 
 // The full hash we were on before the current one, or null if this is the
 // first route of the session (a deep link, a refresh, or a fresh login).
@@ -20,7 +21,10 @@ export function registerRoute(path, handler, options = {}) {
 
 // Set auth guard callback
 export function setAuthGuard(fn) { authGuard = fn; }
-export function setRoleGuard(fn) { roleGuard = fn; }
+export function setRoleGuard(fn, fallback = () => 'dashboard') {
+  roleGuard = fn;
+  roleFallback = fallback;
+}
 
 // Fixboard #23: a route can be closed to someone for now (on probation). The
 // gate answers with where to go instead, or nothing. app.js installs it
@@ -120,7 +124,7 @@ async function handleRouteChange() {
     if (route.roles && roleGuard) {
       const allowed = await roleGuard(route.roles);
       if (!active()) return;
-      if (!allowed) { navigate('dashboard'); return; }
+      if (!allowed) { navigate(roleFallback()); return; }
     }
     if (routeGate && route.requiresAuth !== false) {
       const to = await routeGate(hash.slice(1));

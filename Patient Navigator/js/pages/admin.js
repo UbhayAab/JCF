@@ -470,7 +470,9 @@ async function loadUsers() {
           showToast('Could not open that view. Check that the account is active and this browser allows site data, then try again.', 'error');
           return;
         }
-        location.hash = 'dashboard';
+        // Let the next document restore the selected profile before routing.
+        // Assigning location.hash here also runs the outgoing router.
+        history.pushState(null, '', '#dashboard');
         location.reload();
       });
     });

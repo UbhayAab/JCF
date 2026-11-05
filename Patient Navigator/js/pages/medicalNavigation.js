@@ -297,9 +297,21 @@ function recordedDetails(record,kind) {
 
 export async function renderMedicalNavigation(container) {
   releaseView?.();
-  const sb = getSupabase();
   const actor = getCurrentUser()?.id;
-  const initialRole = getCurrentProfile()?.role;
+  const profile = getCurrentProfile();
+  const initialRole = profile?.role;
+  // Open as retains the manager's session, so the navigator queue must stay
+  // behind the signed-in navigator's own account.
+  if (isImpersonating() && actor && profile?.id && profile.id !== actor
+      && initialRole === 'medical_navigator' && profile.is_active === true) {
+    container.innerHTML = `<section class="page-content" data-mednav style="max-width:1100px;margin:auto;overflow-wrap:anywhere">
+      <h1>Medical navigation</h1>
+      <p><strong>Read-only preview</strong></p>
+      <p>The navigator's assigned patients and clinical tools are available when they sign in to their own account.</p>
+    </section>`;
+    return;
+  }
+  const sb = getSupabase();
   let disposed = false, epoch = 0, queueOffset = 0, selected = null, context = null;
   let observer = null, subscription = null, refreshTimer = null, pmPanel151 = null;
   let busy = false, submitting = false, submission = null, historyEpoch = 0;
