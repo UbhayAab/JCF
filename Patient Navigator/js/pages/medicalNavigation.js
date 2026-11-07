@@ -2,6 +2,7 @@
 import { getSupabase } from '../supabase.js';
 import { getCurrentUser, getCurrentProfile, isImpersonating } from '../auth.js';
 import { medicalDocumentFormat, mountMedicalDocument } from '../components/medicalDocumentPreview.js';
+import { mountMedicalRecording177, phoneRecordingNotice177 } from '../components/medicalRecording177.js';
 
 const ROLES = ['admin','manager','caller','caregiver_mentor','medical_navigator'];
 const HISTORY = ['calls','sessions','assessments','services','assignments','notes','medical','events','documents'];
@@ -315,6 +316,7 @@ export async function renderMedicalNavigation(container) {
   const sb = getSupabase();
   let disposed = false, epoch = 0, queueOffset = 0, selected = null, context = null;
   let observer = null, subscription = null, refreshTimer = null, pmPanel151 = null;
+  let recordingPanel = null;
   let busy = false, submitting = false, submission = null, historyEpoch = 0;
   let historyRows = [], historyOffset = 0, historyKind = 'medical', assignees = [];
   let closePreview = null, previewEpoch = 0;
@@ -323,6 +325,7 @@ export async function renderMedicalNavigation(container) {
   const current = () => !disposed && container.isConnected && getCurrentUser()?.id===actor
     && getCurrentProfile()?.id===actor && getCurrentProfile()?.role===initialRole
     && getCurrentProfile()?.is_active===true && getCurrentProfile()?.must_change_password!==true && !isImpersonating();
+  function clearRecording() { recordingPanel?.dispose(); recordingPanel=null; }
   function clearFiles() {
     previewEpoch++;
     closePreview?.();
@@ -332,7 +335,7 @@ export async function renderMedicalNavigation(container) {
   }
   function message(text) { const el=container.querySelector('[data-message]'); if(el) el.textContent=text; }
   function clearContext(text) {
-    epoch++; historyEpoch++; selected=null; context=null; historyRows=[]; submission=null; clearFiles();
+    epoch++; historyEpoch++; selected=null; context=null; historyRows=[]; submission=null; clearFiles(); clearRecording();
     container.querySelector('[data-context]')?.replaceChildren();
     if(text) message(text);
   }
@@ -427,7 +430,8 @@ export async function renderMedicalNavigation(container) {
       '<div data-history></div><button class="btn btn-secondary" data-history-more hidden>Load older history</button>'+
       (writable?'<form data-entry style="margin-top:20px"><h3>Add medical call or note</h3><label>Entry type<select class="form-control" name="kind"><option value="note">Note</option><option value="call">Call log</option></select></label><div data-call-fields hidden><label>Call date and time<input class="form-control" name="call_at" type="datetime-local"></label><label>Dial status<select class="form-control" name="dial_status"><option>connected</option><option>no_answer</option><option>busy</option><option>wrong_number</option><option>callback_requested</option><option>voicemail</option></select></label><label>Duration (minutes)<input class="form-control" name="duration" type="number" min="0" max="1440" step="0.1" value="0"></label><label>Follow-up date<input class="form-control" name="follow_up" type="date"></label></div><label>Notes<textarea class="form-control" name="body" maxlength="4000" required></textarea></label><p>Enter your own observations. Saving does not send messages or create calling jobs.</p><button class="btn btn-primary" type="submit">Save medical entry</button></form>':'')+
       ((writable || manager)&&q.status==='open'?'<button class="btn btn-danger" data-close style="margin-top:16px">Close medical request</button>':'')+
-      (writable?(p.do_not_call||p.is_blacklisted?'<p>Calling is blocked for this patient. You may add a note.</p>':phoneLinks(p)):'')+'</section>';
+      (writable?(p.do_not_call||p.is_blacklisted?'<p>Calling is blocked for this patient. You may add a note.</p>':phoneLinks(p)+
+        '<details><summary>Before recording in the Phone app</summary><p>'+esc(phoneRecordingNotice177)+'</p><p>Use the Phone app’s recording control if it is available. After saving your connected call log, open Phone recording import on that call.</p></details>'):'')+'</section>';
     holder.querySelector('[data-recheck]').onclick=e=>act(e.target,()=>openRequest(selected));
     const historySelect=holder.querySelector('[data-history-kind]');
     historySelect.onchange=e=>act(e.target,async()=>{historyKind=e.target.value;await loadHistory(true);});
@@ -479,8 +483,23 @@ export async function renderMedicalNavigation(container) {
     if(turn!==historyEpoch || selected!==id || historyKind!==kind)return;
     historyRows.push(...result.rows);historyOffset=result.next_offset;
     const target=container.querySelector('[data-history]');
-    target.innerHTML=historyRows.length?historyRows.map((row,index)=>'<article style="border-bottom:1px solid var(--border-color,#ddd);padding:12px 0"><h4>'+esc(TITLES[kind])+' - '+esc(row.at)+'</h4>'+((row.record.merge_origin_code154)?'<p>Original profile: '+esc(row.record.merge_origin_code154)+' - '+esc(row.record.merge_origin_phone154||'')+'</p>':'')+'<dl style="display:grid;gap:8px">'+clinicalFields(row.record,HISTORY_FIELDS[kind])+recordedDetails(row.record,kind)+'</dl>'+((row.record.has_additional_structured_source||row.record.has_additional_assessment_detail)?'<p>Additional structured source content exists in the original record. This section shows the supported recorded clinical fields.</p>':'')+(kind==='documents'&&row.record.storage_path?'<button class="btn btn-secondary" data-document="'+index+'">'+(initialRole==='medical_navigator'?'View pages':'Open document')+'</button>':'')+'</article>').join(''):'<p>No entries in this section.</p>';
+    clearRecording();
+    const importControl = (row,index) => kind==='medical' && initialRole==='medical_navigator' && context.can_write
+      && !context.patient.do_not_call && !context.patient.is_blacklisted && row.record.kind==='call'
+      && row.record.dial_status==='connected'
+      ? '<button class="btn btn-secondary" data-recording-open="'+index+'">Phone recording import</button><div data-recording-holder hidden></div>' : '';
+    target.innerHTML=historyRows.length?historyRows.map((row,index)=>'<article style="border-bottom:1px solid var(--border-color,#ddd);padding:12px 0"><h4>'+esc(TITLES[kind])+' - '+esc(row.at)+'</h4>'+((row.record.merge_origin_code154)?'<p>Original profile: '+esc(row.record.merge_origin_code154)+' - '+esc(row.record.merge_origin_phone154||'')+'</p>':'')+'<dl style="display:grid;gap:8px">'+clinicalFields(row.record,HISTORY_FIELDS[kind])+recordedDetails(row.record,kind)+'</dl>'+((row.record.has_additional_structured_source||row.record.has_additional_assessment_detail)?'<p>Additional structured source content exists in the original record. This section shows the supported recorded clinical fields.</p>':'')+(kind==='documents'&&row.record.storage_path?'<button class="btn btn-secondary" data-document="'+index+'">'+(initialRole==='medical_navigator'?'View pages':'Open document')+'</button>':'')+importControl(row,index)+'</article>').join(''):'<p>No entries in this section.</p>';
     container.querySelector('[data-history-more]').hidden=!result.has_more;
+    target.querySelectorAll('[data-recording-open]').forEach(button=>{button.onclick=()=>{
+      if(!current())return;
+      const row=historyRows[Number(button.dataset.recordingOpen)],token=epoch;
+      clearRecording();
+      recordingPanel=mountMedicalRecording177(button.nextElementSibling,{
+        sb,request:id,version:context.request.version,entry:row.id,
+        current:()=>current() && token===epoch && id===selected && kind===historyKind,
+        denied:message,
+      });
+    };});
     target.querySelectorAll('[data-document]').forEach(button=>{button.onclick=()=>act(button,async()=>{
       clearFiles();
       const generation=previewEpoch,token=epoch,request=selected,version=context?.request.version;
@@ -517,12 +536,22 @@ export async function renderMedicalNavigation(container) {
     if(!current()){dispose('Account changed. Reopen Medical navigation.');return;}
     if(!selected || busy || submitting)return;
     const id=selected,version=context?.request.version,token=epoch;
-    try{const fresh=await rpc('medical_navigation_context',{p_request:id},token);if(selected===id && (fresh.request.version!==version || fresh.documents_allowed!==context?.documents_allowed))clearContext('Assignment or document access changed. Refresh your work.');}
+    try{
+      const fresh=await rpc('medical_navigation_context',{p_request:id},token);
+      if(selected!==id || token!==epoch)return;
+      if(fresh.request.version!==version || fresh.documents_allowed!==context?.documents_allowed)
+        clearContext('Assignment or document access changed. Refresh your work.');
+      else if(fresh.patient.do_not_call||fresh.patient.is_blacklisted)clearRecording();
+      else await recordingPanel?.verifyPrivate();
+    }
     catch(error){if(token===epoch)failure(error);}
   }
   function onRoute(){if(!location.hash.replace(/^#/,'').startsWith('medical-navigation'))dispose();}
   function onFocus(){void revalidate();}
-  function onVisibility(){if(document.hidden)clearFiles();else void revalidate();}
+  async function onVisibility(){
+    if(document.hidden){clearFiles();recordingPanel?.hidePrivate();return;}
+    await revalidate();
+  }
   observer=new MutationObserver(()=>{if(!container.isConnected)dispose();});observer.observe(document.body,{childList:true,subtree:true});
   subscription=sb.auth.onAuthStateChange((event,session)=>{
     if(event==='SIGNED_OUT' || (session?.user && session.user.id!==actor))dispose('Account changed.');

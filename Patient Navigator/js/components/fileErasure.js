@@ -37,6 +37,17 @@ export function fmtBytes(n) {
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
+async function removeMedicalFiles(sb, erasureId) {
+  const query = new URLSearchParams({ action: 'erase', receipt: erasureId });
+  // The Edge function resolves only names in this admin's exact receipt.
+  for (let batch = 0; batch < 20; batch++) {
+    const { data, error } = await sb.functions.invoke('medical-call-recording?' + query, { body: {} });
+    if (error || !data) return ['Private medical file deletion did not finish.'];
+    if (!data.more) return [];
+  }
+  return ['More private medical files remain. Run erasure again.'];
+}
+
 async function removeAll(sb, objects) {
   const byBucket = new Map();
   for (const o of objects || []) {
@@ -71,32 +82,31 @@ export async function openEraseFiles({ patientId, batchId = null, label = 'this 
     showToast('Could not count the stored files: ' + sanitize(e.message), 'error', 8000);
     return;
   }
-  if (!preview.files && !preview.typed_notes) {
-    // An earlier erasure whose files went but whose finish never ran (a closed
-    // tab, a dropped connection): finish it now, so its uploads stop showing.
-    if (preview.unfinished) {
-      try {
-        const { data, error } = await sb.rpc('finish_patient_file_erasure', { p_erasure_id: preview.unfinished });
-        if (error) throw error;
-        showToast(`Finished the earlier erasure: ${plural(data.files_removed, 'file', 'files')} erased. The record keeps who, when and why.`, 'success', 6000);
-        if (typeof onDone === 'function') onDone(data);
-      } catch (e) {
-        showToast('Could not finish the earlier erasure: ' + sanitize(e.message), 'error', 8000);
-      }
-      return;
-    }
+  if (preview.resume_blocked) {
+    showToast('The admin who started this erasure must resume it.', 'warning', 10000);
+    return;
+  }
+  const resume = preview.unfinished;
+  if (!resume && !preview.files && !preview.typed_notes && !preview.medical_recordings) {
     showToast(`Nothing is stored for ${sanitize(label)}. There is nothing to erase.`, 'info');
     return;
   }
 
   const what = batchId ? 'this upload' : 'this family';
+  const medical = preview.medical_recordings
+    ? '<p>Medical recording access, AI drafts and any processing for this family will be revoked. Typed call notes stay.</p>' : '';
   const body = document.createElement('div');
-  body.innerHTML = `
+  const description = resume
+    ? `<p>An earlier erasure for <strong>${sanitize(label)}</strong> is unfinished.
+        Resume its original receipt. ${plural(preview.files, 'file remains', 'files remain')} from that erasure.</p>`
+    : `
     <p style="margin:0 0 10px">${plural(preview.files, 'file', 'files')}${preview.typed_notes ? ` and ${plural(preview.typed_notes, 'set of typed intake notes', 'sets of typed intake notes')}` : ''} stored for
       <strong>${sanitize(label)}</strong> (${fmtBytes(preview.bytes)}): every page and thumbnail${batchId ? '' : ', WhatsApp file and call recording'} of ${what}.
       Erasing deletes them for good. It cannot be undone.</p>
-    <p class="text-muted" style="margin:0 0 14px;font-size:13px">The record keeps who erased them, when and why, and a
+    ${medical}<p class="text-muted" style="margin:0 0 14px;font-size:13px">The record keeps who erased them, when and why, and a
       fingerprint of each file, never its name or content. Values already read off the documents into the record stay.</p>
+    `;
+  const confirmation = `
     <div class="form-group">
       <label class="form-label" for="ef-reason">Why</label>
       <select class="form-select" id="ef-reason">
@@ -109,14 +119,17 @@ export async function openEraseFiles({ patientId, batchId = null, label = 'this 
       <label class="form-label" for="ef-confirm">Type ${CONFIRM_WORD} to confirm</label>
       <input class="form-input" id="ef-confirm" autocomplete="off" spellcheck="false" style="max-width:200px" />
     </div>
+    `;
+  body.innerHTML = `${description}${resume ? '' : confirmation}
     <p id="ef-progress" class="text-muted" style="margin:6px 0 0;font-size:13px" aria-live="polite"></p>`;
 
   const overlay = showModal({
-    title: 'Erase stored files',
+    title: resume ? 'Resume stored file erasure' : 'Erase stored files',
     content: body,
     footer: `
       <button class="btn btn-secondary" data-ef-cancel>Cancel</button>
-      <button class="btn btn-danger" data-ef-go disabled>Erase files${preview.typed_notes ? ' and typed notes' : ''}</button>`,
+      <button class="btn btn-danger" data-ef-go ${resume ? '' : 'disabled'}>${resume
+        ? 'Resume erasure' : `Erase files${preview.typed_notes ? ' and typed notes' : ''}`}</button>`,
   });
   const $ = (sel) => overlay.querySelector(sel);
   const reasonText = () => ($('#ef-reason').value || $('#ef-other').value).trim();
@@ -124,9 +137,11 @@ export async function openEraseFiles({ patientId, batchId = null, label = 'this 
     $('#ef-other').style.display = $('#ef-reason').value ? 'none' : '';
     $('[data-ef-go]').disabled = !($('#ef-confirm').value.trim().toUpperCase() === CONFIRM_WORD && reasonText().length >= 3);
   };
-  $('#ef-reason').addEventListener('change', refresh);
-  $('#ef-other').addEventListener('input', refresh);
-  $('#ef-confirm').addEventListener('input', refresh);
+  if (!resume) {
+    $('#ef-reason').addEventListener('change', refresh);
+    $('#ef-other').addEventListener('input', refresh);
+    $('#ef-confirm').addEventListener('input', refresh);
+  }
   $('[data-ef-cancel]').addEventListener('click', () => closeModal());
 
   $('[data-ef-go]').addEventListener('click', async () => {
@@ -138,24 +153,38 @@ export async function openEraseFiles({ patientId, batchId = null, label = 'this 
     let result;
     try {
       const { data: started, error: sErr } = await sb.rpc('start_patient_file_erasure', {
-        p_patient_id: patientId, p_reason: reasonText(), p_batch_id: batchId, p_dry_run: false,
+        p_patient_id: patientId, p_reason: resume ? null : reasonText(), p_batch_id: batchId, p_dry_run: false,
       });
       if (sErr) throw sErr;
+      if (!started?.erasure_id || (resume && started.erasure_id !== resume)) {
+        throw new Error('The earlier receipt changed.');
+      }
       progress.textContent = `Deleting ${plural(started.files, 'file', 'files')}…`;
       const problems = await removeAll(sb, started.objects);
+      if (started.medical_files) problems.push(...await removeMedicalFiles(sb, started.erasure_id));
       const { data: finished, error: fErr } = await sb.rpc('finish_patient_file_erasure', { p_erasure_id: started.erasure_id });
       if (fErr) throw fErr;
+      if (finished?.erasure_id !== started.erasure_id) throw new Error('Could not verify the erasure receipt.');
       result = { ...finished, problems };
     } catch (e) {
-      showToast('The erasure stopped: ' + sanitize(e.message) + '. Nothing is hidden; run it again.', 'error', 10000);
+      showToast('The erasure stopped: ' + sanitize(e.message) + ' Reopen erasure to check its current state.', 'error', 10000);
       closeModal();
       if (typeof onDone === 'function') onDone(null);
       return;
     }
     closeModal();
-    if (result.status === 'done') {
-      showToast(`Erased ${plural(result.files_removed, 'file', 'files')}${result.typed_notes_cleared ? ` and ${plural(result.typed_notes_cleared, 'set of typed notes', 'sets of typed notes')}` : ''}. The record keeps who, when and why.`, 'success', 6000);
-    } else {
+    if (result.already_finished) {
+      showToast('That earlier receipt has already finished. Reopen erasure to check what is still stored.', 'info', 8000);
+    } else if (result.medical_uploads_pending || result.medical_files_left) {
+      showToast('Medical recording access and drafts were revoked. Some private audio may still be uploading or stored. Reopen erasure to continue.', 'warning', 10000);
+    } else if (result.other_unfinished) {
+      showToast('Another receipt is still open for these files. Reopen erasure to continue.', 'warning', 10000);
+    } else if (result.status === 'done' && !result.new_since_start && !result.typed_notes_new_since_start) {
+      const removed = result.files_removed || result.typed_notes_cleared
+        ? `Erased ${plural(result.files_removed, 'file', 'files')}${result.typed_notes_cleared ? ` and ${plural(result.typed_notes_cleared, 'set of typed notes', 'sets of typed notes')}` : ''}.`
+        : 'Erasure complete.';
+      showToast(removed + ' The record keeps who, when and why.', 'success', 6000);
+    } else if (result.status !== 'done') {
       const why = result.problems?.length ? ` (${sanitize(result.problems[0])})` : '';
       showToast(`Erased ${result.files_removed} of ${result.files_found}; ${plural(result.files_left, 'file is', 'files are')} still stored${why}. Run it again.`, 'warning', 10000);
     }
@@ -167,5 +196,5 @@ export async function openEraseFiles({ patientId, batchId = null, label = 'this 
     }
     if (typeof onDone === 'function') onDone(result);
   });
-  $('#ef-confirm').focus();
+  $(resume ? '[data-ef-go]' : '#ef-confirm').focus();
 }
