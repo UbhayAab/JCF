@@ -255,7 +255,7 @@ export class FileProblem extends Error {
 }
 
 let pdfLibPromise = null;
-async function loadPdfLib() {
+export async function loadPdfLib() {
   if (!pdfLibPromise) {
     pdfLibPromise = import(/* @vite-ignore */ PDFJS).then((lib) => {
       lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;

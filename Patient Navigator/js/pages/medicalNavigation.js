@@ -1,6 +1,7 @@
 // PN130 - dedicated assigned-only workflow. Server APIs remain authoritative.
 import { getSupabase } from '../supabase.js';
 import { getCurrentUser, getCurrentProfile, isImpersonating } from '../auth.js';
+import { medicalDocumentFormat, mountMedicalDocument } from '../components/medicalDocumentPreview.js';
 
 const ROLES = ['admin','manager','caller','caregiver_mentor','medical_navigator'];
 const HISTORY = ['calls','sessions','assessments','services','assignments','notes','medical','events','documents'];
@@ -316,12 +317,19 @@ export async function renderMedicalNavigation(container) {
   let observer = null, subscription = null, refreshTimer = null, pmPanel151 = null;
   let busy = false, submitting = false, submission = null, historyEpoch = 0;
   let historyRows = [], historyOffset = 0, historyKind = 'medical', assignees = [];
+  let closePreview = null, previewEpoch = 0;
   const urls = new Set();
   const timers = new Set();
   const current = () => !disposed && container.isConnected && getCurrentUser()?.id===actor
     && getCurrentProfile()?.id===actor && getCurrentProfile()?.role===initialRole
     && getCurrentProfile()?.is_active===true && getCurrentProfile()?.must_change_password!==true && !isImpersonating();
-  function clearFiles() { for (const url of urls) URL.revokeObjectURL(url); urls.clear(); }
+  function clearFiles() {
+    previewEpoch++;
+    closePreview?.();
+    closePreview = null;
+    for (const url of urls) URL.revokeObjectURL(url);
+    urls.clear();
+  }
   function message(text) { const el=container.querySelector('[data-message]'); if(el) el.textContent=text; }
   function clearContext(text) {
     epoch++; historyEpoch++; selected=null; context=null; historyRows=[]; submission=null; clearFiles();
@@ -391,7 +399,7 @@ export async function renderMedicalNavigation(container) {
     clearContext(); if(reset)queueOffset=0;
     const result=await rpc('medical_navigation_queue',{p_offset:queueOffset});
     const list=container.querySelector('[data-queue]');
-    list.innerHTML=result.rows.length?result.rows.map(q=>'<article class="card" style="padding:16px;margin-bottom:12px"><h2>'+esc(q.full_name)+'</h2><p>'+esc(q.patient_code)+' - '+esc(q.status)+' - '+esc(q.assignee_name || 'Awaiting manager assignment')+'</p><p style="white-space:pre-wrap">'+esc(q.reason)+'</p><button class="btn btn-primary" data-open="'+esc(q.id)+'">Open medical work</button></article>').join(''):'<p>No medical requests are available to this account.</p>';
+    list.innerHTML=result.rows.length?result.rows.map(q=>'<article class="card" style="padding:16px;margin-bottom:12px"><h2>'+esc(q.full_name)+'</h2><p>'+esc(q.patient_code)+' - '+esc(q.status)+' - '+esc(q.assignee_name || 'Awaiting manager assignment')+'</p><p style="white-space:pre-wrap">'+esc(q.reason)+'</p><button class="btn btn-primary" data-open="'+esc(q.id)+'">'+(initialRole==='medical_navigator'?'Open patient record':'Open medical work')+'</button></article>').join(''):'<p>No medical requests are available to this account.</p>';
     container.querySelector('[data-prev]').hidden=queueOffset===0;container.querySelector('[data-next]').hidden=!result.has_more;
     list.querySelectorAll('[data-open]').forEach(button=>{button.onclick=()=>act(button,()=>openRequest(button.dataset.open));});
   }
@@ -399,24 +407,37 @@ export async function renderMedicalNavigation(container) {
     clearContext();selected=id;const token=epoch;
     const result=await rpc('medical_navigation_context',{p_request:id},token);
     context=result; historyKind='medical'; historyRows=[];historyOffset=0;renderContext();await loadHistory(true);
+    if(!current() || token!==epoch)return;
+    container.querySelectorAll('[data-history-loading]').forEach(control=>{control.disabled=false;});
   }
   function renderContext() {
     if(!context || !current())return;
     const {patient:p,request:q}=context;
     const manager=['admin','manager'].includes(initialRole);
+    const navigator=initialRole==='medical_navigator';
     const writable=context.can_write===true && initialRole==='medical_navigator';
     const holder=container.querySelector('[data-context]');
     holder.innerHTML='<section class="card" style="padding:16px;margin-top:16px"><h2>'+esc(p.full_name)+'</h2><p>Medical request - '+esc(q.status)+'</p>'+
-      '<button class="btn btn-secondary" data-recheck>Recheck access</button><details><summary>Patient record</summary>'+patientSections(p)+'</details>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary" data-recheck>Recheck access</button>'+
+      (navigator && context.documents_allowed?'<button class="btn btn-secondary" data-open-documents data-history-loading disabled>Documents</button>':'')+'</div>'+
+      '<details data-patient-record'+(navigator?' open':'')+'><summary>Patient record</summary>'+patientSections(p)+'</details>'+
       (manager && q.status==='open'?'<form data-assignment><label>Medical navigator<select name="assignee" class="form-control"><option value="">Unassigned</option>'+assignees.map(a=>'<option value="'+esc(a.id)+'" '+(a.id===q.assigned_to?'selected':'')+'>'+esc(a.full_name)+'</option>').join('')+'</select></label><button class="btn btn-primary">Save assignment</button></form>':'')+
-      '<h3>Patient history</h3><label>History section<select class="form-control" data-history-kind>'+HISTORY.map(k=>'<option value="'+k+'" '+(k===historyKind?'selected':'')+' '+(k==='documents'&&!context.documents_allowed?'disabled':'')+'>'+TITLES[k]+'</option>').join('')+'</select></label>'+
+      '<h3>Patient history</h3><label>History section<select class="form-control" data-history-kind data-history-loading disabled>'+HISTORY.map(k=>'<option value="'+k+'" '+(k===historyKind?'selected':'')+' '+(k==='documents'&&!context.documents_allowed?'disabled':'')+'>'+TITLES[k]+'</option>').join('')+'</select></label>'+
       (!context.documents_allowed?'<p>Medical document consent is missing or withdrawn. Documents cannot be opened.</p>':'')+
       '<div data-history></div><button class="btn btn-secondary" data-history-more hidden>Load older history</button>'+
       (writable?'<form data-entry style="margin-top:20px"><h3>Add medical call or note</h3><label>Entry type<select class="form-control" name="kind"><option value="note">Note</option><option value="call">Call log</option></select></label><div data-call-fields hidden><label>Call date and time<input class="form-control" name="call_at" type="datetime-local"></label><label>Dial status<select class="form-control" name="dial_status"><option>connected</option><option>no_answer</option><option>busy</option><option>wrong_number</option><option>callback_requested</option><option>voicemail</option></select></label><label>Duration (minutes)<input class="form-control" name="duration" type="number" min="0" max="1440" step="0.1" value="0"></label><label>Follow-up date<input class="form-control" name="follow_up" type="date"></label></div><label>Notes<textarea class="form-control" name="body" maxlength="4000" required></textarea></label><p>Enter your own observations. Saving does not send messages or create calling jobs.</p><button class="btn btn-primary" type="submit">Save medical entry</button></form>':'')+
       ((writable || manager)&&q.status==='open'?'<button class="btn btn-danger" data-close style="margin-top:16px">Close medical request</button>':'')+
       (writable?(p.do_not_call||p.is_blacklisted?'<p>Calling is blocked for this patient. You may add a note.</p>':phoneLinks(p)):'')+'</section>';
     holder.querySelector('[data-recheck]').onclick=e=>act(e.target,()=>openRequest(selected));
-    holder.querySelector('[data-history-kind]').onchange=e=>act(e.target,async()=>{historyKind=e.target.value;await loadHistory(true);});
+    const historySelect=holder.querySelector('[data-history-kind]');
+    historySelect.onchange=e=>act(e.target,async()=>{historyKind=e.target.value;await loadHistory(true);});
+    const documentsButton=holder.querySelector('[data-open-documents]');
+    if(documentsButton)documentsButton.onclick=()=>act(documentsButton,async()=>{
+      holder.querySelector('[data-patient-record]').open=false;
+      historyKind=historySelect.value='documents';
+      await loadHistory(true);
+      historySelect.focus();
+    });
     holder.querySelector('[data-history-more]').onclick=e=>act(e.target,()=>loadHistory(false));
     const assignment=holder.querySelector('[data-assignment]');
     if(assignment)assignment.onsubmit=e=>{e.preventDefault();act(assignment.querySelector('button'),async()=>{
@@ -458,19 +479,32 @@ export async function renderMedicalNavigation(container) {
     if(turn!==historyEpoch || selected!==id || historyKind!==kind)return;
     historyRows.push(...result.rows);historyOffset=result.next_offset;
     const target=container.querySelector('[data-history]');
-    target.innerHTML=historyRows.length?historyRows.map((row,index)=>'<article style="border-bottom:1px solid var(--border-color,#ddd);padding:12px 0"><h4>'+esc(TITLES[kind])+' - '+esc(row.at)+'</h4>'+((row.record.merge_origin_code154)?'<p>Original profile: '+esc(row.record.merge_origin_code154)+' - '+esc(row.record.merge_origin_phone154||'')+'</p>':'')+'<dl style="display:grid;gap:8px">'+clinicalFields(row.record,HISTORY_FIELDS[kind])+recordedDetails(row.record,kind)+'</dl>'+((row.record.has_additional_structured_source||row.record.has_additional_assessment_detail)?'<p>Additional structured source content exists in the original record. This section shows the supported recorded clinical fields.</p>':'')+(kind==='documents'&&row.record.storage_path?'<button class="btn btn-secondary" data-document="'+index+'">Open document</button>':'')+'</article>').join(''):'<p>No entries in this section.</p>';
+    target.innerHTML=historyRows.length?historyRows.map((row,index)=>'<article style="border-bottom:1px solid var(--border-color,#ddd);padding:12px 0"><h4>'+esc(TITLES[kind])+' - '+esc(row.at)+'</h4>'+((row.record.merge_origin_code154)?'<p>Original profile: '+esc(row.record.merge_origin_code154)+' - '+esc(row.record.merge_origin_phone154||'')+'</p>':'')+'<dl style="display:grid;gap:8px">'+clinicalFields(row.record,HISTORY_FIELDS[kind])+recordedDetails(row.record,kind)+'</dl>'+((row.record.has_additional_structured_source||row.record.has_additional_assessment_detail)?'<p>Additional structured source content exists in the original record. This section shows the supported recorded clinical fields.</p>':'')+(kind==='documents'&&row.record.storage_path?'<button class="btn btn-secondary" data-document="'+index+'">'+(initialRole==='medical_navigator'?'View pages':'Open document')+'</button>':'')+'</article>').join(''):'<p>No entries in this section.</p>';
     container.querySelector('[data-history-more]').hidden=!result.has_more;
     target.querySelectorAll('[data-document]').forEach(button=>{button.onclick=()=>act(button,async()=>{
-      const token=epoch,request=selected,record=historyRows[Number(button.dataset.document)]?.record,path=record?.storage_path;
-      const checked=await rpc('medical_navigation_context',{p_request:request});
-      if(!checked.documents_allowed || !current() || token!==epoch)throw new Error('Document access changed');
+      clearFiles();
+      const generation=previewEpoch,token=epoch,request=selected,version=context?.request.version;
+      const record=historyRows[Number(button.dataset.document)]?.record,path=record?.storage_path;
+      const canPresent=()=>current() && token===epoch && generation===previewEpoch && request===selected && !document.hidden;
+      const verify=async()=>{
+        const fresh=await rpc('medical_navigation_context',{p_request:request},token);
+        if(!fresh.documents_allowed || fresh.request.version!==version)throw new Error('Document access changed');
+        return canPresent();
+      };
+      if(!path || !await verify())return;
       // A non-cached server response checks current assignment both before and
       // after fetching bytes. Direct medical Storage access is disabled.
       const response=await sb.functions.invoke('medical-document',{body:{request_id:request,path}});
       if(response.error)throw new Error(response.error.message||'Document unavailable');
-      if(!current() || token!==epoch || request!==selected)return;
-      const verified=await rpc('medical_navigation_context',{p_request:request},token);
-      if(!verified.documents_allowed)throw new Error('Document consent changed');
+      if(!canPresent())return;
+      if(!(response.data instanceof Blob))throw new Error('Document unavailable');
+      const navigator=initialRole==='medical_navigator';
+      const format=navigator?await medicalDocumentFormat(response.data,record?.mime_type):null;
+      if(!canPresent() || !await verify())return;
+      if(navigator){
+        closePreview=mountMedicalDocument(button,response.data,format);
+        return;
+      }
       const url=URL.createObjectURL(response.data);urls.add(url);
       const extension={'application/pdf':'pdf','image/jpeg':'jpg','image/png':'png','image/webp':'webp','text/plain':'txt'}[record?.mime_type]||'bin';
       const link=document.createElement('a');link.href=url;link.download='medical-document.'+extension;link.textContent='Download document';
