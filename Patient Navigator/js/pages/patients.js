@@ -61,7 +61,7 @@ async function renderPatientList(container) {
     <div class="page-header">
       <div>
         <h1>Patients</h1>
-        <p class="header-subtitle" style="margin:4px 0 0">${onProbation ? 'Only the families assigned to you' : 'Everyone in the care program'}</p>
+        <p class="header-subtitle" style="margin:4px 0 0">${onProbation ? 'During probation, this list shows families assigned to you and families with an open call task assigned to you.' : 'Everyone in the care program'}</p>
       </div>
       <div class="flex gap-2" style="display:flex;gap:9px">
         ${canExport ? `<button class="btn btn-secondary" id="merge-history-btn">Merge history</button><button class="btn btn-secondary" id="export-patients-btn">${icon('download')}Export CSV</button>` : ''}
@@ -296,7 +296,10 @@ async function loadPatients() {
     if (error) throw error;
 
     if (!data || data.length === 0) {
-      tableBody.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('users')}</div><h4>No patients found</h4><p>Try a different filter, or register a new patient.</p></div>`;
+      const emptyHelp = getCurrentProfile()?.on_probation
+        ? 'Try a different filter. To follow up on a past call, ask your supervisor to check your assignment or open call task.'
+        : 'Try a different filter, or register a new patient.';
+      tableBody.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('users')}</div><h4>No patients found</h4><p>${emptyHelp}</p></div>`;
       // the page may have been left while this was loading
       const pager = document.getElementById('patients-pagination');
       if (pager) pager.innerHTML = '';
