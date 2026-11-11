@@ -15,7 +15,9 @@ export function retry153(value) {
     && Number.isFinite(Date.parse(value.version)) ? { allowed: true, version: value.version } : null;
 }
 export function savedRetry153(row, needsReview, actorId) {
+  const stalled = row?.status === 'transcribing' && Number.isFinite(Date.parse(row?.status_at))
+    && Date.now() - Date.parse(row.status_at) >= 420000;
   if (!actorId || row?.uploaded_by !== actorId || row.audio_deleted_at || !Number.isInteger(row.attempts)
-      || row.attempts < 0 || row.attempts >= 3 || !(['uploaded', 'failed'].includes(row.status) || row.status === 'done' && needsReview)) return null;
+      || row.attempts < 0 || row.attempts >= 3 || !(['uploaded', 'failed'].includes(row.status) || row.status === 'done' && needsReview || stalled)) return null;
   return retry153({ allowed: true, version: row.status_at });
 }

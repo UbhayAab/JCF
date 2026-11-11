@@ -23,7 +23,8 @@ import { icon } from './icons.js';
 import { mountCallMeasurements } from './measurements.js';
 import { verifiedCareCallDate, recordingResultForForm } from '../utils/careFollowup.js';
 import * as savedRecordingRead from '../utils/careFollowup.js';
-import { savedRetry153 } from '../utils/recordingProcessing153.js';
+import { savedRetry153, retry153 } from '../utils/recordingProcessing153.js';
+import { createRecordingOperation211 } from '../utils/recordingOperation211.js';
 import { createSharedRecordingStore, SHARE_TTL_MS } from '../utils/sharedRecording.js';
 
 // Historical wording is never relabelled. sql/212 opts in only a fresh rec-v2
@@ -427,6 +428,7 @@ export function mountRecordingSection(el, ctx) {
   const transcriptAccount = recordingViewIdentity(), transcriptRoute = window.location.hash;
   const transcriptOwner = recordingAuth.getCurrentUser?.()?.id;
   let transcriptRead = null, transcriptSubscription, transcriptObserver;
+  let processingOperation = null, processingOwner = null;
   const transcriptContextChanged = () => {
     if (disposed) return;
     if (el.isConnected && transcriptAccount === recordingViewIdentity() && transcriptRoute === window.location.hash) return;
@@ -435,7 +437,8 @@ export function mountRecordingSection(el, ctx) {
   };
   function dispose() {
     if (disposed) return;
-    disposed = true; transcriptRead = null; transcripts.clear(); measurementBox?.dispose();
+    disposed = true; processingOperation?.stop(); processingOperation = null;
+    transcriptRead = null; transcripts.clear(); measurementBox?.dispose();
     transcriptSubscription?.unsubscribe?.(); transcriptObserver?.disconnect();
     window.removeEventListener('hashchange', transcriptContextChanged);
   }
@@ -528,6 +531,12 @@ export function mountRecordingSection(el, ctx) {
         <div id="rec-measurements"></div>
         ${r.retry153 ? btn('rec-reprocess', 'Try processing again', 'btn-primary', 'refresh') + small('Uses the retained recording for one new attempt. Your typed notes are kept.') : ''}
         ${btn('rec-remove', 'Remove recording', 'btn-ghost', 'trash')}`, r.review?.required ? 'warn' : 'ok');
+    } else if (rec.status === 'processing_ready' && rec.result?.retry153) {
+      el.innerHTML = card(small(esc(rec.error)) + btn('rec-reprocess', 'Start processing', 'btn-primary', 'refresh')
+        + small('Uses this confirmed retained upload. Processing starts only when you choose this button; your typed notes stay in this form.'), 'warn');
+    } else if (rec.status === 'processing_pending') {
+      el.innerHTML = card(small(esc(rec.error)) + btn('rec-check', 'Check saved result', 'btn-primary', 'refresh')
+        + small('Checks the existing recording without starting another processing attempt. Your typed notes stay in the form.'), 'warn');
     } else if (rec.status === 'saved') {
       el.innerHTML = card(`
         <p style="font:var(--t-xs);color:var(--ink-2);margin:6px 0 8px"><strong>Recording saved.</strong> ${esc(rec.error || 'No transcript was made; fill the log by hand.')}</p>
@@ -678,32 +687,47 @@ export function mountRecordingSection(el, ctx) {
     }
   }
 
-  async function transcribe(tries = 0, recovery = null) {
-    const id = ctx.get().recordingId;
-    if (!id) return;
+  function transcribe(tries = 0, recovery = null, observeOnly = false) {
+    const id = ctx.get().recordingId, consent = ctx.get().consentId;
+    if (!id || disposed) return;
+    const owner = JSON.stringify([id, consent]);
+    if (processingOwner === owner && processingOperation?.isRunning()) return;
+    processingOperation?.stop();
+    const current = () => sameRecording(id) && sameConsent(consent) && ctx.get().decision === 'agreed'
+      && ctx.consentOnFile() && el.isConnected && transcriptAccount === recordingViewIdentity()
+      && transcriptRoute === window.location.hash;
+    if (!current()) return;
+    processingOwner = owner;
     update({ status: 'transcribing', error: null });
-    let res;
-    try { res = await invokeTranscribe(id, recovery); }
-    catch (e) { if (sameRecording(id)) update({ status: 'failed', error: e.message }); return; }
-    if (!sameRecording(id)) return;   // moved on or removed meanwhile: fill nothing
-    if (res?.ok) {
-      transcripts.set(id, res.transcript || []);
-      // note: the full call note by section (prompt v3); summary: the same note as the text the log keeps.
-      const result = recordingResultForForm(res, ctx.get().durationS || null);
-      let applied = [];
-      try { if(!sessionMode && result.auto_apply !== false) applied = ctx.apply(result) || []; } catch (e) { console.warn('[recording] could not fill the form:', e); }
-      update({ status: 'done', result, applied });
-      return;
-    }
-    if (res?.running && tries < 12) { setTimeout(() => { if (sameRecording(id)) transcribe(tries + 1, recovery); }, 4000); return; }
-    if (res?.off) { update({ status: 'saved', error: res.reason }); return; }
-    if (res?.missing) { update({ status: 'interrupted', error: null }); return; }
-    if (res?.gone) {
-      update({ recordingId: null, path: null, fileName: '', status: null, error: null, result: null, applied: null });
-      showToast('That recording was removed, so nothing was filled in.', 'info');
-      return;
-    }
-    update({ status: 'failed', error: res?.reason || 'The transcript could not be made.', transcriptSaved: res?.transcript_saved === true });
+    processingOperation = createRecordingOperation211({
+      invoke: options => invokeTranscribe(id, options), current,
+      onWaiting: () => {},
+      onResult: res => {
+        transcripts.set(id, Array.isArray(res.transcript) ? res.transcript : []);
+        const result = recordingResultForForm(res, ctx.get().durationS || null);
+        let applied = [];
+        try { if (!sessionMode && result.auto_apply !== false) applied = ctx.apply(result) || []; }
+        catch (e) { console.warn('[recording] could not fill the form:', e); }
+        update({ status: 'done', result, applied });
+      },
+      onStopped: res => {
+        if (res?.ready === true) {
+          const fresh = retry153(res.retry153);
+          if (fresh) { update({ status: 'processing_ready', result: { retry153: fresh }, error: res.reason }); return; }
+          update({ status: 'processing_pending', error: 'The current processing version could not be confirmed. Check the saved result before starting an attempt.' }); return;
+        }
+        if (res?.off) { update({ status: 'saved', error: res.reason }); return; }
+        if (res?.missing) { update({ status: 'interrupted', error: null }); return; }
+        if (res?.gone) {
+          update({ recordingId: null, path: null, fileName: '', status: null, error: null, result: null, applied: null });
+          showToast('That recording was removed, so nothing was filled in.', 'info'); return;
+        }
+        update({ status: res?.pending ? 'processing_pending' : 'failed',
+          error: res?.reason || 'Processing could not be confirmed. Your recording and typed notes are kept.',
+          transcriptSaved: res?.transcript_saved === true });
+      },
+    });
+    return processingOperation.run(recovery, observeOnly);
   }
 
   // True when the file and its row are gone. A failed remove leaves the answer as it was.
@@ -780,6 +804,7 @@ export function mountRecordingSection(el, ctx) {
     el.querySelector('#rec-anyway')?.addEventListener('click', () => { const f = pendingFile; if (f) upload(f); });
     el.querySelector('#rec-repick')?.addEventListener('click', () => { pendingFile = null; pendingProblems = []; render(); el.querySelector('#rec-file')?.click(); });
     el.querySelector('#rec-retry')?.addEventListener('click', () => transcribe());
+    el.querySelector('#rec-check')?.addEventListener('click', () => transcribe(0, null, true));
     el.querySelector('#rec-reprocess')?.addEventListener('click', () => {
       const recovery = ctx.get().result?.retry153;
       if (recovery?.allowed) transcribe(0, { retry_draft: true, expected_status_at: recovery.version });
@@ -824,7 +849,7 @@ export function mountRecordingSection(el, ctx) {
     }).catch(() => { if (!disposed) { noticeError = 'The recording notice could not be checked. Save human notes or reopen to retry.'; render(); } });
     else currentRecordingConsentNotice().then((notice) => { if (!disposed) { consentNotice = notice; render(); } });
   }
-  if (start.recordingId && (start.status === 'uploading' || start.status === 'transcribing')) transcribe();
+  if (start.recordingId && ['uploading', 'transcribing', 'processing_pending', 'processing_ready'].includes(start.status)) transcribe(0, null, true);
   else if (start.status === 'uploading') update({ status: 'interrupted' });
   transcriptSubscription = sb.auth?.onAuthStateChange?.((event, session) => {
     if (event === 'SIGNED_OUT' || transcriptOwner && session?.user?.id && transcriptOwner !== session.user.id) {
@@ -988,14 +1013,14 @@ export async function renderRecordingViewer(container, recordingId) {
   recordingViewLoads.get(container)?.dispose?.();
   const request = {}, account = recordingViewIdentity(), route = window.location.hash;
   const ownerId = recordingAuth.getCurrentUser?.()?.id;
-  let ended = false, subscription, observer;
+  let ended = false, subscription, observer, processingOperation;
   recordingViewLoads.set(container, request);
   const overlay = container.closest('.modal-overlay');
   const current = () => !ended && container.isConnected && recordingViewLoads.get(container) === request
     && account === recordingViewIdentity() && route === window.location.hash && overlay?.isCurrentModal?.() !== false;
   const end = (hide = false) => {
     if (ended) return;
-    ended = true; subscription?.unsubscribe?.(); observer?.disconnect();
+    ended = true; processingOperation?.stop(); subscription?.unsubscribe?.(); observer?.disconnect();
     window.removeEventListener('hashchange', changed);
     if (recordingViewLoads.get(container) !== request) return;
     recordingViewLoads.delete(container);
@@ -1037,6 +1062,8 @@ export async function renderRecordingViewer(container, recordingId) {
   if (!saved) { unavailable(); return null; }
   const n = saved.note;
   const recovery = savedRetry153(r, saved.review.required, ownerId);
+  const inFlight = r.uploaded_by === ownerId && r.status === 'transcribing'
+    && Date.now() - Date.parse(r.status_at) < 420000;
   container.innerHTML = `
       <p style="font:var(--t-xs);color:var(--ink-2);margin:0 0 8px">${r.care_session_id
         ? 'Session audio is deleted after a complete clear transcript and a saved held session. Incomplete processing or review keeps it for at most 90 days. Unsaved uploads are cleared after a day. The transcript and written notes stay with the session.'
@@ -1055,23 +1082,34 @@ export async function renderRecordingViewer(container, recordingId) {
         : `<p style="color:var(--ink-3);margin:0">${r.status === 'done' ? 'No saved transcript text is available for this recording.' : 'No transcript yet.'}</p>`}
       ${n || saved.points.length || saved.draft_summary ? `<div style="margin:0 0 10px"><p style="font:var(--t-xs);color:var(--ink-3);margin:0">Call note (AI, not checked by a person):</p>${noteHTML(saved)}${n && saved.show_fallback ? noteHTML({ points: saved.points, draft_summary: saved.draft_summary }) : ''}</div>` : ''}
       ${r.status === 'failed' ? '<p role="status">The last processing attempt did not finish. The saved transcript and earlier draft below have been kept.</p>' : ''}
-      <div id="rec-past-measurements"></div>${recovery ? '<button type="button" class="btn btn-primary" data-recording-reprocess>Try processing again</button><p>Uses the retained recording for one new attempt. Saved call notes are kept.</p><p role="status" data-reprocess-status></p>' : ''}<button type="button" class="btn btn-ghost" data-recording-retry>Reload saved recording</button>`;
+      <p role="status" data-recording-observation></p><div id="rec-past-measurements"></div>${recovery ? '<button type="button" class="btn btn-primary" data-recording-reprocess>Try processing again</button><p>Uses the retained recording for one new attempt. Saved call notes are kept.</p><p role="status" data-reprocess-status></p>' : ''}<button type="button" class="btn btn-ghost" data-recording-retry>Check saved result</button>`;
   container.querySelector('[data-recording-retry]').addEventListener('click', retry);
   container.querySelector('[data-recording-reprocess]')?.addEventListener('click', async event => {
     if (!current()) return;
     const button = event.currentTarget, status = container.querySelector('[data-reprocess-status]');
     if (button.disabled) return;
     button.disabled = true; status.textContent = 'Processing the retained recording. Your saved notes are kept.';
-    try {
-      const response = await invokeTranscribe(recordingId, { retry_draft: true, expected_status_at: recovery.version });
-      if (!current()) return;
-      if (response?.ok) { retry(); return; }
-      status.textContent = response?.running ? 'This recording is already processing. Reload its saved view after it finishes.'
-        : response?.reason || 'Processing did not finish. Your recording and earlier notes are kept. Reload to check the latest result.';
-    } catch { if (current()) status.textContent = 'The service could not be reached. Reload the saved recording to check its latest result before trying again.'; }
-    // A new attempt requires reloading its current version. Never automatically
-    // retry, poll generation, or re-enable a stale button after an uncertain send.
+    processingOperation = createRecordingOperation211({
+      invoke: options => invokeTranscribe(recordingId, options), current,
+      onResult: () => retry(),
+      onWaiting: () => { if (current()) status.textContent = 'Processing the retained recording. Its saved result will appear here; your typed notes are kept.'; },
+      onStopped: response => {
+        if (!current()) return;
+        status.textContent = response?.reason || 'The latest result is not confirmed. Use Check saved result below; no new attempt is started by checking.';
+      },
+    });
+    await processingOperation.run({ retry_draft: true, expected_status_at: recovery.version });
   });
+  if (inFlight) {
+    const status = container.querySelector('[data-recording-observation]');
+    status.textContent = 'The recording is already processing. Its saved result will appear here automatically.';
+    processingOperation = createRecordingOperation211({
+      invoke: options => invokeTranscribe(recordingId, options), current,
+      onResult: () => retry(), onWaiting: () => {},
+      onStopped: response => { if (current()) status.textContent = response?.reason || 'Check the saved result to see the latest processing state.'; },
+    });
+    void processingOperation.run(null, true);
+  }
   if (!r.care_session_id && r.status === 'done' && Array.isArray(r.suggestions?.measurements) && r.suggestions.measurements.length) {
     try {
       const { data: patient } = await recordingRead(sb.from('patients').select('consent_given').eq('id', r.patient_id).maybeSingle());
