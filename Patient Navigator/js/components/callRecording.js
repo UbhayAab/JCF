@@ -133,9 +133,16 @@ export function recordingReviewHTML(r) {
   const p = r?.processing153;
   const phase = p && typeof p.transcript_complete === 'boolean' && typeof p.notes_complete === 'boolean'
     ? `<p role="status" data-recording-processing style="margin:8px 0;font-weight:600">${p.transcript_complete ? 'Written transcript ready.' : 'Written transcript is incomplete.'} ${p.notes_complete ? 'Draft notes are ready for your check.' : 'Notes still need checking or another processing attempt.'}</p>` : '';
+  const reviewReason = reason => {
+    if (reason !== 'The service has not confirmed a complete written transcript and note.') return reason;
+    if (!phase) return 'Check the written transcript and draft notes against the retained recording before using them.';
+    return p.transcript_complete
+      ? 'The written transcript is ready. Check the draft notes against the source before using them.'
+      : 'The written transcript is incomplete. Check the recording and draft notes before using them.';
+  };
   const rejected = Array.isArray(r?.rejected_proposals153) ? r.rejected_proposals153.filter(x => typeof x?.value === 'string').slice(0,100) : [];
   const omissions = rejected.length ? `<details style="border:1px solid var(--gold);padding:10px;border-radius:8px;margin:8px 0;overflow-wrap:anywhere"><summary>Rejected AI proposals - not used in the notes (${rejected.length})</summary><p>These are unverified proposals, not established patient facts. Check the full transcript or recording before writing your own note. This view shows at most 100 proposals.</p><ul>${rejected.map(x=>`<li><strong>Unverified AI proposal:</strong> ${esc(x.value.slice(0,300))}<br><small>${esc(String(x.reason||'Check the original source.').slice(0,220))}</small></li>`).join('')}</ul></details>` : '';
-  return phase + omissions + (r?.review?.required ? `<div role="status" style="border:1px solid var(--gold);border-radius:8px;padding:10px;margin:8px 0"><strong>Review needed - draft notes</strong><p style="margin:4px 0 0">Processing may be incomplete or some proposed facts need checking. Use the source quotes, transcript and recording before using these notes.</p>${r.review.reasons?.length ? `<ul>${r.review.reasons.map(reason=>`<li>${esc(reason)}</li>`).join('')}</ul>` : ''}</div>` : '');
+  return phase + omissions + (r?.review?.required ? `<div role="status" style="border:1px solid var(--gold);border-radius:8px;padding:10px;margin:8px 0"><strong>Review needed - draft notes</strong><p style="margin:4px 0 0">Check the draft notes before using them. Use the source quotes, transcript and recording to verify each proposed fact.</p>${r.review.reasons?.length ? `<ul>${r.review.reasons.map(reason=>`<li>${esc(reviewReason(reason))}</li>`).join('')}</ul>` : ''}</div>` : '');
 }
 
 // Today plus n days in the phone's own calendar, YYYY-MM-DD. (toISOString is
