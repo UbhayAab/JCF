@@ -11,6 +11,7 @@ import { showToast } from './components/toast.js';
 import { maybeAskForPhone } from './components/phonePrompt.js';
 import { maybeShowFeatureUpdate, renderFeatureUpdates } from './components/featureUpdates.js';
 import { renderDashboard } from './pages/dashboard.js?v=20261027b';
+import { bindProbationPresentation224 } from './components/probationPresentation224.js';
 import { renderPatients } from './pages/patients.js';
 import { renderCalls } from './pages/calls.js';
 import { renderAdmin } from './pages/admin.js';
@@ -306,6 +307,7 @@ function renderAppShell() {
     </div>
   `;
 
+  bindProbationPresentation224();
   renderSidebar();
 
   mountFreshStartHeader(document.getElementById('freshstart-header-slot'));
@@ -535,7 +537,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261111a';  // bumped on every breaking deploy
+const APP_BUILD = '20261112a';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];

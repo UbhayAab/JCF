@@ -211,6 +211,9 @@ export function renderSidebar() {
 }
 
 function showUnlockNews() {
+  // Background training refresh must not replace a clinical form or stack a
+  // second notice while the previous modal is still closing. Keep it unseen.
+  if (document.querySelector('.modal-overlay')) return;
   const news = unlockNews();
   if (!news) return;
   const learn = '<a href="#learn" class="unlock-learn">Learning Hub</a>';

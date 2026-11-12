@@ -17,6 +17,7 @@ import { icon } from './icons.js';
 import { openSessionForm, suggestNextSession } from './sessionForm.js';
 import { sanitize } from '../utils/validators.js';
 import { avatarColor, initials } from '../utils/avatar.js';
+import { routeOpen } from '../utils/probation.js';
 
 const RESOURCE_REPLIES_URL = 'https://uhesnagqbmuyqiuzfhcv.supabase.co/functions/v1/resource-replies';
 
@@ -38,7 +39,7 @@ export async function loadSaturdayCard(role, { side = false } = {}) {
   if (!el) return;
   try {
     const next = await suggestNextSession();
-    const canLog = ['admin', 'manager', 'therapist', 'nutritionist'].includes(role);
+    const canLog = ['admin', 'manager', 'therapist', 'nutritionist'].includes(role) && routeOpen('sessions', role);
     const nice = next.date.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
     const kind = next.type === 'nutrition' ? 'Nutrition' : 'Well-being';
     const lastLine = next.last
@@ -62,8 +63,10 @@ export async function loadSaturdayCard(role, { side = false } = {}) {
         </div>
         ${canLog ? `<button class="btn btn-secondary btn-sm" id="sat-log-btn">${icon('plus')}Log a session</button>` : ''}
       </div>`;
-    document.getElementById('sat-log-btn')?.addEventListener('click', () =>
-      openSessionForm({ defaults: { type: next.type }, onSaved: () => loadSaturdayCard(role, { side }) }));
+    document.getElementById('sat-log-btn')?.addEventListener('click', () => {
+      if (!routeOpen('sessions', getCurrentProfile()?.role)) return;
+      openSessionForm({ defaults: { type: next.type }, onSaved: () => loadSaturdayCard(role, { side }) });
+    });
   } catch { el.innerHTML = ''; }
 }
 

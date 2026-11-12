@@ -22,6 +22,7 @@ import { callPatientIdentity150 } from '../utils/callPatientIdentity150.js';
 import { loadSaturdayCard, loadResourceReplies, loadDocsWaitingCard } from '../components/dashCards.js';
 import { renderAdminDashboard } from './dashboardAdmin.js';
 import { mountCareNotifications } from '../components/careNotifications.js';
+import { ensureProbation, routeOpen } from '../utils/probation.js';
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 function greetingWord() { const h = new Date().getHours(); return h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening'; }
 
@@ -33,8 +34,29 @@ const OUTCOME = {
 function outcomeBadge(s) { const o = OUTCOME[s] || { label: capitalize(s || 'N/A'), tone: 'neutral' }; return `<span class="badge badge-${o.tone}"><span class="dot"></span>${o.label}</span>`; }
 function scoreBar(score) { const s = Number(score) || 0; if (!s) return '<span style="color:var(--ink-3)">Not scored</span>'; return `<span class="scorebar"><span class="track"><span class="fill" style="width:${Math.min(s, 10) * 10}%"></span></span><span class="num">${s}</span></span>`; }
 
+export function restrictDashboardActions224(container, role = getUserRole()) {
+  const quickRoutes = { 'qa-upload': 'upload', 'qa-call': 'calling', 'qa-learn': 'learn',
+    'qa-patients': role === 'nutritionist' ? 'nutrition' : 'patients', 'qa-profile': 'profile',
+    'qa-callhist': 'calls', 'qa-resources': 'resources', 'sat-log-btn': 'sessions',
+    'view-all-calls': ['nutritionist', 'therapist'].includes(role) ? 'sessions' : 'calls',
+    'open-portal': role === 'nutritionist' ? 'nutrition' : role === 'therapist' ? 'sessions' : INTAKE_ROLES.includes(role) ? 'upload' : 'calling' };
+  for (const [id, route] of Object.entries(quickRoutes)) {
+    const action = container?.querySelector('#' + id);
+    if (action && !routeOpen(route, role)) action.remove();
+  }
+  // Keep the person's own counts, but retire stale links on metric cards.
+  container?.querySelectorAll('[data-go]').forEach(action => {
+    if (routeOpen(action.dataset.go, role)) return;
+    action.removeAttribute('data-go');
+    action.classList.remove('clickable');
+    action.style.removeProperty('cursor');
+  });
+}
+
 export async function renderDashboard(container) {
   const profile = getCurrentProfile();
+  await ensureProbation();
+  if (getCurrentProfile() !== profile || container.isConnected === false) return;
   const isAdmin = isManagerOrAdmin();
   const role = getUserRole();
   const isIntake = INTAKE_ROLES.includes(role);
@@ -121,6 +143,8 @@ export async function renderDashboard(container) {
       </div>
     </div>`;
 
+  // Dashboard shortcuts obey the same training gate as menu and saved links.
+  restrictDashboardActions224(container, role);
   // quick actions
   document.getElementById('qa-upload')?.addEventListener('click', () => navigate('upload'));
   document.getElementById('qa-call')?.addEventListener('click', () => navigate('calling'));
@@ -147,6 +171,7 @@ export async function renderDashboard(container) {
     loadSaturdayCard(role), loadResourceReplies(), loadDocsWaitingCard()];
   if (isCaller) tasks.push(loadCallerAvailability());
   await Promise.all(tasks);
+  if (getCurrentProfile() === profile && container.isConnected !== false) restrictDashboardActions224(container, role);
 }
 
 async function loadCallerAvailability() {
@@ -244,8 +269,16 @@ async function renderSpecialistStats(id) {
     ...(outMine != null ? [{ ico: 'phone', cls: 'warn', num: outMine, lbl: 'To offer nutrition today', go: 'nutrition' }] : []),
     { ico: 'heart', cls: '', num: s.new_this_month || 0, lbl: 'New this month' },
     { ico: 'activity', cls: 'warn', num: s.assessments_month || 0, lbl: 'Check-ins this month' },
-  ].map(c => `<div class="stat${c.go ? ' clickable' : ''}"${c.go ? ` data-go="${c.go}" style="cursor:pointer"` : ''}><span class="stat-ico ${c.cls}">${icon(c.ico)}</span><div><div class="stat-num tnum">${c.num}</div><div class="stat-lbl">${c.lbl}</div></div></div>`).join('');
-  grid?.querySelectorAll('[data-go]').forEach(el => el.addEventListener('click', () => navigate(el.dataset.go)));
+  ].map(c => {
+    const go = c.go && routeOpen(c.go, role) ? c.go : null;
+    return `<div class="stat${go ? ' clickable' : ''}"${go ? ` data-go="${go}" style="cursor:pointer"` : ''}><span class="stat-ico ${c.cls}">${icon(c.ico)}</span><div><div class="stat-num tnum">${c.num}</div><div class="stat-lbl">${c.lbl}</div></div></div>`;
+  }).join('');
+  grid?.querySelectorAll('[data-go]').forEach(el => {
+    const go = el.dataset.go;
+    el.addEventListener('click', () => {
+      if (el.dataset.go === go && routeOpen(go, getUserRole())) navigate(go);
+    });
+  });
 }
 
 // Specialist side card: the actual people (names, numbers, context),
