@@ -23,6 +23,7 @@ import { mountHopebotRequests, digestHTML, cancerLabel, stageLabel } from '../co
 import { getCurrentUser, getCurrentProfile, isManagerOrAdmin, isImpersonating } from '../auth.js';
 import { leadKind, LEAD_LABELS, newestLeads } from '../utils/leadTriage.js';
 import { loadRoster, rosterSelectHTML, forgetRoster } from '../components/assignPicker.js';
+import { openLeadConversation223 } from '../components/leadConversation223.js';
 
 const leadMounts = new WeakMap();
 // The family's HopeBot language (sql/208 keeps 'bn'). A local copy, not an
@@ -194,8 +195,14 @@ export async function renderLeads(container) {
           ].filter(Boolean).join(' · ')}</div>`}
           ${!r.is_team && r.notes ? `<div class="due-meta" style="margin-top:6px;color:var(--ink-1);white-space:pre-wrap">${sanitize(r.notes)}</div>` : ''}
           ${r.is_team ? '' : digestHTML(digests.get(r.id))}
+          ${r.is_team ? '' : `<div style="margin-top:10px"><button type="button" class="btn btn-secondary btn-sm" data-lead-conversation="${sanitize(r.id)}">View conversation</button></div>`}
         </div>`).join('')}
       </div>`;
+    body.querySelectorAll('[data-lead-conversation]').forEach(button=>button.addEventListener('click',()=>{
+      if(!current())return;
+      const lead=rows.find(row=>row.id===button.dataset.leadConversation);
+      if(lead && !lead.is_team)openLeadConversation223(lead,{isCurrent:current});
+    }));
     body.querySelectorAll('[data-lead-assign]').forEach(sel => sel.addEventListener('change', async () => {
       if(!current())return;
       sel.disabled = true;
