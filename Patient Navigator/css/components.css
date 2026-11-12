@@ -1435,6 +1435,7 @@ button { -webkit-tap-highlight-color: transparent; }
 
 /* Medical navigation uses native hidden controls for exhausted/role-only work. */
 [data-mednav] [hidden] { display: none !important; }
+[data-manager-practice212] [hidden] { display: none !important; }
 .hdr-search[hidden] { display: none !important; }
 [data-mednav] label { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
 [data-mednav] input, [data-mednav] select, [data-mednav] textarea {

@@ -68,8 +68,9 @@ export async function renderCalls(container) {
         <h1>Call Logs</h1>
         <p class="header-subtitle" style="margin:4px 0 0">${canExport ? 'Every conversation, in one place' : 'Every conversation you have logged'}</p>
       </div>
-      <div style="display:flex;gap:9px">
+      <div style="display:flex;gap:9px;flex-wrap:wrap">
         ${canExport ? `<button class="btn btn-secondary" id="export-calls-btn">${icon('download')}Export CSV</button>` : ''}
+        ${canExport ? `<button class="btn btn-secondary" id="practice-calls-btn">${icon('phone')}Practice calls</button>` : ''}
         <button class="btn btn-primary" id="add-call-btn">${icon('plus')}Log a call</button>
       </div>
     </div>
@@ -126,6 +127,16 @@ export async function renderCalls(container) {
   container.querySelector('#filter-status')?.addEventListener('change', () => { currentPage = 1; loadCalls(); });
   container.querySelector('#filter-days')?.addEventListener('change', () => { currentPage = 1; loadCalls(); });
   container.querySelector('#add-call-btn')?.addEventListener('click', () => openCallForm({ onSaved: loadCalls }));
+  container.querySelector('#practice-calls-btn')?.addEventListener('click', async () => {
+    const account = callAccount();
+    if (!realCallManager()) return;
+    try {
+      const practice = await import('../components/managerPractice212.js?v=practice212');
+      if (account !== callAccount() || !realCallManager()) return;
+      if (typeof practice.openManagerPractice212 !== 'function') throw new Error('Reload the latest update to open Practice calls.');
+      await practice.openManagerPractice212();
+    } catch (error) { if (account === callAccount()) showToast(error.message, 'error'); }
+  });
 
   container.querySelector('#export-calls-btn')?.addEventListener('click', async () => {
     const sb = getSupabase();
