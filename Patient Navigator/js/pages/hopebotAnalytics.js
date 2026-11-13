@@ -34,9 +34,9 @@ function table(headers,rows,empty){return rows.length?'<div class="hba-table"><t
 
 export async function renderHopebotAnalytics(container){
  mounts.get(container)?.dispose();
- const account=identity(),route=window.location.hash;let root,observer,subscription,disposed=false,generation=0;
+ const account=identity(),route=window.location.hash;let root,observer,subscription,disposed=false,generation=0,reportController=null,viewGeneration=0,view='interactions';
  const current=()=>!disposed&&mounts.get(container)===controller&&container.isConnected&&root?.isConnected&&root.parentNode===container&&route===window.location.hash&&account===identity()&&allowed();
- function dispose(){if(disposed)return;disposed=true;generation++;observer?.disconnect();subscription?.unsubscribe();window.removeEventListener('hashchange',check);if(mounts.get(container)===controller){root?.remove();mounts.delete(container);}}
+ function dispose(){if(disposed)return;disposed=true;generation++;viewGeneration++;reportController?.dispose();reportController=null;observer?.disconnect();subscription?.unsubscribe();window.removeEventListener('hashchange',check);if(mounts.get(container)===controller){root?.remove();mounts.delete(container);}}
  function check(){if(!current())dispose();}
  const controller={dispose,refresh:()=>load()};mounts.set(container,controller);
  if(!allowed()||!container.isConnected){container.innerHTML='<section class="card" style="padding:20px"><h1>HopeBot analytics</h1><p role="status">Use your active manager account and exit Open as to view these aggregate results.</p><a href="#analytics">Back to Analytics</a></section>';return controller;}
@@ -44,7 +44,7 @@ export async function renderHopebotAnalytics(container){
  <style>.hba-root{min-width:0;overflow-wrap:anywhere}.hba-root .page-header{gap:16px;flex-wrap:wrap}.hba-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.hba-stat{padding:20px;min-width:0}.hba-stat h2{font-size:13px;margin:0 0 12px}.hba-stat strong{font-size:27px;display:block}.hba-stat p,.hba-note{font-size:13px;line-height:1.6;color:var(--ink-3)}.hba-section{padding:22px;margin-top:18px}.hba-section h2{margin-top:0}.hba-filters{display:flex;gap:12px;align-items:end;flex-wrap:wrap;padding:18px;margin-bottom:16px}.hba-filters label{display:grid;gap:5px}.hba-actions{display:flex;gap:8px;flex-wrap:wrap}.hba-table{overflow-x:auto}.hba-table table{width:100%;min-width:560px;border-collapse:collapse}.hba-table th,.hba-table td{text-align:left;padding:10px;border-bottom:1px solid var(--line-2);vertical-align:top}.hba-table th{font-size:12px}.hba-warning{padding:14px;border-left:4px solid var(--warn);background:var(--paper);margin:12px 0}.hba-empty{padding:14px 0;color:var(--ink-3)}.hba-source{font-size:12px;line-height:1.7}.hba-root [hidden]{display:none!important}@media(max-width:650px){.hba-grid{grid-template-columns:1fr}.hba-filters{align-items:stretch}.hba-filters label{width:100%}.hba-filters input{max-width:100%}.hba-section{padding:16px}.hba-stat strong{font-size:25px}.hba-table th,.hba-table td{padding:9px 6px}}</style>
  <div class="page-header"><div><h1>HopeBot analytics</h1><p class="header-subtitle">Invitations, observed use and recorded outcomes.</p></div><div class="hba-actions"><a class="btn btn-secondary" href="#analytics">All analytics</a><a class="btn btn-secondary" href="#hopebot-feedback">Feedback and source history</a></div></div>
  <form class="card hba-filters"><label>From date<input class="form-input" type="date" name="from" required></label><label>To date<input class="form-input" type="date" name="to" required></label><button class="btn btn-primary" type="submit">Apply dates</button><button class="btn btn-secondary" type="button" data-refresh>Refresh</button><div class="hba-actions">${[7,30,90].map(n=>'<button class="btn btn-secondary btn-sm" type="button" data-range="'+n+'">'+n+' days</button>').join('')}</div><span class="hba-note">Dates use India Standard Time.</span></form>
- <p role="status" aria-live="polite" data-message></p><div data-results></div></section>`;
+ <div class="hba-actions" role="group" aria-label="HopeBot analytics view"><button class="btn btn-secondary" type="button" data-analytics-view="interactions" aria-pressed="true">Interaction analytics</button><button class="btn btn-ghost" type="button" data-analytics-view="reports" aria-pressed="false">Report sharing</button></div><p role="status" aria-live="polite" data-message></p><div data-results></div><div data-reports234 hidden style="display:none"></div></section>`;
  root=container.firstElementChild;
  const form=root.querySelector('form'),host=root.querySelector('[data-results]'),message=root.querySelector('[data-message]');
  const active=seq=>{if(!current()){dispose();return false;}return seq===generation;};
@@ -73,17 +73,32 @@ export async function renderHopebotAnalytics(container){
   html+='<section class="card hba-section"><h2>Follow-up and feedback</h2><div class="hba-grid">'+card('Observed follow-up work',fmt(sum(p.followup)),Object.entries(p.followup).map(([k,v])=>k+': '+fmt(v)).join(' · ')||'No work in this source-day window.')+card('Saved-call usage reports',fmt(p.feedback.yes+p.feedback.no+p.feedback.unknown),'Yes '+fmt(p.feedback.yes)+' · No '+fmt(p.feedback.no)+' · Not asked/unknown '+fmt(p.feedback.unknown)+'. Selected by feedback last-saved date, not an observed bot event.')+card('Imported source rows, all time',fmt(p.history.total_source_rows),fmt(p.history.dated_rows_in_window)+' dated history revisions in this window; '+fmt(p.history.date_unknown)+' revisions have unknown/ambiguous dates. Historical identities are not assumed verified.')+'</div><p class="hba-note">Support-request outcomes for requests opened in this window: '+sanitize(Object.entries(p.support).map(([k,v])=>k.replaceAll('_',' ')+': '+fmt(v)).join(' · ')||'No recorded requests.')+'. These are staff/bot request dispositions, not proof that a feature produced a clinical benefit.</p><a class="btn btn-secondary" href="#hopebot-feedback">Open feedback and source history</a></section>';
   host.innerHTML=html;
  }
+ async function loadReportPanel(from,to){
+  const token=++viewGeneration,panel=root.querySelector('[data-reports234]');
+  if(reportController?.current()){await reportController.load(from,to);return;}
+  panel.textContent='Loading report sharing...';
+  try{const module=await import('../components/reportAnalytics234.js');if(!current()||view!=='reports'||token!==viewGeneration)return;reportController=module.mountReportAnalytics234(panel,{from,to,isCurrent:()=>current()&&view==='reports'});}
+  catch{if(current()&&view==='reports'&&token===viewGeneration)panel.textContent='Report sharing could not load. Refresh to retry.';}
+ }
  async function load(){
   if(!current())return;const from=form.elements.from.value,to=form.elements.to.value;
   if(!validAnalyticsWindow(from,to)){message.textContent='Choose valid dates up to today, with a window of at most 366 days.';return;}
+  if(view==='reports'){generation++;message.textContent='Report sharing uses the selected recorded period.';await loadReportPanel(from,to);return;}
   const seq=++generation;host.innerHTML='';message.textContent='Loading authorized aggregate results...';
   try{const {data,error}=await getSupabase().functions.invoke('hopebot-analytics',{body:{from,to}});if(error)throw new Error('request');const result=responseData(data,from,to);if(!active(seq))return;paint(result);message.textContent='Results for '+from+' to '+to+' (IST).';}
   catch{if(!active(seq))return;host.innerHTML='<section class="card hba-section"><h2>Analytics could not be confirmed</h2><p role="alert">Check your active manager sign-in and connection, then refresh. No zero-usage conclusion was drawn.</p></section>';message.textContent='Results unavailable. Refresh to retry.';}
  }
  form.addEventListener('submit',e=>{e.preventDefault();load();});
- form.addEventListener('input',()=>{if(!current())return;generation++;host.innerHTML='';message.textContent='Dates changed. Apply them to load matching results.';});
+ form.addEventListener('input',()=>{if(!current())return;generation++;viewGeneration++;host.innerHTML='';reportController?.invalidate();message.textContent='Dates changed. Apply them to load matching results.';});
  form.querySelector('[data-refresh]').onclick=()=>load();
  form.querySelectorAll('[data-range]').forEach(b=>b.onclick=()=>{if(current()){setRange(Number(b.dataset.range));load();}});
+ root.querySelectorAll('[data-analytics-view]').forEach(button=>button.onclick=()=>{
+  if(!current())return;view=button.dataset.analyticsView;generation++;viewGeneration++;
+  reportController?.dispose();reportController=null;root.querySelector('[data-reports234]').replaceChildren();
+  host.hidden=view!=='interactions';host.style.display=view==='interactions'?'':'none';
+  const reports=root.querySelector('[data-reports234]');reports.hidden=view!=='reports';reports.style.display=view==='reports'?'':'none';
+  root.querySelectorAll('[data-analytics-view]').forEach(b=>{b.setAttribute('aria-pressed',String(b.dataset.analyticsView===view));b.className='btn '+(b.dataset.analyticsView===view?'btn-secondary':'btn-ghost');});load();
+ });
  setRange(30);
  subscription=getSupabase().auth.onAuthStateChange((_event,session)=>{if(!session?.user?.id||session.user.id!==getCurrentUser()?.id||account!==identity())dispose();})?.data?.subscription;
  observer=new MutationObserver(check);observer.observe(document.body,{childList:true,subtree:true});window.addEventListener('hashchange',check);

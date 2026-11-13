@@ -606,7 +606,7 @@ function showPatientForm(existing = null, onSaved = null) {
 // ============================================================
 // DETAIL: WHO · ACTION · IMPACT
 // ============================================================
-const TABS = ['overview', 'support', 'wellbeing', 'calls', 'documents', 'notes', 'hopebot','merged-history'];
+const TABS = ['overview', 'support', 'wellbeing', 'calls', 'documents', 'reports', 'notes', 'hopebot','merged-history'];
 let activeTab = 'overview';
 
 // Which tab the URL is asking for. The tab lives in the hash as a query
@@ -813,6 +813,7 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
         <button class="dtab ${activeTab === 'wellbeing' ? 'active' : ''}" data-tab="wellbeing">${icon('activity')}Wellbeing <span class="cnt">${assessments.length}</span></button>
         <button class="dtab ${activeTab === 'calls' ? 'active' : ''}" data-tab="calls">${icon('phone')}Calls <span class="cnt">${calls.length}</span></button>
         <button class="dtab ${activeTab === 'documents' ? 'active' : ''}" data-tab="documents">${icon('fileText')}Documents <span class="cnt">${docCount}</span></button>
+        <button class="dtab ${activeTab === 'reports' ? 'active' : ''}" data-tab="reports">${icon('fileText')}Report history</button>
         <!-- 08/09, Ground POC lead: "add a Notes section under Ground POC
              access ... allow the CGMP team to review the notes before
              contacting the patient". This is where the ground team writes;
@@ -957,6 +958,13 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
       else if (activeTab === 'support') renderSupportTab(tabContent, patient, services, sb, reload);
       else if (activeTab === 'wellbeing') renderWellbeingTab(tabContent, patient, services, assessments, sb, reload);
       else if (activeTab === 'documents') renderDocumentsTab(tabContent, patient, sb, reload);
+      else if (activeTab === 'reports') {
+        const current = () => stillHere() && activeTab === 'reports' && tabContent.isConnected;
+        tabContent.textContent = 'Checking report history...';
+        import('../components/reportHistory234.js').then(m => {
+          if (current()) m.mountReportHistory234(tabContent, patientId, {isCurrent: current});
+        }).catch(() => {if (current()) tabContent.textContent = 'Report history could not load. Refresh to try again.';});
+      }
       else if (activeTab === 'notes') renderNotesTab(tabContent, patient);
       else if (activeTab === 'merged-history') renderMergedHistory154(tabContent,patientId,{isCurrent:()=>stillHere()&&activeTab==='merged-history'});
       else if (activeTab === 'hopebot') {
