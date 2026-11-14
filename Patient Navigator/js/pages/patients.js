@@ -998,7 +998,9 @@ async function renderPatientDetail(container, patientId, keepTab = false) {
   } catch (err) {
     console.error('Patient detail error:', err);
     if (!stillHere()) return;
-    container.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Patient not found</h4><p>${sanitize(err.message)}</p></div>`;
+    // Fixboard 243: outside the care scope is not "not found"; say who can open it.
+    const scope = /care scope/i.test(err?.message || '');
+    container.innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>${scope ? 'This record is not open to you' : 'Patient not found'}</h4><p>${sanitize(err.message)}</p>${scope ? '<p>It opens for the mentor who looks after this family and for managers. Ask them for anything you need from it.</p>' : ''}</div>`;
   }
 }
 

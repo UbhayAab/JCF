@@ -17,6 +17,7 @@ import { icon } from '../components/icons.js';
 import { sanitize } from '../utils/validators.js';
 import { showModal, closeModal } from '../components/modal.js';
 import { loadCallContext } from '../components/callContext.js';
+import { withOpenAccess, openRecordHTML } from '../components/openAccess.js';
 import { openDocumentViewer, describeDocuments, fmtDayTime, daysAgo } from '../components/docViewer.js';
 import { uploadStatusLabel } from '../utils/docClasses.js';
 import { hasLeadMeasurement, normalizeLeadRows, leadMeasurementFields, readLeadMeasurement } from '../utils/leadMeasurements.js';
@@ -180,7 +181,7 @@ async function checkPhoneRPC(sb, phone) {
   try {
     const { data, error } = await sb.rpc('check_phone', { p_phone: phone });
     if (error) throw error;
-    return data || { found: false };
+    return withOpenAccess(sb, data || { found: false });
   } catch { return { found: false, unchecked: true }; }
 }
 
@@ -192,7 +193,7 @@ function phoneStatusHTML(st) {
   return `<div class="card" style="background:rgba(199,134,47,.08);border-color:rgba(199,134,47,.3);margin-top:8px;padding:10px 12px">
     <div style="font-weight:700">Already registered: ${sanitize(st.full_name || '')} · ${sanitize(st.patient_code || '')}</div>
     <div style="font-size:13px;color:var(--color-text-muted)">${st.total_calls || 0} calls (${st.connected_calls || 0} connected) · last call: ${last} · ${st.messages_sent || 0} WhatsApp messages sent${lastMsg ? ' · last: ' + lastMsg : ''}${st.assigned_mentor ? ' · with ' + sanitize(st.assigned_mentor) : ''}${st.is_blacklisted ? ' · BLOCKED' : ''}</div>
-    ${st.patient_id ? `<a href="#patients/${st.patient_id}" style="font-size:13px;color:var(--primary-ink);font-weight:600">Open their record →</a>` : ''}
+    ${openRecordHTML(st)}
   </div>`;
 }
 
