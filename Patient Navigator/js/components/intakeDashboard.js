@@ -2,6 +2,7 @@
 import { getSupabase } from '../supabase.js';
 import { getCurrentUser, getCurrentProfile, getUserRole } from '../auth.js';
 import { sanitize } from '../utils/validators.js';
+import { mountHopeAiFamilies } from './hopeAiFamilies.js';
 
 const counts = ['uploaded','attempted','reached','not_attempted','attempted_not_reached','attempted_24h','attempted_48h','reached_48h','untouched_over_48h','followups_due'];
 const summaryCounts = ['total_uploaded','attempted','reached','not_attempted','attempted_not_reached','uploaded_today','attempted_today','reached_today','untouched_over_48h','followups_due'];
@@ -71,7 +72,7 @@ export async function renderIntakeDashboard(container,{sb=getSupabase(),mountNot
     <section aria-label="Your daily intake statistics"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
       <label for="intake-stats-days">Daily history</label><select class="form-select" id="intake-stats-days" style="width:auto"><option value="7">Last 7 days</option><option value="14" selected>Last 14 days</option><option value="30">Last 30 days</option></select>
       <button class="btn btn-secondary btn-sm" type="button" data-intake-refresh>Refresh statistics</button>
-    </div><div data-intake-stats aria-live="polite"></div></section></div>`;
+    </div><div data-intake-stats aria-live="polite"></div></section><div id="hope-ai-families" style="margin-top:16px"></div></div>`;
   const host=container.querySelector('[data-intake-stats]'),select=container.querySelector('#intake-stats-days');
   const active=()=>container.isConnected&&container.querySelector('[data-intake-stats]')===host&&getCurrentUser()?.id===owner&&getCurrentProfile()?.id===profile&&['ground_poc','uploader'].includes(getUserRole());
   const load=async()=>{
@@ -91,5 +92,7 @@ export async function renderIntakeDashboard(container,{sb=getSupabase(),mountNot
     } finally {if(current())host.setAttribute('aria-busy','false');}
   };
   select.addEventListener('change',load);container.querySelector('[data-intake-refresh]').addEventListener('click',load);
-  await Promise.all([load(),Promise.resolve().then(()=>active()?mountNotices():undefined)]);
+  // Fixboard 242: Hope AI use by the families this person registered.
+  const hopeAi=mountHopeAiFamilies(container.querySelector('#hope-ai-families'),{sb,active}).catch(()=>{});
+  await Promise.all([load(),hopeAi,Promise.resolve().then(()=>active()?mountNotices():undefined)]);
 }
