@@ -23,10 +23,11 @@ export async function withOpenAccess(sb, st) {
   } catch { return { ...st, can_open: null }; }
 }
 
-// Who to ask when the record is not this person's to open.
+// Who to ask when the record is not this person's to open. .due-meta is one
+// line with an ellipsis by default, which cut this sentence off on a phone.
 export function notYoursHTML(st) {
   const mentor = st?.assigned_mentor ? sanitize(st.assigned_mentor) : '';
-  return `<div class="due-meta" style="margin-top:4px">${mentor
+  return `<div class="due-meta" style="margin-top:4px;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere">${mentor
     ? `Their record is looked after by ${mentor}, so it opens only for ${mentor} and managers. Ask ${mentor} or a manager for anything you need from it.`
     : 'Their record opens only for the mentor who looks after them and managers. Ask a manager for anything you need from it.'}</div>`;
 }
