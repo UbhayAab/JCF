@@ -23,7 +23,7 @@ import { icon } from './icons.js';
 import { mountCallMeasurements } from './measurements.js';
 import { verifiedCareCallDate, recordingResultForForm } from '../utils/careFollowup.js';
 import * as savedRecordingRead from '../utils/careFollowup.js';
-import { savedRetry153, retry153 } from '../utils/recordingProcessing153.js';
+import { savedRetry153, retry153, retryControl153 } from '../utils/recordingProcessing153.js';
 import { createRecordingOperation211 } from '../utils/recordingOperation211.js';
 import { createSharedRecordingStore, SHARE_TTL_MS } from '../utils/sharedRecording.js';
 
@@ -132,7 +132,7 @@ export function noteHTML(r) {
 export function recordingReviewHTML(r) {
   const p = r?.processing153;
   const phase = p && typeof p.transcript_complete === 'boolean' && typeof p.notes_complete === 'boolean'
-    ? `<p role="status" data-recording-processing style="margin:8px 0;font-weight:600">${p.transcript_complete ? 'Written transcript ready.' : 'Written transcript is incomplete.'} ${p.notes_complete ? 'Draft notes are ready for your check.' : 'Notes still need checking or another processing attempt.'}</p>` : '';
+    ? `<p role="status" data-recording-processing style="margin:8px 0;font-weight:600">${p.transcript_complete ? 'Written transcript ready.' : 'Written transcript is incomplete.'} ${p.notes_complete ? 'Draft notes are ready for your check.' : p.notes_drafted === true ? 'Draft notes are written. Check the points listed below before using them.' : 'Notes still need checking or another processing attempt.'}</p>` : '';
   const reviewReason = reason => {
     if (reason !== 'The service has not confirmed a complete written transcript and note.') return reason;
     if (!phase) return 'Check the written transcript and draft notes against the retained recording before using them.';
@@ -536,7 +536,7 @@ export function mountRecordingSection(el, ctx) {
           <div style="max-height:260px;overflow-y:auto;margin-top:6px">${transcripts.get(rec.recordingId).map((t) => `<p style="font:var(--t-xs);margin:0 0 4px"><strong>${t.speaker === 'caller' ? 'You' : t.speaker === 'family' ? 'Family' : 'Someone'}:</strong> ${esc(t.text)}</p>`).join('')}</div></details>`
           : btn('rec-read', 'Read the transcript', 'btn-ghost', 'fileText')}
         <div id="rec-measurements"></div>
-        ${r.retry153 ? btn('rec-reprocess', 'Try processing again', 'btn-primary', 'refresh') + small('Uses the retained recording for one new attempt. Your typed notes are kept.') : ''}
+        ${r.retry153 ? retryControl153(r.processing153, 'id="rec-reprocess"') : ''}
         ${btn('rec-remove', 'Remove recording', 'btn-ghost', 'trash')}`, r.review?.required ? 'warn' : 'ok');
     } else if (rec.status === 'processing_ready' && rec.result?.retry153) {
       el.innerHTML = card(small(esc(rec.error)) + btn('rec-reprocess', 'Start processing', 'btn-primary', 'refresh')
@@ -1089,7 +1089,7 @@ export async function renderRecordingViewer(container, recordingId) {
         : `<p style="color:var(--ink-3);margin:0">${r.status === 'done' ? 'No saved transcript text is available for this recording.' : 'No transcript yet.'}</p>`}
       ${n || saved.points.length || saved.draft_summary ? `<div style="margin:0 0 10px"><p style="font:var(--t-xs);color:var(--ink-3);margin:0">Call note (AI, not checked by a person):</p>${noteHTML(saved)}${n && saved.show_fallback ? noteHTML({ points: saved.points, draft_summary: saved.draft_summary }) : ''}</div>` : ''}
       ${r.status === 'failed' ? '<p role="status">The last processing attempt did not finish. The saved transcript and earlier draft below have been kept.</p>' : ''}
-      <p role="status" data-recording-observation></p><div id="rec-past-measurements"></div>${recovery ? '<button type="button" class="btn btn-primary" data-recording-reprocess>Try processing again</button><p>Uses the retained recording for one new attempt. Saved call notes are kept.</p><p role="status" data-reprocess-status></p>' : ''}<button type="button" class="btn btn-ghost" data-recording-retry>Check saved result</button>`;
+      <p role="status" data-recording-observation></p><div id="rec-past-measurements"></div>${recovery ? retryControl153(saved.processing153, 'data-recording-reprocess') + '<p role="status" data-reprocess-status></p>' : ''}<button type="button" class="btn btn-ghost" data-recording-retry>Check saved result</button>`;
   container.querySelector('[data-recording-retry]').addEventListener('click', retry);
   container.querySelector('[data-recording-reprocess]')?.addEventListener('click', async event => {
     if (!current()) return;

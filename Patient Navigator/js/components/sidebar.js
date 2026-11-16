@@ -60,6 +60,9 @@ const NAV_ITEMS = [
       { id: 'upload',    label: 'Upload leads & docs', icon: 'upload', route: 'upload',  roles: UPLOAD_ROLES },
       { id: 'intake',    label: 'Intake report',  icon: 'fileText',  route: 'intake',    roles: UPLOAD_ROLES },
       { id: 'analytics', label: 'Analytics',      icon: 'chart',     route: 'analytics', roles: ['admin', 'manager', 'content'] },
+      // Fixboard #250: restricted report insights. Shown only to the named
+      // accounts sql/255 lists, on their own login; the server refuses others.
+      { id: 'report-insights', label: 'Report insights', icon: 'fileText', route: 'report-insights', roles: ['admin', 'manager'], focus250: true },
       { id: 'exports',   label: 'Data room',      icon: 'download',  route: 'exports',   roles: ['admin', 'manager', 'content'] },
       { id: 'learn',     label: 'Learning Hub',   icon: 'book',      route: 'learn',     roles: CARE_ROLES },
     ],
@@ -78,6 +81,42 @@ const NAV_ITEMS = [
     ],
   },
 ];
+
+// Fixboard #250: per-account focus (sql/255 my_focus250). A listed account can
+// open Report insights, and may start from a short menu with everything else
+// under More. The role still decides every permission; this only reorders.
+// Read once per signed-in account; "Open as" always shows the full menu.
+let focus250 = { key: null, value: null, pending: false };
+const ownLogin250 = () => !isImpersonating() && !!getRealProfile()?.id && getRealProfile()?.id === getCurrentProfile()?.id;
+function currentFocus250() {
+  const key = getRealProfile()?.id || null;
+  if (!key || !ownLogin250()) return null;
+  if (focus250.key === key) return focus250.value;
+  if (!focus250.pending) {
+    focus250 = { key: null, value: null, pending: true };
+    getSupabase().rpc('my_focus250').then(({ data, error }) => {
+      if (error) { focus250 = { key: null, value: null, pending: false }; return; }  // retried on the next redraw
+      const valid = data && data.version === 1 && typeof data.report_insights === 'boolean'
+        && (data.menu === null || (Array.isArray(data.menu) && data.menu.length <= 20 && data.menu.every((m) => typeof m === 'string' && /^[a-z0-9/-]{1,40}$/.test(m))));
+      focus250 = { key, value: valid ? data : { report_insights: false, menu: null }, pending: false };
+      if (getRealProfile()?.id === key && document.getElementById('sidebar')) renderSidebar();
+    }, () => { focus250 = { key: null, value: null, pending: false }; });  // retried on the next redraw
+  }
+  return null;
+}
+
+function navItemHTML(item, active) {
+  return `
+          <button class="nav-item ${active === item.route ? 'active' : ''}"
+                  data-route="${item.route}" id="nav-${item.id}" aria-current="${active === item.route ? 'page' : 'false'}">
+            ${icon(item.icon)}
+            <span>${item.label}</span>
+            ${item.id === 'concerns' ? '<span class="nav-badge" id="navcount-concerns" style="display:none"></span>' : ''}
+            ${item.id === 'leads' ? '<span class="nav-badge" id="navcount-leads" style="display:none" title="Families waiting for the call HopeBot promised"></span>' : ''}
+            ${item.id === 'referrals' ? '<span class="nav-badge" id="navcount-referrals" style="display:none" title="Referral forms whose family no call has reached yet"></span>' : ''}
+            ${item.id === 'doccollect' ? '<span class="nav-badge" id="navcount-doccollect" style="display:none" title="Families whose document collection call is overdue"></span>' : ''}
+          </button>`;
+}
 
 function getInitials(name) {
   if (!name) return '?';
@@ -110,29 +149,33 @@ export function renderSidebar() {
   const sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
 
-  const navHTML = NAV_ITEMS.map(section => {
-    // On probation (Fixboard #23) only the open tabs show: hidden, not greyed out.
-    const visibleItems = section.items.filter(item => item.roles.includes(role) && routeOpen(item.route, role)
-      && (item.id !== 'hopebot-feedback' || (!isImpersonating() && getRealProfile()?.is_active === true
-        && ['admin', 'manager'].includes(getRealProfile()?.role) && (!getRealProfile()?.ends_on || getRealProfile().ends_on >= today))));
-    if (visibleItems.length === 0) return '';
-    return `
+  const focus = currentFocus250();
+  // On probation (Fixboard #23) only the open tabs show: hidden, not greyed out.
+  const visibleIn = (section) => section.items.filter(item => item.roles.includes(role) && routeOpen(item.route, role)
+    && (item.id !== 'hopebot-feedback' || (!isImpersonating() && getRealProfile()?.is_active === true
+      && ['admin', 'manager'].includes(getRealProfile()?.role) && (!getRealProfile()?.ends_on || getRealProfile().ends_on >= today)))
+    && (!item.focus250 || focus?.report_insights === true));
+  const sectionHTML = (title, items) => items.length ? `
       <div class="nav-section">
-        <div class="nav-section-title">${section.section}</div>
-        ${visibleItems.map(item => `
-          <button class="nav-item ${active === item.route ? 'active' : ''}"
-                  data-route="${item.route}" id="nav-${item.id}" aria-current="${active === item.route ? 'page' : 'false'}">
-            ${icon(item.icon)}
-            <span>${item.label}</span>
-            ${item.id === 'concerns' ? '<span class="nav-badge" id="navcount-concerns" style="display:none"></span>' : ''}
-            ${item.id === 'leads' ? '<span class="nav-badge" id="navcount-leads" style="display:none" title="Families waiting for the call HopeBot promised"></span>' : ''}
-            ${item.id === 'referrals' ? '<span class="nav-badge" id="navcount-referrals" style="display:none" title="Referral forms whose family no call has reached yet"></span>' : ''}
-            ${item.id === 'doccollect' ? '<span class="nav-badge" id="navcount-doccollect" style="display:none" title="Families whose document collection call is overdue"></span>' : ''}
-          </button>
-        `).join('')}
+        <div class="nav-section-title">${title}</div>
+        ${items.map(item => navItemHTML(item, active)).join('')}
       </div>
-    `;
-  }).join('');
+    ` : '';
+  let navHTML;
+  if (Array.isArray(focus?.menu)) {
+    // A focused account (Fixboard #250): its own views first, the rest one tap away.
+    const all = NAV_ITEMS.flatMap(section => visibleIn(section));
+    const mine = focus.menu.map(id => all.find(item => item.id === id)).filter(Boolean);
+    const rest = all.filter(item => !mine.includes(item));
+    const restOpen = rest.some(item => item.route === active);
+    navHTML = sectionHTML('Your views', mine) + (rest.length ? `
+      <details class="nav-section nav-more250" ${restOpen ? 'open' : ''}>
+        <summary class="nav-section-title" style="cursor:pointer">More (${rest.length})</summary>
+        ${rest.map(item => navItemHTML(item, active)).join('')}
+      </details>` : '');
+  } else {
+    navHTML = NAV_ITEMS.map(section => sectionHTML(section.section, visibleIn(section))).join('');
+  }
 
   sidebar.innerHTML = `
     <div class="sidebar-header">
@@ -327,7 +370,7 @@ function renderBottomNav(role, active) {
   const isManagerOrAdminRole = ['admin', 'manager'].includes(role);
   const isIntakeRole = INTAKE_ROLES.includes(role);
   const isNutritionist = role === 'nutritionist';
-  const items = role === 'medical_navigator'
+  let items = role === 'medical_navigator'
     ? [{ id: 'medical-navigation', label: 'Medical', route: 'medical-navigation', icon: 'fileText' }, { id: 'profile', label: 'Profile', route: 'profile', icon: 'user' }]
     : isNutritionist
     ? [
@@ -352,6 +395,16 @@ function renderBottomNav(role, active) {
           ? { id: 'team',    label: 'Team',    route: 'team',    icon: 'userPlus' }
           : { id: 'profile', label: 'Profile', route: 'profile', icon: 'user' },
       ];
+
+  // A focused account (Fixboard #250): its first four views, then Profile.
+  const focus = currentFocus250();
+  if (Array.isArray(focus?.menu) && role !== 'medical_navigator') {
+    const SHORT = { dashboard: 'Home', patients: 'Patients', analytics: 'Analytics', 'report-insights': 'Reports', exports: 'Data', calls: 'Logs', calling: 'Call', brief: 'Today' };
+    const all = NAV_ITEMS.flatMap(s => s.items).filter(i => i.roles.includes(role) && i.id !== 'hopebot-feedback' && (!i.focus250 || focus.report_insights === true));
+    const picked = focus.menu.map(id => all.find(i => i.id === id)).filter(Boolean).slice(0, 4)
+      .map(i => ({ id: i.id, label: SHORT[i.id] || i.label, route: i.route, icon: i.icon }));
+    if (picked.length) items = [...picked, { id: 'profile', label: 'Profile', route: 'profile', icon: 'user' }];
+  }
 
   // On probation (Fixboard #23): only open tabs, and the Learning Hub in reach.
   let shown = items.filter(it => routeOpen(it.route, role));

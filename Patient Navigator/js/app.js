@@ -537,7 +537,7 @@ async function maybeAutoBuild() {
 }
 
 // ---- Boot app shell and router ----
-const APP_BUILD = '20261114c';  // bumped on every breaking deploy
+const APP_BUILD = '20261116a';  // bumped on every breaking deploy
 let appBooted = false;
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 const CARE_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist', 'content'];
@@ -600,6 +600,9 @@ async function init() {
   registerRoute('admin', (c, p) => renderAdmin(c, p), { requiresAuth: true, roles: ['admin', 'manager'] });
   registerRoute('analytics', (c) => renderAnalytics(c), { requiresAuth: true, roles: ['admin', 'manager', 'content'] });
   registerRoute('analytics/hopebot', (c) => import('./pages/hopebotAnalytics.js').then(m => m.renderHopebotAnalytics(c)), { requiresAuth: true, roles: ['admin', 'manager'] });
+  // Fixboard #250: restricted report insights. sql/255 refuses every account
+  // that is not listed; the page also requires the person's own login.
+  registerRoute('report-insights', (c) => import('./pages/reportInsights250.js').then(m => m.renderReportInsights250(c)), { requiresAuth: true, roles: ['admin', 'manager'] });
   registerRoute('calling', (c) => renderCalling(c), { requiresAuth: true, roles: CARE_ROLES });
   registerRoute('team', (c) => renderTeam(c), { requiresAuth: true, roles: ['admin', 'manager'] });
   registerRoute('circles', (c) => import('./components/circleMessages.js').then(m=>{

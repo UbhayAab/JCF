@@ -7,7 +7,22 @@ export function processing153(value) {
   if (!finish(value.transcript_finish) || !finish(value.note_finish)
       || value.transcript_complete && (value.transcript_finish !== 'STOP' || value.audio_coverage_confirmed !== true)
       || value.notes_complete && (!value.transcript_complete || value.note_finish !== 'STOP' || !value.coverage_confirmed)) return null;
-  return { transcript_complete: value.transcript_complete, notes_complete: value.notes_complete && value.review_checked === true };
+  // notes_drafted: the whole source was written and every note window finished.
+  // A draft can still be held for checking (notes_complete false); another
+  // processing attempt then usually flags the same lines and spends 1 of 3
+  // attempts, so the screens offer it only as a secondary choice (#211).
+  const notesDrafted = value.transcript_complete && value.note_finish === 'STOP'
+    && value.coverage_confirmed === true && value.review_checked === true;
+  return { transcript_complete: value.transcript_complete, notes_complete: value.notes_complete && value.review_checked === true,
+    notes_drafted: notesDrafted };
+}
+// Retry control for a held or unfinished draft. Primary only when processing
+// itself did not finish; a finished draft that needs checking keeps it quiet.
+export function retryControl153(p, attrs) {
+  const drafted = p?.notes_drafted === true;
+  return drafted
+    ? `<button type="button" class="btn btn-ghost btn-sm" ${attrs}>Process again</button><p style="font:var(--t-xs);color:var(--ink-3);margin:2px 0 8px">Only if the transcript is cut off or wrong. The transcript and notes were written in full; processing again usually flags the same points and uses one of the recording's 3 attempts. Your notes are kept.</p>`
+    : `<button type="button" class="btn btn-primary btn-sm" ${attrs}>Try processing again</button><p style="font:var(--t-xs);color:var(--ink-3);margin:2px 0 8px">The transcript or notes are not complete. Uses the retained recording for one new attempt. Your notes are kept.</p>`;
 }
 export function retry153(value) {
   return value?.allowed === true && typeof value.version === 'string' && value.version.length <= 80
