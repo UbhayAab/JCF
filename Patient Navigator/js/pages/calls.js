@@ -595,7 +595,10 @@ export async function openEditCall(c) {
     // Decided from the STORED outcome, not the box: she may already have
     // switched it to Connected herself before uploading (the #36 flow), and the
     // stored attempt's minutes and next try still have to go.
-    const reached = NOT_REACHED.includes(c.dial_status) && box('ec-status').value === 'connected';
+    // A held draft (#211) only adds notes and an empty duration: never the stored
+    // attempt's minutes or next try, and never the follow-up date.
+    const draftOnly = result?.draft_only === true;
+    const reached = !draftOnly && NOT_REACHED.includes(c.dial_status) && box('ec-status').value === 'connected';
     const mins = result?.durationS ? Math.max(1, Math.ceil(result.durationS / 60)) : null;
     if (mins && (reached || !Number(box('ec-duration').value))) {
       box('ec-duration').value = String(mins);
@@ -614,6 +617,7 @@ export async function openEditCall(c) {
     fillEmpty('ec-strategy', v('next_mentor_note'), 'Note for the next caregiver mentor');
     fillEmpty('ec-fb-patient', v('patient_feedback'), 'Feedback from the patient');
     fillEmpty('ec-fb-caregiver', v('caregiver_feedback'), 'Feedback from the caregiver');
+    if (draftOnly) return filled;
     // The portal's rule: a connected call rests at least 7 days, anything else 3.
     setFollowupBounds();
     const day = recording.suggestedFollowup(s, result?.call_day);

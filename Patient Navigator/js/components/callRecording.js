@@ -24,6 +24,7 @@ import { mountCallMeasurements } from './measurements.js';
 import { verifiedCareCallDate, recordingResultForForm } from '../utils/careFollowup.js';
 import * as savedRecordingRead from '../utils/careFollowup.js';
 import { savedRetry153, retry153, retryControl153 } from '../utils/recordingProcessing153.js';
+import { NOTE_HEADS, noteDay, draftNoteText, DRAFT_NOT_CHECKED } from '../utils/callNote211.js';
 import { createRecordingOperation211 } from '../utils/recordingOperation211.js';
 import { createSharedRecordingStore, SHARE_TTL_MS } from '../utils/sharedRecording.js';
 
@@ -101,15 +102,6 @@ export const RECORDING_WINDOW_DAYS = 7;
 
 // ---------------------------------------------------------------- the call note (prompt v3, Fixboard #36)
 // The headings match the note text call-transcribe writes (guard.ts composeNote).
-const NOTE_HEADS = [['condition', 'Condition and symptoms'], ['treatment', 'Treatment'], ['reports', 'Reports mentioned'],
-  ['needs', 'Needs and requests'], ['follow_ups', 'Follow-ups'], ['other', 'Other']];
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-function noteDay(iso) {
-  const d = new Date(`${iso}T00:00:00Z`);
-  return Number.isFinite(d.getTime()) ? `${WEEKDAYS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}` : '';
-}
-
 // The note, section by section, for the box. A result from before v3 has no
 // note: its short points are shown instead.
 export function noteHTML(r) {
@@ -167,6 +159,9 @@ export function appendNote(existing, note) {
   const mine = String(existing || '').trim();
   const add = String(note || '').trim();
   if (!add || mine.includes(add)) return mine;
+  // Never stack a second held draft under the first (#211): staff may already be
+  // correcting it. A newer draft stays in the recording box to compare.
+  if (add.startsWith(DRAFT_NOT_CHECKED) && mine.includes(DRAFT_NOT_CHECKED)) return mine;
   return mine ? `${mine}\n\n${NOTE_FROM_RECORDING}\n${add}` : `${NOTE_FROM_RECORDING}\n${add}`;
 }
 
@@ -520,7 +515,10 @@ export function mountRecordingSection(el, ctx) {
           <span style="font:var(--t-xs);color:var(--ink-2)" role="status">${rec.status === 'uploading' ? `Uploading ${esc(rec.fileName)}...` : 'Preparing the written transcript and notes. Keep this form open; you can continue filling it.'}</span></div>`);
     } else if (rec.status === 'done' && rec.result) {
       const r = rec.result;
-      const filled = sessionMode ? 'Your human notes were kept. Review this AI draft and the transcript before using any of it.' : r.auto_apply === false ? 'Nothing was filled automatically. Listen, check the transcript and write the verified notes in the form.' : (rec.applied || []).length ? `Filled in below: ${esc(rec.applied.join(', '))}. Check them before you save.` : 'Nothing new to fill in: the form already had your answers.';
+      const filled = sessionMode ? 'Your human notes were kept. Review this AI draft and the transcript before using any of it.' : r.auto_apply === false ? ((rec.applied || []).some((l) => /notes/i.test(l))
+        ? 'The AI draft is now in the notes below, marked NOT checked. Correct it there before you save. Call outcome, condition, needs and the next call date are left for you to choose.'
+        : draftNoteText(r) ? 'An earlier AI draft is already in the notes below, so this one was not added. Compare it with this draft and correct the notes before you save.'
+        : 'Nothing was filled automatically. Listen, check the transcript and write the verified notes in the form.') : (rec.applied || []).length ? `Filled in below: ${esc(rec.applied.join(', '))}. Check them before you save.` : 'Nothing new to fill in: the form already had your answers.';
       const note = noteHTML(r);
       // Only when it was actually filled: a condition she had already chosen is never replaced.
       const critical = r.suggestions?.condition?.value === 'critical' && r.suggestions.condition.unverified
@@ -713,7 +711,14 @@ export function mountRecordingSection(el, ctx) {
         transcripts.set(id, Array.isArray(res.transcript) ? res.transcript : []);
         const result = recordingResultForForm(res, ctx.get().durationS || null);
         let applied = [];
-        try { if (!sessionMode && result.auto_apply !== false) applied = ctx.apply(result) || []; }
+        try {
+          if (!sessionMode && result.auto_apply !== false) applied = ctx.apply(result) || [];
+          else if (!sessionMode) {
+            // Held draft: only the notes, as a marked draft. No structured suggestions.
+            const text = draftNoteText(result);
+            if (text) applied = ctx.apply({ summary: text, suggestions: {}, durationS: result.durationS, draft_only: true }) || [];
+          }
+        }
         catch (e) { console.warn('[recording] could not fill the form:', e); }
         update({ status: 'done', result, applied });
       },
