@@ -33,7 +33,7 @@
 //                  the exact message before it goes.
 // ============================================================
 
-import { getSupabase } from '../supabase.js';
+import { getSupabase, mustWrite } from '../supabase.js';
 import { getCurrentProfile } from '../auth.js';
 import { showModal, closeModal } from './modal.js';
 import { showToast } from './toast.js';
@@ -514,16 +514,19 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
     el.querySelector('#wa-docs-save')?.addEventListener('click', async () => {
       const held = [...el.querySelectorAll('#wa-docs .fchip.on')].map(b => b.dataset.doc);
       const me = getCurrentProfile() || {};
-      const { error } = await sb.from('patients').update({
-        documents_held: held,
-        // Everything in the vocabulary that was NOT ticked has now been
-        // asked about and answered no. That is a different fact from "we
-        // never asked" and the matcher treats it differently.
-        documents_missing: DOCUMENT_TYPES.map(d => d.key).filter(k => !held.includes(k)),
-        documents_asked_on: new Date().toISOString().slice(0, 10),
-        documents_asked_by: me.id || null,
-      }).eq('id', patientId);
-      if (error) { showToast('Could not save the papers: ' + error.message, 'error'); return; }
+      // mustWrite: a family that is readable but not editable (on probation,
+      // sql/256) must not show "Saved" for a write RLS filtered out.
+      try {
+        await mustWrite(sb.from('patients').update({
+          documents_held: held,
+          // Everything in the vocabulary that was NOT ticked has now been
+          // asked about and answered no. That is a different fact from "we
+          // never asked" and the matcher treats it differently.
+          documents_missing: DOCUMENT_TYPES.map(d => d.key).filter(k => !held.includes(k)),
+          documents_asked_on: new Date().toISOString().slice(0, 10),
+          documents_asked_by: me.id || null,
+        }).eq('id', patientId), 'papers list');
+      } catch (error) { showToast('Could not save the papers: ' + error.message, 'error'); return; }
       state.patient.documents_held = held;
       state.patient.documents_asked_on = new Date().toISOString().slice(0, 10);
       state.editingDocs = false;
@@ -572,8 +575,8 @@ export async function openWhatsappShare({ patient = {}, recipients = [] } = {}) 
   // say so.
   async function saveLanguagePreference(code) {
     if (!patientId || state.patient.message_language === code) return;
-    const { error } = await sb.from('patients').update({ message_language: code }).eq('id', patientId);
-    if (error) { showToast('Could not save the language on the record: ' + error.message, 'warning'); return; }
+    try { await mustWrite(sb.from('patients').update({ message_language: code }).eq('id', patientId), 'language'); }
+    catch (error) { showToast('Could not save the language on the record: ' + error.message, 'warning'); return; }
     state.patient.message_language = code;
     state.langGuessed = false;
     showToast(`${languageLabel(code)} saved for this family`, 'success', 2200);

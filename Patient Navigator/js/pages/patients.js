@@ -61,7 +61,7 @@ async function renderPatientList(container) {
     <div class="page-header">
       <div>
         <h1>Patients</h1>
-        <p class="header-subtitle" style="margin:4px 0 0">${onProbation ? 'During probation, this list shows families assigned to you and families with an open call task assigned to you.' : 'Everyone in the care program'}</p>
+        <p class="header-subtitle" style="margin:4px 0 0">${onProbation ? 'During probation, this list shows families assigned to you, families with an open call task for you, and families you have called. A family you called that is no longer assigned to you can be read but not changed.' : 'Everyone in the care program'}</p>
       </div>
       <div class="flex gap-2" style="display:flex;gap:9px">
         ${canExport ? `<button class="btn btn-secondary" id="merge-history-btn">Merge history</button><button class="btn btn-secondary" id="export-patients-btn">${icon('download')}Export CSV</button>` : ''}
