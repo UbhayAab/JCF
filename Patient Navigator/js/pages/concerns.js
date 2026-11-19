@@ -7,7 +7,8 @@
 // ============================================================
 
 import { getSupabase, mustWrite } from '../supabase.js';
-import { getCurrentProfile, isManagerOrAdmin } from '../auth.js';
+import { getCurrentProfile, isManagerOrAdmin, getUserRole, isImpersonating } from '../auth.js';
+import { isUrgentConcern269, callNowHTML269, canLogCall269 } from '../utils/emergencyCall269.js';
 import { showToast } from '../components/toast.js';
 import { showModal, closeModal } from '../components/modal.js';
 import { icon } from '../components/icons.js';
@@ -262,6 +263,7 @@ function paint() {
   body.querySelectorAll('[data-request-resolve]').forEach(b => b.addEventListener('click', () => openRequestResolveModal(b.dataset.requestResolve)));
   body.querySelectorAll('[data-review-resolve]').forEach(b => b.addEventListener('click', () => openReviewResolveModal(b.dataset.reviewResolve)));
   body.querySelectorAll('[data-open-patient]').forEach(b => b.addEventListener('click', () => { window.location.hash = 'patients/' + b.dataset.openPatient; }));
+  body.querySelectorAll('[data-concern-call269]').forEach(a => a.addEventListener('click', (e) => onConcernCall(e, a.dataset.concernCall269)));
   body.querySelectorAll('[data-sev-filter]').forEach(c => c.addEventListener('click', () => {
     sevFilter = sevFilter === c.dataset.sevFilter ? null : c.dataset.sevFilter;
     paint();
@@ -516,6 +518,10 @@ function concernCard(r, compact = false) {
   const open = r.status === 'open' || r.status === 'acknowledged';
   const place = sanitizeText([r.patient?.city, r.patient?.state].filter(Boolean).join(', '));
   const phone = primaryPhone(r);
+  // Fixboard #269: an urgent flag carries a Call now button where its
+  // actions are, not only the small number link. Same number, same rule:
+  // shown only when this account can already read the family's number.
+  const callNow = open && isUrgentConcern269(r) ? concernCallHTML(r, phone) : '';
   return `
     <div class="${compact ? '' : 'card'}" style="padding:${compact ? '4px 2px' : '12px 14px'}${compact ? '' : `;border-left:4px solid ${SEV_COLOR[r.severity] || 'var(--line)'}`}">
       <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
@@ -534,8 +540,8 @@ function concernCard(r, compact = false) {
               : `<span class="badge badge-gold" title="Raised automatically from a score threshold">Auto-flag</span>`) : ''}
             ${r.care_gap_since ? `<span class="badge badge-warn" title="${sanitizeText(r.care_gap_note || 'No call logged since this was raised')}">Nobody has called</span>` : ''}
             <span class="hist-meta">${sanitizeText(r.patient?.patient_code || '')}${place ? ' · ' + place : ''}</span>
-            ${phone ? `<a class="cg-call" href="tel:${phone.replace(/[^+\d]/g, '')}" style="padding:3px 9px;font-size:13px"
-              onclick="event.stopPropagation()">${icon('phone')}<span class="tnum">${sanitizeText(phone)}</span></a>` : ''}
+            ${phone && !callNow ? `<a class="cg-call" href="tel:${phone.replace(/[^+\d]/g, '')}" style="padding:3px 9px;font-size:13px"
+              ${open ? `data-concern-call269="${sanitizeText(r.id)}"` : ''} onclick="event.stopPropagation()">${icon('phone')}<span class="tnum">${sanitizeText(phone)}</span></a>` : ''}
           </div>
           ${r.note ? `<p style="font:var(--t-sm);color:var(--ink-2);margin:7px 0 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${sanitizeText(r.note)}</p>` : ''}
           ${r.care_gap_note ? `<p style="font:var(--t-sm);color:var(--warn);margin:6px 0 0">${sanitizeText(r.care_gap_note)}</p>` : ''}
@@ -546,6 +552,7 @@ function concernCard(r, compact = false) {
         </div>
         ${canAct ? `
         <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${callNow}
           ${r.reassign_status === 'pending' ? `
           <button class="btn btn-danger btn-sm" data-reassign="${r.id}">${icon('users')}Hand to someone else</button>
           <button class="btn btn-ghost btn-sm" data-decline-reassign="${r.id}">Decline</button>` : ''}
@@ -554,10 +561,52 @@ function concernCard(r, compact = false) {
           <button class="btn btn-primary btn-sm" data-resolve="${r.id}">${icon('checkCircle')}Resolve</button>
         </div>`
         : (open && !r.resolve_requested
-          ? `<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary btn-sm" data-request-resolve="${r.id}">${icon('checkCircle')}Mark resolved</button></div>`
-          : '')}
+          ? `<div style="display:flex;gap:8px;flex-wrap:wrap">${callNow}<button class="btn btn-secondary btn-sm" data-request-resolve="${r.id}">${icon('checkCircle')}Mark resolved</button></div>`
+          : callNow ? `<div style="display:flex;gap:8px;flex-wrap:wrap">${callNow}</div>` : '')}
       </div>
     </div>`;
+}
+
+// ---- Call the family from the flag (Fixboard #269) -------------------
+// The tap dials (the link's own action is never prevented). Then, for anyone
+// who logs care calls, the same "Log a call" sheet the patient's own page uses
+// opens for this family, so the call is recorded the usual way. A phone only
+// appears when this account can already read the family's number: the
+// patients join above is under row security, and a family hidden from it
+// reads "Patient (restricted)" with no number and so no button.
+function concernCallHTML(r, phone = primaryPhone(r)) {
+  const open = r && (r.status === 'open' || r.status === 'acknowledged');
+  // Open as: the screen is someone else's, so it never offers a call.
+  if (!open || !phone || isImpersonating()) return '';
+  return callNowHTML269({ phone, shown: phone, label: 'Call now', icon: icon('phoneCall'), attrs: { 'data-concern-call269': r.id } });
+}
+
+function concernDialogCallHTML(r) {
+  const btn = r ? concernCallHTML(r) : '';
+  if (!btn) return '';
+  const logs = !isImpersonating() && canLogCall269(getUserRole()) && !!r.patient?.id;
+  return `<div style="margin:0 0 var(--s4)" data-concern-dialog-call269>${btn}
+    <div class="hist-meta" style="margin-top:6px">${logs ? 'Rings the family, then opens Log a call so the call is recorded.' : 'Rings the family.'}</div></div>`;
+}
+
+// keep: text already typed into a resolve box. Only one sheet is open at a
+// time, so Log a call would replace that box and lose it; then the tap only
+// dials and says how to log the call afterwards.
+function onConcernCall(e, id, keep = '') {
+  const r = rows.find(x => x.id === id);
+  if (!r?.patient?.id || isImpersonating() || !canLogCall269(getUserRole())) return;
+  if (String(keep).trim()) { showToast('Your note here is kept. After the call, tap Call now on the flag to log it.', 'info', 6000); return; }
+  // After the dial has gone out, never instead of it.
+  setTimeout(() => { openConcernCallForm(r); }, 0);
+}
+
+async function openConcernCallForm(r) {
+  try {
+    const { openCallForm } = await import('../components/callForm.js');
+    await openCallForm({ patient: { id: r.patient.id, full_name: r.patient.full_name || r.patient.patient_code || 'Patient' }, onSaved: load });
+  } catch {
+    showToast('Could not open Log a call here. Open their record and use Log a call.', 'error');
+  }
 }
 
 // ---- Reassignment requests (sql/113) --------------------------------
@@ -681,6 +730,7 @@ function openResolveModal(id) {
   const r = rows.find(x => x.id === id);
   const el = document.createElement('div');
   el.innerHTML = `
+    ${concernDialogCallHTML(r)}
     <p style="font:var(--t-sm);color:var(--ink-2);margin:0 0 var(--s4)">
       What was done for <strong>${patientName(r || {})}</strong>? One honest line. It becomes the record.</p>
     <div class="form-group"><label class="form-label">Resolution</label>
@@ -690,6 +740,7 @@ function openResolveModal(id) {
       <button class="btn btn-primary" id="rc-save">${icon('checkCircle')}Mark resolved</button>
     </div>`;
   showModal({ title: 'Resolve concern', content: el, size: 'lg' });
+  el.querySelector('[data-concern-call269]')?.addEventListener('click', (e) => onConcernCall(e, id, el.querySelector('#rc-note')?.value));
   el.querySelector('#rc-cancel').addEventListener('click', () => closeModal());
   el.querySelector('#rc-save').addEventListener('click', async () => {
     const note = el.querySelector('#rc-note').value.trim();
@@ -721,6 +772,7 @@ function openRequestResolveModal(id) {
   const r = rows.find(x => x.id === id);
   const el = document.createElement('div');
   el.innerHTML = `
+    ${concernDialogCallHTML(r)}
     <p style="font:var(--t-sm);color:var(--ink-2);margin:0 0 var(--s4)">
       What was done for <strong>${patientName(r || {})}</strong> on
       <strong>${sanitizeText(concernReason(r?.reason).label)}</strong>? One honest line.
@@ -732,6 +784,7 @@ function openRequestResolveModal(id) {
       <button class="btn btn-primary" id="rr-save">${icon('checkCircle')}Ask to close</button>
     </div>`;
   showModal({ title: 'Mark resolved for review', content: el, size: 'lg' });
+  el.querySelector('[data-concern-call269]')?.addEventListener('click', (e) => onConcernCall(e, id, el.querySelector('#rr-note')?.value));
   el.querySelector('#rr-cancel').addEventListener('click', () => closeModal());
   el.querySelector('#rr-save').addEventListener('click', async () => {
     const note = el.querySelector('#rr-note').value.trim();
@@ -761,6 +814,7 @@ async function openReviewResolveModal(id) {
   const reason = concernReason(r?.reason);
   const el = document.createElement('div');
   el.innerHTML = `
+    ${concernDialogCallHTML(r)}
     <div class="doc-callout" style="margin:0 0 var(--s4)">
       <strong>${sanitizeText(reason.label)}</strong>
       <span class="badge badge-${r?.severity === 'urgent' ? 'danger' : r?.severity === 'high' ? 'warn' : 'neutral'}" style="margin-left:8px">${r?.severity || ''}</span>
@@ -784,6 +838,7 @@ async function openReviewResolveModal(id) {
       <button class="btn btn-primary" id="rv-approve">${icon('checkCircle')}Approve resolve</button>
     </div>`;
   showModal({ title: `Review resolve · ${patientName(r || {})}`, content: el, size: 'lg' });
+  el.querySelector('[data-concern-call269]')?.addEventListener('click', (e) => onConcernCall(e, id, el.querySelector('#rv-note')?.value));
   el.querySelector('#rv-cancel').addEventListener('click', () => closeModal());
 
   // Evidence first: the PM judges the ask against what calls actually say.

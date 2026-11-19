@@ -24,6 +24,7 @@ import { getCurrentUser, getCurrentProfile, isManagerOrAdmin, isImpersonating } 
 import { leadKind, LEAD_LABELS, newestLeads } from '../utils/leadTriage.js';
 import { loadRoster, rosterSelectHTML, forgetRoster } from '../components/assignPicker.js';
 import { openLeadConversation223 } from '../components/leadConversation223.js';
+import { isEmergencyRequest269, callNowHTML269, displayPhone269 } from '../utils/emergencyCall269.js';
 
 const leadMounts = new WeakMap();
 // The family's HopeBot language (sql/208 keeps 'bn'). A local copy, not an
@@ -38,6 +39,9 @@ export async function renderLeads(container) {
   let roster = null;  // managers: who can take a family (hopebot_assignable)
   let requestsKnown = false; // Never offer a journal action while callback state is unknown.
   let openReqs = new Map(); // lead_id -> open HopeBot request ids this person may log
+  // Fixboard #269: lead_id -> { ids: open emergencies this person may take,
+  // heldBy: first name of a teammate already on the call, or null }.
+  let emergencyReqs = new Map();
   let searchQ = '';
 
   let loadGeneration=0;
@@ -125,12 +129,26 @@ export async function renderLeads(container) {
       if(!current()||generation!==loadGeneration)return;
       requestsKnown = !requestError;
       (rq || []).forEach((x) => openReqs.set(x.lead_id, [...(openReqs.get(x.lead_id) || []), x.id]));
+      // Who is already on an emergency comes from the same RPC as the request
+      // cards (the table does not expose the hold). If it cannot be read, no
+      // row offers the one-tap call; the cards above still do.
+      emergencyReqs = new Map();
+      try {
+        const { data: open, error: openError } = await getSupabase().rpc('hopebot_requests_open', { p_closed_hours: 0 });
+        if(!current()||generation!==loadGeneration)return;
+        if (openError || !Array.isArray(open)) throw new Error('unavailable');
+        open.filter((x) => !x.closed && isEmergencyRequest269(x) && x.family?.lead_id).forEach((x) => {
+          const e = emergencyReqs.get(x.family.lead_id) || { ids: [], heldBy: null };
+          if (x.held_by && !x.held_by_me) e.heldBy = e.heldBy || x.held_by; else e.ids.push(x.id);
+          emergencyReqs.set(x.family.lead_id, e);
+        });
+      } catch { if(!current()||generation!==loadGeneration)return; emergencyReqs = new Map(); }
       if (isManagerOrAdmin()) {
         try { const result=await loadRoster('cgmp');if(!current()||generation!==loadGeneration)return;roster=result; } catch { if(!current()||generation!==loadGeneration)return;roster=null; }
       }
     } catch (e) {
       if(!current()||generation!==loadGeneration)return;
-      rows=[];digests.clear();openReqs.clear();
+      rows=[];digests.clear();openReqs.clear();emergencyReqs.clear();
       if(body){body.innerHTML='<div class="empty"><h4>Could not load verified leads</h4><p>Refresh to confirm team classification before viewing family leads.</p><button type="button" class="btn btn-secondary" data-lead-retry>Retry</button></div>';body.querySelector('[data-lead-retry]').onclick=()=>load(container);}
       return;
     }
@@ -179,7 +197,7 @@ export async function renderLeads(container) {
             <span class="due-meta">Added ${sanitize(formatRelativeTime(r.created_at || r.first_seen_at))}</span>
             <span class="due-meta">${r.last_message_at ? 'wrote ' + formatRelativeTime(r.last_message_at) : formatRelativeTime(r.updated_at || r.created_at)}</span>
             ${r.is_team ? '' : openReqs.has(r.id)
-              ? `<button class="btn btn-primary btn-sm" data-log-call="${sanitize(r.id)}" title="They asked HopeBot for a call: say what happened, and the request closes here and in HopeBot">Log the call</button>`
+              ? `${emergencyLine(r)}<button class="btn btn-primary btn-sm" data-log-call="${sanitize(r.id)}" title="They asked HopeBot for a call: say what happened, and the request closes here and in HopeBot">Log the call</button>`
               : `<button class="btn ${r.contacted ? 'btn-secondary' : 'btn-primary'} btn-sm" data-lead="${r.id}" data-to="${r.contacted ? 0 : 1}">
               ${r.contacted ? 'Reopen' : 'Mark contacted'}
             </button>`}
@@ -238,6 +256,15 @@ export async function renderLeads(container) {
       const r = rows.find(x => x.id === b.dataset.logCall);
       openLogCall(container, r, openReqs.get(b.dataset.logCall) || []);
     }));
+    // #269: one tap rings the family (the link's own action), marks the
+    // emergency as this person's call, and opens Log the call for afterwards.
+    body.querySelectorAll('[data-lead-call-now269]').forEach(a => a.addEventListener('click', (e) => {
+      if(!current()){e.preventDefault();return;}
+      const r = rows.find(x => x.id === a.dataset.leadCallNow269);
+      if (!r) return;
+      takeEmergency(container, r.id);
+      openLogCall(container, r, openReqs.get(r.id) || []);
+    }));
     body.querySelectorAll('[data-lead]').forEach(b => b.addEventListener('click', async () => {
       if(!current())return;
       b.disabled = true;
@@ -279,10 +306,50 @@ export async function renderLeads(container) {
     ['wrong_number', 'Wrong number', 'btn-secondary'],
     ['not_needed', 'Not needed', 'btn-ghost'],
   ];
+  // Fixboard #269: the row of a family with an open emergency rings them in
+  // one tap, or names the teammate already on that call.
+  function emergencyLine(r) {
+    const e = emergencyReqs.get(r.id);
+    if (!e) return '';
+    if (e.heldBy) return `<span class="badge badge-warn" data-lead-held269>${sanitize(e.heldBy)} is calling them</span>`;
+    return e.ids.length ? callNowHTML269({ phone: r.phone, shown: '', label: 'Emergency: call now', icon: icon('phoneCall'), attrs: { 'data-lead-call-now269': r.id } }) : '';
+  }
+
+  // Fixboard #269: an emergency is taken the way the request card's Call now
+  // takes it, so a teammate sees who is on the call. One request refused
+  // (someone else already ringing) never stops the others.
+  let taking = false;
+  async function takeEmergency(container, leadId) {
+    const ids = emergencyReqs.get(leadId)?.heldBy ? [] : emergencyReqs.get(leadId)?.ids || [];
+    if (taking || !ids.length || !current()) return;
+    taking = true;
+    const refused = [];
+    try {
+      for (const id of ids) {
+        if (!current()) return;
+        const { error } = await getSupabase().rpc('hopebot_request_take', { p_id: id });
+        if (error) refused.push(String(error.message || ''));
+      }
+      if (!current()) return;
+      const busy = refused.find((m) => /is calling them right now/.test(m));
+      if (busy) showToast(`${busy} Check with them before you ring again.`, 'error', 6000);
+      else if (refused.length) showToast('Your call was not marked on the emergency. After the call, tap what happened.', 'error', 6000);
+      mountHopebotRequests(container.querySelector('#wl-requests'), { mode: 'leads', excludeTeamTests: true });
+    } finally { taking = false; }
+  }
+
   function openLogCall(container, r, reqIds) {
     if (!current() || !r || !reqIds.length) return;
+    const emergency = emergencyReqs.has(r.id), heldBy = emergencyReqs.get(r.id)?.heldBy || null;
     const el = document.createElement('div');
+    // #269: the box that asks what happened on the call also places it.
+    // r.phone is the number already shown on this lead's row. While a
+    // teammate is on an emergency call it says so instead of ringing twice.
+    const dial = heldBy ? `<p class="due-meta wraps" data-lc-held269 style="margin:0">${sanitize(heldBy)} is calling them now, so there is no second call from here.</p>` : callNowHTML269({ phone: r.phone, shown: displayPhone269(r.phone), label: emergency ? 'Call now' : 'Call', icon: icon('phoneCall'),
+      cls: emergency ? 'btn btn-gold' : 'btn btn-secondary', attrs: { 'data-lc-call269': r.id } });
     el.innerHTML = `
+      ${emergency ? '<p class="due-meta wraps" data-lc-emergency269 style="margin:0 0 8px;color:var(--danger)">Emergency. Call them now. If they may be in danger, stay on the line and give Tele-MANAS 14416 (free, 24 hours, Hindi too) or 112.</p>' : ''}
+      ${dial ? `<div style="margin:0 0 12px">${dial}</div>` : ''}
       <p style="margin:0 0 10px">${sanitize(r.name || 'This family')} asked HopeBot for a call. What happened when you called?</p>
       <textarea class="form-input" id="lc-note" rows="2" maxlength="1000" placeholder="What did you do for them? (optional)" style="width:100%"></textarea>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
@@ -290,6 +357,10 @@ export async function renderLeads(container) {
       </div>
       <p class="due-meta wraps" style="margin-top:10px">No answer sets the next try about 2 working hours later; Call back later waits for the time they asked for. Reached closes it here and in HopeBot.</p>`;
     showModal({ title: 'Log the call', content: el, size: 'sm' });
+    el.querySelector('[data-lc-call269]')?.addEventListener('click', (e) => {
+      if (!current()) { e.preventDefault(); return; }
+      if (emergency) takeEmergency(container, r.id);
+    });
     el.querySelectorAll('[data-lc]').forEach((btn) => btn.addEventListener('click', async () => {
       if(!current())return;
       const out = btn.dataset.lc;

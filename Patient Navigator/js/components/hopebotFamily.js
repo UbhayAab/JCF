@@ -13,6 +13,8 @@
 //                         The caller sees the number and the outcomes at once;
 //                         No answer and Call back later set the next due time,
 //                         Reached closes it and HopeBot reads it.
+//                         An open emergency gives every caller who sees it
+//                         Call now: one tap rings and takes it (Fixboard #269).
 //   mountHopebotCard      a PN family's HopeBot card on their record.
 //   digestHTML            tags, last questions and summary for a lead card.
 // Everything a family wrote goes through sanitize() before innerHTML.
@@ -27,6 +29,8 @@ import { icon } from './icons.js';
 import { sanitize } from '../utils/validators.js';
 import { formatRelativeTime } from '../utils/formatters.js';
 import { loadRoster, rosterSelectHTML, reasonText, historyHTML, forgetRoster } from './assignPicker.js';
+// Fixboard #269: an emergency card gives everyone who sees it a call, not a claim.
+import { isEmergencyRequest269, callNowHTML269 } from '../utils/emergencyCall269.js';
 
 const REASONS = {
   doctor_search: 'Wants a doctor near them',
@@ -190,6 +194,16 @@ function requestCardHTML(x, roster) {
   // Taking someone else's request moves it to you: say so on the button.
   const takeover = x.assigned_name && !x.assigned_to_me && !x.safety;
   const tried = x.attempts > 0 ? `Tried ${x.attempts} time${x.attempts === 1 ? '' : 's'}, last ${formatRelativeTime(x.last_attempt_at)}` : null;
+  // Fixboard #269: an open emergency (Medical emergency, Safety) is shown to
+  // every caller, so every caller gets one tap that rings the family. The tap
+  // also takes the request the way "I will call" does, so the card turns into
+  // the outcome buttons and nobody else rings at the same time. The number is
+  // the one this RPC already returns to them; "I will call" showed it anyway.
+  const emergency = !x.closed && isEmergencyRequest269(x);
+  const callNow = emergency && act && !mine && !x.held_by
+    ? callNowHTML269({ phone: f.phone, shown: fmtPhone(f.phone), icon: icon('phoneCall'), attrs: { 'data-call-now269': x.id } }) : '';
+  const mineCall = emergency && mine
+    ? callNowHTML269({ phone: f.phone, shown: fmtPhone(f.phone), icon: icon('phoneCall'), attrs: { 'data-call-mine269': x.id } }) : '';
   return `
     <div class="card hb-req" data-hb="${sanitize(x.id)}" style="padding:12px 14px;${x.closed ? 'opacity:.65;' : ''}${x.safety && !x.closed ? 'border-color:var(--danger);' : ''}${isDelete(x) && !x.closed ? 'border-color:var(--clay);' : ''}">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -215,7 +229,7 @@ function requestCardHTML(x, roster) {
           ? `<div class="due-meta">${x.closed_by ? `${sanitize(x.closed_by)} · ` : ''}${formatRelativeTime(x.closed_at)}${x.my_note ? ` · ${sanitize(x.my_note)}` : ''}</div>`
           : mine
             ? `<div class="due-meta wraps" style="margin-bottom:6px;color:var(--ink-1)">Say you are calling from <strong>JCF Hope Bot</strong>; that is what HopeBot told them.</div>
-               <a class="btn btn-gold btn-sm" href="tel:+${sanitize(String(f.phone || '').replace(/\D/g, ''))}">${icon('phoneCall')}${sanitize(fmtPhone(f.phone))}</a>
+               ${mineCall || `<a class="btn btn-gold btn-sm" href="tel:+${sanitize(String(f.phone || '').replace(/\D/g, ''))}">${icon('phoneCall')}${sanitize(fmtPhone(f.phone))}</a>`}
                <textarea class="form-input hb-note" rows="2" maxlength="1000" placeholder="What did you do for them? (optional)" style="margin-top:8px;width:100%"></textarea>
                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
                  ${OUTCOMES.map(([v, label, cls]) => `<button type="button" class="btn ${cls} btn-sm" data-out="${v}">${label}</button>`).join('')}
@@ -224,8 +238,9 @@ function requestCardHTML(x, roster) {
                </div>
                ${x.held_by_me ? `<div class="due-meta" style="margin-top:4px">Held for you until ${timeIN(x.held_until)}.</div>` : ''}`
             : x.held_by
-              ? `<div class="due-meta">${sanitize(x.held_by)} is calling them.</div>`
+              ? `<div class="due-meta">${sanitize(x.held_by)} is calling them.</div>${emergency && x.held_until ? `<div class="due-meta wraps" style="margin-top:4px" data-held-note269>Held so the family is not rung twice. If nothing is logged by ${timeIN(x.held_until)}, Call now comes back here for everyone.</div>` : ''}`
               : !act ? '<div class="due-meta wraps">Viewing as someone else: actions are off.</div>'
+                : callNow ? `${callNow}<div class="due-meta wraps" style="margin-top:6px">One tap rings them and marks the call as yours, so nobody rings twice. After the call, tap what happened.</div>`
                 : `<button type="button" class="btn ${takeover ? 'btn-secondary' : 'btn-primary'} btn-sm" data-take ${takeover ? `data-takeover="${sanitize(x.assigned_name)}"` : ''}>${icon('phoneCall')}${takeover ? 'Take over and call' : 'I will call'}</button>`}
         ${act && !x.closed && isManager() && roster ? `<div class="hb-assign" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
             <span class="due-meta">Assign to</span>${rosterSelectHTML(roster, x.assigned_to, { id: x.id, currentName: x.assigned_name })}</div>` : ''}
@@ -280,7 +295,8 @@ export async function mountHopebotRequests(el, { mode = 'calling', excludeTeamTe
     // On the leads page this long queue must not push search/new families
     // below the fold. Native details keeps keyboard/touch access and counts.
     const compact = mode === 'leads';
-    const expanded = compact && el.querySelector('details')?.open === true;
+    // An open emergency is never folded away behind the summary (#269).
+    const expanded = compact && (el.querySelector('details')?.open === true || open.some((x) => isEmergencyRequest269(x)));
     const outer = compact ? 'details' : 'div';
     const heading = compact ? 'summary' : 'div';
     el.innerHTML = `
@@ -326,6 +342,25 @@ export async function mountHopebotRequests(el, { mode = 'calling', excludeTeamTe
     el.querySelectorAll('.hb-req').forEach((card) => {
       const id = card.dataset.hb;
       const x = all.find((r) => r.id === id) || {};
+      let taking = false;
+      const takeForCall = async () => {
+        if (taking || !current() || isImpersonating()) return;
+        taking = true;
+        try {
+          const { error } = await getSupabase().rpc('hopebot_request_take', { p_id: id });
+          if (!current()) return;
+          if (error) throw error;
+          showToast('Marked as your call. After the call, tap what happened.', 'success', 3500);
+        } catch (e) {
+          if (!current()) return;
+          // The server names a teammate already on the call; say so plainly.
+          showToast(/is calling them right now/.test(String(e?.message || ''))
+            ? `${String(e.message)} Check with them before you ring again.`
+            : 'Your call was not marked on this card. Refresh, then tap what happened.', 'error', 6000);
+        }
+        try { await load(); } catch {}
+        paint();
+      };
       card.querySelector('[data-take]')?.addEventListener('click', (e) => {
         const btn = e.currentTarget;
         const from = btn.dataset.takeover;
@@ -334,6 +369,13 @@ export async function mountHopebotRequests(el, { mode = 'calling', excludeTeamTe
           () => act(btn, 'hopebot_request_take', { p_id: id }, 'It is yours now. Call them.'),
           { title: 'Take over this call?', confirmLabel: 'Take over and call', danger: false });
       });
+      // #269: the link's own action dials and is never prevented; this only
+      // records that this person is on the call, exactly as "I will call" does.
+      card.querySelectorAll('[data-call-now269],[data-call-mine269]').forEach((link) => link.addEventListener('click', (e) => {
+        if (!current() || isImpersonating()) { e.preventDefault(); return; }
+        if (x.held_by_me) return;
+        takeForCall();
+      }));
       card.querySelector('[data-release]')?.addEventListener('click', (e) => act(e.currentTarget, 'hopebot_request_release', { p_id: id }, 'Given back for someone else to call.'));
       card.querySelector('[data-handback]')?.addEventListener('click', (e) => act(e.currentTarget, 'hopebot_request_handback', { p_id: id },
         'Handed to the next caregiver on shift.'));
