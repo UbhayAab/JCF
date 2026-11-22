@@ -53,7 +53,7 @@ function change(weeks, i, key) {
   if (!p || !w.complete || !p.complete || !w.families || !p.families) return null;
   return rate(w[key], w.families) - rate(p[key], p.families);
 }
-const points = (x) => (x === null ? '-' : x === 0 ? 'same' : `${x > 0 ? '+' : ''}${x} points`);
+const points = (x) => (x === null ? '-' : x === 0 ? 'same' : `${x > 0 ? '+' : ''}${x} ${Math.abs(x) === 1 ? 'point' : 'points'}`);
 
 const STYLE = `<style>
 .hbw{min-width:0;overflow-wrap:anywhere}
