@@ -110,7 +110,11 @@ export async function renderMergedHistory154(mount,patientId,{isCurrent=()=>moun
    }catch(e){if(alive()&&turn===sequence)records.replaceChildren(node('p',e.message));}
   }
   await load();
-  if(isManagerOrAdmin())mount.append(button('Merge audit history',()=>openMergeAudit154(patientId)));
+  if(staffCanMerge()){
+   const history=await rpc('patient_merge_history154',{p_main:patientId,p_before:null,p_before_id:null});if(!alive()||!staffCanMerge())return;
+   for(const row of history)mount.append(mergeUndoCard304(row));
+   mount.append(button('Merge audit history',()=>openMergeAudit154(patientId)));
+  }
  }catch(e){if(alive())mount.replaceChildren(node('p','Combined history could not load: '+e.message));}
 }
 
@@ -118,13 +122,65 @@ export function openMergeAudit154(patientId=null){
  if(!staffCanMerge())return;const body=node('div'),status=node('p','Loading...');body.append(status);
  const overlay=showModal({title:'Merge history',content:body,size:'lg'}),actor=getCurrentUser()?.id;
  const alive=()=>overlay.isCurrentModal()&&getCurrentUser()?.id===actor&&staffCanMerge();
- let cursor=null,loading=false,total=0;const more=button('Load older merges',load);body.append(more);
+ let cursor=null,loading=false,total=0,undone=0;const more=button('Load older merges',load);body.append(more);
  async function load(){if(loading||!alive())return;loading=true;more.disabled=true;
   try{const rows=await rpc('patient_merge_history154',{p_main:patientId,p_before:cursor?.completed_at||null,p_before_id:cursor?.id||null});if(!alive())return;
-   total+=rows.length;status.textContent=total?`${total} completed merges loaded.`:'No completed merges.';
-   for(const row of rows){const card=node('section','','card');card.append(node('h4',row.source_code+' to '+row.main_code),node('p',date(row.completed_at)+' | '+row.actor_name),node('p',row.reason),originalDetails(row.result?.records,'Record counts'),button('Open Main',()=>{overlay.closeOwnedModal();navigate('patients/'+row.main_id);}));body.insertBefore(card,more);}
+   total+=rows.length;undone+=rows.filter(r=>r.state==='undone').length;status.textContent=total?(undone?`${total} merges loaded; ${undone} undone.`:`${total} completed merges loaded.`):'No completed merges.';
+   for(const row of rows){const card=node('section','','card');card.append(node('h4',row.source_code+' to '+row.main_code),node('p',date(row.completed_at)+' | '+row.actor_name),node('p',row.reason),originalDetails(row.result?.records,'Record counts'),button('Open Main',()=>{overlay.closeOwnedModal();navigate('patients/'+row.main_id);}));card.append(mergeUndoCard304(row));body.insertBefore(card,more);}
    if(rows.length)cursor=rows.at(-1);more.hidden=rows.length<30;
   }catch(e){if(alive())status.textContent=e.message;}finally{loading=false;if(alive())more.disabled=false;}
  }
  load();
+}
+
+function mergeUndoCard304(row){
+ const card=node('section','','card');
+ if(row.state==='undone')card.append(node('p',`Undone on ${date(row.undone_at)} by ${row.undone_by_name}: ${row.undo_reason}`));
+ else if(row.state==='completed')card.append(node('p',`${row.source_code} to ${row.main_code}`),button('Undo this merge',()=>openPatientUnmerge304(row.id)));
+ return card;
+}
+
+export function openPatientUnmerge304(mergeId){
+ if(!staffCanMerge())return;
+ const actor=getCurrentUser()?.id,body=node('div'),status=node('p','Checking both profiles and current records...','form-help'),review=node('div');
+ status.setAttribute('role','status');body.append(status,review);
+ const overlay=showModal({title:'Undo patient merge',content:body,size:'lg'});
+ const alive=()=>overlay.isCurrentModal()&&getCurrentUser()?.id===actor&&staffCanMerge();
+ let busy=false,preview=null,request=null;
+ const cancel=button('Cancel',()=>overlay.closeOwnedModal());body.append(cancel);
+ load();
+ async function load(){
+  try{
+   const value=await rpc('preview_patient_unmerge304',{p_merge:mergeId});if(!alive())return;preview=value;
+   const grid=node('div');grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;overflow-wrap:anywhere';
+   if(value.main&&value.source)grid.append(profileCard(value.main,'Main'),profileCard(value.source,'Source becomes separate'));review.append(grid);
+   if(value.merged_at)review.append(node('p',`Merged on ${date(value.merged_at)} by ${value.merged_by}: ${value.reason}`));
+   review.append(node('p','Records created after the merge stay on Main. Move anything that belongs to the other person by hand.'));
+   for(const r of value.records||[])if(r.count||r.restored)review.append(node('p',`${r.label||label(r.relation)}: ${r.count} going back; ${r.restored||0} consolidated records to restore.`));
+   const stays=node('details');stays.append(node('summary','Records created after the merge staying on Main'));
+   for(const r of value.stays_on_main||[])if(r.count||r.creation_time_unknown)stays.append(node('p',`${r.label||label(r.relation)}: ${r.count} created after the merge.${r.creation_time_unknown?` Creation time is unavailable for ${r.creation_time_unknown} other Main records; they also stay on Main.`:''}`));
+   review.append(stays,node('p',`${value.changed_since||0} moved records edited since the merge go back with their current values.`));
+   status.textContent=value.blocked||'Review the separation and confirm both identities.';
+   if(value.blocked)return;
+   const reason=node('textarea','','form-input');reason.rows=3;reason.minLength=5;reason.maxLength=1000;reason.required=true;
+   const confirm=node('input','','form-input');confirm.autocomplete='off';confirm.spellcheck=false;
+   const save=button('Separate these profiles',commit);save.className='btn btn-primary';
+   const validate=()=>{save.disabled=busy||(!request&&(confirm.value!=='UNMERGE'||reason.value.trim().length<5||reason.value.trim().length>1000));};
+   reason.addEventListener('input',validate);confirm.addEventListener('input',validate);
+   review.append(field('Why undo this merge?',reason),field('Type UNMERGE to confirm',confirm),save);validate();
+   async function commit(){
+    if(!alive()||busy||save.disabled||!preview)return;
+    request??={p_merge:mergeId,p_fingerprint:preview.fingerprint,p_confirmation:confirm.value,p_reason:reason.value.trim()};
+    busy=true;validate();reason.disabled=true;confirm.disabled=true;cancel.disabled=true;status.textContent='Separating both profiles in one transaction. Please wait...';
+    try{
+     const result=await rpc('commit_patient_unmerge304',request);if(!alive())return;
+     review.replaceChildren(node('h4','Profiles separated'),node('p',`${result.main_code} and ${result.source_code} are separate profiles.`),originalDetails(result.records,'Saved record counts'));
+     if(result.left_as_is?.length)review.append(originalDetails(result.left_as_is,'Changes left as they are for review'));
+     review.append(button('Open Main profile',()=>{overlay.closeOwnedModal();navigate('patients/'+result.main);}),button('Open Source profile',()=>{overlay.closeOwnedModal();navigate('patients/'+result.source);}));
+     status.textContent='Saved. Both profiles and the merge audit are preserved.';
+    }catch(e){if(alive()){status.textContent=e.message+' If the connection failed, retry this same confirmation to retrieve its saved result.';save.textContent='Retry same confirmation';}}
+    finally{busy=false;if(alive()){cancel.disabled=false;validate();}}
+   }
+  }catch(e){if(alive())status.textContent=e.message;}
+ }
 }
