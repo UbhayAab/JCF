@@ -80,15 +80,10 @@ export async function renderDashboard(container) {
   if (isAdmin) return renderAdminDashboard(container, { firstName, subtitle, today, role });
   if (isIntake) {
     const { renderIntakeDashboard } = await import('../components/intakeDashboard.js');
-    return renderIntakeDashboard(container, { mountNotices: () => {
-      const band = document.createElement('div');
-      container.prepend(band);
-      return Promise.all([
-        renderUrgentBand(band, { scope: 'visible' }),
-        mountCareNotifications(container.querySelector('#care-notifications')),
-        loadSaturdayCard(role), loadResourceReplies(), loadDocsWaitingCard(),
-      ]);
-    } });
+    return renderIntakeDashboard(container, { mountNotices: () => Promise.all([
+      mountCareNotifications(container.querySelector('#care-notifications')),
+      loadSaturdayCard(role), loadResourceReplies(), loadDocsWaitingCard(),
+    ]) });
   }
 
 

@@ -12,6 +12,12 @@ export function canAcknowledgeUrgent(role) {
   return ['admin', 'manager'].includes(role);
 }
 
+// Hospital volunteers, content and medical navigators never had the Flags page, and their view of calls is partial.
+const BAND_ROLES = ['admin', 'manager', 'caller', 'caregiver_mentor', 'therapist', 'nutritionist'];
+export function seesUrgentBand(role) {
+  return BAND_ROLES.includes(role);
+}
+
 export function sortUrgentFlags(rows) {
   return [...rows].sort((a, b) =>
     Number(b.reason === 'self_harm') - Number(a.reason === 'self_harm') ||
@@ -24,6 +30,7 @@ export function urgentBandFailureHTML() {
 }
 
 export function urgentBandHTML(rows, { role, now = new Date() } = {}) {
+  const callsVisible = ['admin', 'manager', 'caller', 'caregiver_mentor'].includes(role);
   if (!rows.length) return '';
   return `<section class="urgent-band261" aria-label="Families who need a person now">
     <h2>Needs a person now: ${rows.length}</h2>
@@ -31,7 +38,7 @@ export function urgentBandHTML(rows, { role, now = new Date() } = {}) {
       const selfHarm = row.reason === 'self_harm';
       const days = Math.max(0, Number(row.days_open) || 0);
       const reachedDays = Math.max(0, Math.floor((new Date(now) - new Date(row.last_connected_at)) / DAY));
-      const contact = row.connected_since && row.last_connected_at
+      const contact = !callsVisible ? '' : row.connected_since && row.last_connected_at
         ? `Last reached ${reachedDays} ${reachedDays === 1 ? 'day' : 'days'} ago`
         : 'Not reached since this was raised';
       const waiting = row.waiting_call_since
@@ -41,7 +48,7 @@ export function urgentBandHTML(rows, { role, now = new Date() } = {}) {
           <strong>${sanitize(row.full_name || 'Family')}</strong>
           <span class="${selfHarm ? 'urgent-band261-danger' : ''}">${sanitize(selfHarm ? 'Talk of self-harm' : concernReason(row.reason).label)}</span>
           <span>Open ${days} ${days === 1 ? 'day' : 'days'}</span>
-          <span>${sanitize(contact)}</span>
+          ${contact ? `<span>${sanitize(contact)}</span>` : ''}
           ${waiting ? `<span>${sanitize(waiting)}</span>` : ''}
           ${row.status === 'acknowledged' ? `<span>Seen by ${sanitize(row.acknowledger_name || 'a team member')}</span>` : ''}
         </div>
@@ -55,7 +62,7 @@ export function urgentBandHTML(rows, { role, now = new Date() } = {}) {
 }
 
 export async function renderUrgentBand(el, { scope = 'visible' } = {}) {
-  if (!el) return;
+  if (!el || !seesUrgentBand(getUserRole())) return;
   const token = {};
   mounts.set(el, token);
   const profile = getCurrentProfile();
