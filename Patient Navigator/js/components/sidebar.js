@@ -111,7 +111,7 @@ function navItemHTML(item, active) {
                   data-route="${item.route}" id="nav-${item.id}" aria-current="${active === item.route ? 'page' : 'false'}">
             ${icon(item.icon)}
             <span>${item.label}</span>
-            ${item.id === 'concerns' ? '<span class="nav-badge" id="navcount-concerns" style="display:none"></span>' : ''}
+            ${item.id === 'concerns' ? '<span class="nav-badge" id="navcount-concerns" style="display:none"></span><span class="nav-badge nav-badge-urgent261" id="navcount-urgent" style="display:none" title="Families who need a person now"></span>' : ''}
             ${item.id === 'leads' ? '<span class="nav-badge" id="navcount-leads" style="display:none" title="Families waiting for the call HopeBot promised"></span>' : ''}
             ${item.id === 'referrals' ? '<span class="nav-badge" id="navcount-referrals" style="display:none" title="Referral forms whose family no call has reached yet"></span>' : ''}
             ${item.id === 'doccollect' ? '<span class="nav-badge" id="navcount-doccollect" style="display:none" title="Families whose document collection call is overdue"></span>' : ''}
@@ -241,6 +241,7 @@ export function renderSidebar() {
 
   renderBottomNav(role, active);
   refreshConcernCount();
+  refreshUrgentCount();
   refreshHopebotCount();
   refreshDocCollectCount();
   refreshReferralCount();
@@ -301,6 +302,28 @@ async function refreshConcernCount() {
   }
   const el = document.getElementById('navcount-concerns');
   if (el) { el.textContent = concernCache.n; el.style.display = concernCache.n ? '' : 'none'; }
+}
+
+// Urgent flags use the same minute cache and manager/admin role rule.
+let urgentCache = { n: 0, at: 0, profile: null };
+async function refreshUrgentCount() {
+  if (!['admin', 'manager'].includes(getUserRole())) return;
+  const profile = getCurrentProfile();
+  const role = getUserRole();
+  if (urgentCache.profile !== profile || Date.now() - urgentCache.at > 60000) {
+    try {
+      const { count, error } = await getSupabase().from('v_urgent_flags261')
+        .select('*', { count: 'exact', head: true });
+      if (getCurrentProfile() !== profile || getUserRole() !== role) return;
+      if (error) throw error;
+      urgentCache = { n: count || 0, at: Date.now(), profile };
+    } catch {
+      if (getCurrentProfile() !== profile || getUserRole() !== role) return;
+      urgentCache = { n: 0, at: 0, profile };
+    }
+  }
+  const el = document.getElementById('navcount-urgent');
+  if (el) { el.textContent = urgentCache.n; el.style.display = urgentCache.n ? '' : 'none'; }
 }
 
 // Families waiting for the call HopeBot promised (sql/172), on WhatsApp leads.

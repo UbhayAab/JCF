@@ -1477,3 +1477,32 @@ button { -webkit-tap-highlight-color: transparent; }
 .dash .dash-disclosure dd { margin: 2px 0 12px; }
 .dash .dash-disclosure-inset { padding: 0 var(--s5); }
 .dash .dash-call-note { margin: 4px 0 12px; }
+/* Families needing a person now. Shared theme tokens cover light and dark. */
+.urgent-band261 {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  margin-bottom: var(--s4);
+  padding: var(--s4);
+  border: 1px solid var(--danger);
+  border-left: 4px solid var(--danger);
+  border-radius: var(--r-md);
+  background: var(--danger-soft);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.urgent-band261 h2 { margin: 0 0 var(--s3); font: var(--t-h3); }
+.urgent-band261-row { display: flex; gap: var(--s3); flex-wrap: wrap; padding: var(--s3) 0; }
+.urgent-band261-row + .urgent-band261-row { border-top: 1px solid var(--line); }
+.urgent-band261-family { display: flex; flex: 1 1 240px; min-width: 0; flex-direction: column; font: var(--t-sm); }
+.urgent-band261-danger { color: var(--danger); font-weight: 700; }
+.urgent-band261-actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+.urgent-band261-actions .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.urgent-band261-error { font: var(--t-sm); color: var(--ink-2); overflow-wrap: anywhere; }
+.nav-item .nav-badge.nav-badge-urgent261 { margin-left: 0; background: var(--danger-soft); color: var(--danger); border: 1px solid var(--danger); }
+@media (max-width: 390px) {
+  .urgent-band261 { padding: var(--s3); }
+  .urgent-band261-row { flex-direction: column; }
+  .urgent-band261-family { flex-basis: auto; }
+  .urgent-band261-actions { width: 100%; min-width: 0; }
+}

@@ -14,6 +14,7 @@ import { showModal, closeModal } from '../components/modal.js';
 import { icon } from '../components/icons.js';
 import { formatRelativeTime } from '../utils/formatters.js';
 import { concernReason } from '../utils/catalog.js';
+import { renderUrgentBand } from '../components/urgentBand261.js';
 
 // Local on purpose, not imported: catalog.js only gained isCareGap in this
 // release, and a device still holding the old catalog.js for a few minutes
@@ -37,6 +38,7 @@ const LOAD_TIMEOUT_MS = 20000;
 export async function renderConcerns(container) {
   containerEl = container;
   container.innerHTML = `
+    <div id="urgent-band261"></div>
     <div class="page-header">
       <div>
         <h1>Concerns</h1>
@@ -84,6 +86,7 @@ async function load() {
   const sb = getSupabase();
   const body = containerEl?.querySelector('#cq-body');
   if (!body) return;
+  renderUrgentBand(containerEl.querySelector('#urgent-band261'), { scope: 'visible' });
   const cols = `*,
         patient:patients(id, full_name, patient_code, city, state,
           treating_hospital, cancer_type, gi_subtype, caregiver_name,

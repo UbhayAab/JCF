@@ -121,7 +121,10 @@ export function openEscalateModal(patient, opts = {}) {
     wrap.style.opacity = offerable ? '1' : '.55';
     if (!offerable) box.checked = false;
 
-    if (!state.sevTouched && ['self_harm', 'condition_critical'].includes(state.reason)) {
+    el.querySelectorAll('#es-sev .seg-btn').forEach(b => {
+      b.disabled = state.reason === 'self_harm' && b.dataset.sev !== 'urgent';
+    });
+    if (state.reason === 'self_harm' || (!state.sevTouched && state.reason === 'condition_critical')) {
       state.severity = 'urgent';
       el.querySelectorAll('#es-sev .seg-btn').forEach(b =>
         b.className = 'seg-btn' + (b.dataset.sev === 'urgent' ? ' on tone-danger' : ''));
@@ -129,6 +132,7 @@ export function openEscalateModal(patient, opts = {}) {
   }));
 
   el.querySelectorAll('#es-sev .seg-btn').forEach(btn => btn.addEventListener('click', () => {
+    if (state.reason === 'self_harm') return;
     state.severity = btn.dataset.sev; state.sevTouched = true;
     el.querySelectorAll('#es-sev .seg-btn').forEach(b => b.className = 'seg-btn');
     btn.className = `seg-btn on tone-${btn.dataset.tone}`;

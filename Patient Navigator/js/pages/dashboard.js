@@ -22,6 +22,7 @@ import { callPatientIdentity150 } from '../utils/callPatientIdentity150.js';
 import { loadSaturdayCard, loadResourceReplies, loadDocsWaitingCard } from '../components/dashCards.js';
 import { renderAdminDashboard } from './dashboardAdmin.js';
 import { mountCareNotifications } from '../components/careNotifications.js';
+import { renderUrgentBand } from '../components/urgentBand261.js';
 import { ensureProbation, routeOpen } from '../utils/probation.js';
 const INTAKE_ROLES = ['ground_poc', 'uploader'];
 function greetingWord() { const h = new Date().getHours(); return h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening'; }
@@ -79,14 +80,20 @@ export async function renderDashboard(container) {
   if (isAdmin) return renderAdminDashboard(container, { firstName, subtitle, today, role });
   if (isIntake) {
     const { renderIntakeDashboard } = await import('../components/intakeDashboard.js');
-    return renderIntakeDashboard(container, { mountNotices: () => Promise.all([
-      mountCareNotifications(container.querySelector('#care-notifications')),
-      loadSaturdayCard(role), loadResourceReplies(), loadDocsWaitingCard(),
-    ]) });
+    return renderIntakeDashboard(container, { mountNotices: () => {
+      const band = document.createElement('div');
+      container.prepend(band);
+      return Promise.all([
+        renderUrgentBand(band, { scope: 'visible' }),
+        mountCareNotifications(container.querySelector('#care-notifications')),
+        loadSaturdayCard(role), loadResourceReplies(), loadDocsWaitingCard(),
+      ]);
+    } });
   }
 
 
   container.innerHTML = `
+    <div id="urgent-band261"></div>
     <div class="dash">
       <div class="greet">
         <div>
@@ -144,6 +151,7 @@ export async function renderDashboard(container) {
     </div>`;
 
   // Dashboard shortcuts obey the same training gate as menu and saved links.
+  renderUrgentBand(container.querySelector('#urgent-band261'), { scope: isCaller ? 'own' : 'visible' });
   restrictDashboardActions224(container, role);
   // quick actions
   document.getElementById('qa-upload')?.addEventListener('click', () => navigate('upload'));

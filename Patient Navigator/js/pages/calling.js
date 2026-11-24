@@ -5,6 +5,7 @@
 // ============================================================
 
 import { getSupabase } from '../supabase.js';
+import { renderUrgentBand } from '../components/urgentBand261.js';
 import { introContactSelection } from '../components/hopebotIntro.js';
 import { getCurrentUser, getRealProfile, getCurrentProfile, getUserRole, isImpersonating } from '../auth.js';
 import { showToast } from '../components/toast.js';
@@ -493,9 +494,10 @@ export async function renderCalling(container) {
   clearSaturdaySession();
   resetState(); // The previous mount is retired, even when its cache is malformed.
   me = getCurrentProfile();
-  container.innerHTML = `<div id="portal-content"></div>`;
+  container.innerHTML = `<div id="urgent-band261"></div><div id="portal-content"></div>`;
   callingMount = container.querySelector('#portal-content'); callingAccount = callingIdentity(); callingRoute = window.location.hash;
   if (!me?.id) { root().innerHTML = `<div class="empty"><div class="ico-wrap">${icon('alertCircle')}</div><h4>Not signed in</h4><p>Please sign in again.</p></div>`; return; }
+  renderUrgentBand(container.querySelector('#urgent-band261'), { scope: 'own' });
   const saved = isImpersonating() ? null : loadActive();
   if (saved && saved.queueId && saved.patient) { await restoreActive(saved); return; }
   await mountReady();
@@ -2187,13 +2189,17 @@ function openConcernModal(p) {
     box.disabled = !offerable;
     wrap.style.opacity = offerable ? '1' : '.55';
     if (!offerable) box.checked = false;
-    // Life-threatening reasons default to urgent unless they chose otherwise.
-    if (!state.sevTouched && ['self_harm', 'condition_critical'].includes(state.reason)) {
+    // Self-harm is always urgent; other critical concerns retain the default.
+    el.querySelectorAll('#cn-sev .seg-btn').forEach(b => {
+      b.disabled = state.reason === 'self_harm' && b.dataset.sev !== 'urgent';
+    });
+    if (state.reason === 'self_harm' || (!state.sevTouched && state.reason === 'condition_critical')) {
       state.severity = 'urgent';
       el.querySelectorAll('#cn-sev .seg-btn').forEach(b => b.className = 'seg-btn' + (b.dataset.sev === 'urgent' ? ' on tone-danger' : ''));
     }
   }));
   el.querySelectorAll('#cn-sev .seg-btn').forEach(btn => btn.addEventListener('click', () => {
+    if (state.reason === 'self_harm') return;
     state.severity = btn.dataset.sev; state.sevTouched = true;
     el.querySelectorAll('#cn-sev .seg-btn').forEach(b => b.className = 'seg-btn');
     btn.className = `seg-btn on tone-${btn.dataset.tone}`;

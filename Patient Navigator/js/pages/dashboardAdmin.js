@@ -26,6 +26,7 @@
 import { getSupabase } from '../supabase.js';
 import { formatRelativeTime, formatDate } from '../utils/formatters.js';
 import { concernReason } from '../utils/catalog.js';
+import { renderUrgentBand } from '../components/urgentBand261.js';
 import { showToast } from '../components/toast.js';
 import { confirmModal } from '../components/modal.js';
 import { navigate } from '../router.js';
@@ -93,6 +94,7 @@ import { mountCareNotifications } from '../components/careNotifications.js';
 
 export async function renderAdminDashboard(container, { firstName, subtitle, today, role }) {
   container.innerHTML = `
+    <div id="urgent-band261"></div>
     <div class="dash dash-v11">
       <div class="greet">
         <div>
@@ -161,6 +163,7 @@ export async function renderAdminDashboard(container, { firstName, subtitle, tod
       </section>
     </div>`;
 
+  renderUrgentBand(container.querySelector('#urgent-band261'), { scope: 'visible' });
   const reloadQueue = () => Promise.all([loadQueueSections(), loadKpis()]);
   const build = () => buildAssignments({
     buttons: [document.getElementById('distribute-btn'), document.getElementById('qa-build'), document.getElementById('dq-cover-all')],

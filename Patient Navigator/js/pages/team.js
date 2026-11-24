@@ -17,6 +17,7 @@ import { navigate } from '../router.js';
 import { DIAL_STATUSES, CONDITIONS, statusBadge } from '../utils/catalog.js';
 import { withMvp, mvpBand, median } from '../utils/performance.js';
 import { renderCircleMessages } from '../components/circleMessages.js';
+import { renderUrgentBand } from '../components/urgentBand261.js';
 import { loadTeamRamp, rampBadges, canRamp, openRampModal } from '../components/rampUp.js';
 import { beginTeamRoster, probationRoster, bindProbationControls, captureTeamActor } from '../utils/teamRoster.js';
 
@@ -29,6 +30,7 @@ export async function renderTeam(container) {
   const canCreateUsers = isManagerOrAdmin();
 
   container.innerHTML = `
+    <div id="urgent-band261"></div>
     <div class="page-header">
       <h1>Team &amp; Queue</h1>
       <div class="flex gap-2" style="flex-wrap:wrap">
@@ -49,6 +51,8 @@ export async function renderTeam(container) {
       <button class="tab" data-tab="phones">Phone numbers</button>
     </div>
     <div id="team-content">${Array(5).fill('<div class="sk skeleton-row"></div>').join('')}</div>`;
+
+  renderUrgentBand(container.querySelector('#urgent-band261'), { scope: 'visible' });
 
   document.getElementById('invite-team-btn')?.addEventListener('click', showInviteTeamMemberModal);
   document.getElementById('add-leads-btn')?.addEventListener('click', showBulkLeadModal);
