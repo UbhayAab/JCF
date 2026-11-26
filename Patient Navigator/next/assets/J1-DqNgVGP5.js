@@ -1,0 +1,1 @@
+import{n as e,t}from"./NumberPage-SuX72Rpg.js";import n from"./I1-W3JmZzd_.js";import r from"./I2-gc-f6vx_.js";import{$ as i}from"./ui-Bz7m9PQS.js";function a(){let a=e(),o=new URLSearchParams(a.split(/\?/)[1]).get(`view`);return o===`library`?i(n,{}):o===`tieups`?i(r,{}):i(t,{screen:o===`services`?`J3`:`J1`})}export{a as default};

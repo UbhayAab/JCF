@@ -1,0 +1,1 @@
+import{V as e,b as t}from"./index-1xs4wHmx.js";import{t as n}from"./names-C1VFDcgL.js";function r(r,i,a){let{patient:o,action:s,version:c=0,...l}=a;return t(e,r,{name:n.action,input:{operation:i,patient:o,expected_version:c,action:s,payload:l},key:i,keyArgument:!1,touches:[[`ground`]]})}export{r as t};

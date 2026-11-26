@@ -1,0 +1,1 @@
+var e=[`Curative`,`Palliative`,`Best supportive care`,`Surveillance`,`Not known`],t=[`No WhatsApp`,`No internet`,`Language`,`Did not understand`,`Privacy worry`,`Later`,`Not interested`,`Other`];export{t as n,e as t};

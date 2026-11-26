@@ -1,0 +1,1 @@
+import{M as e,w as t}from"./index-1xs4wHmx.js";function n(n,r,i={}){let a=e();return t(a?.id||`signed-out`,n,r,i)}export{n as t};

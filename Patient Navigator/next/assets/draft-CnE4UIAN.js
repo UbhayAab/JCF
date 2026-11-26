@@ -1,0 +1,1 @@
+import{ct as e,ot as t}from"./ui-Bz7m9PQS.js";import{t as n}from"./useDraft-B6tiibPc.js";import{M as r}from"./index-1xs4wHmx.js";function i(i,a,o){let s=n(i,a,o),c=r(),l=JSON.stringify([c?.id,i,a]),[u,d]=t(``);return e(()=>{d(l)},[l]),{...s,ready:u===l}}export{i as t};

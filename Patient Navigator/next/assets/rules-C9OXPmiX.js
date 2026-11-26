@@ -1,0 +1,1 @@
+var e={rows:`pn_pod_call_policy`,save:`pn_pod_call_policy_save`,policy:`get_daily_call_policy`,clear:`pn_call_limit_clear`},t=e=>Number.isInteger(e)&&e>=8&&e<=12,n=(e,t)=>t===null?e:Math.min(e,t);export{t as n,e as r,n as t};

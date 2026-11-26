@@ -1,0 +1,1 @@
+function e(e){let t=e.replace(/\D/g,``);return`https://wa.me/`+(t.length===10?`91`+t:t)}export{e as t};
