@@ -3,8 +3,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Patient Navigator has moved</title>
 <script>
-if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister()));
-if (window.caches) caches.keys().then(ks => ks.forEach(k => caches.delete(k)));
+if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => {
+  if (decodeURIComponent(r.scope).includes('/JCF/Patient Navigator/')) r.unregister();
+}));
+if (window.caches) caches.keys().then(ks => ks.forEach(k => { if (/^jcf-/.test(k)) caches.delete(k); }));
 location.replace('https://navigator.jarurat.care/' + location.hash);
 </script>
 <style>body{font:16px system-ui,sans-serif;margin:0;padding:32px 16px;background:#f5ede1;color:#2b2118}a{color:#7a4a24}</style>
