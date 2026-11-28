@@ -1,1 +1,0 @@
-var e={workspace:`pn_safety_workspace`,patients:`pn_safety_patients`,action:`safety_action293`};export{e as t};

@@ -1,1 +1,0 @@
-import{t as e}from"./NumberPage-SuX72Rpg.js";import{$ as t}from"./ui-Bz7m9PQS.js";function n(){return t(e,{screen:`J5`})}export{n as default};

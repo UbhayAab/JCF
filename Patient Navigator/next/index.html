@@ -1,37 +1,12 @@
 <!doctype html>
-<html lang="en-IN">
-  <head>
-    <meta name="robots" content="noindex, nofollow">
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self';
-      connect-src 'self';
-      img-src 'self' blob: data:;
-      media-src 'self' blob:;
-      style-src 'self' 'unsafe-inline';
-      font-src 'self';
-      object-src 'none';
-      base-uri 'self';
-      frame-src 'self' blob:">
-
-    <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="icon" href="./icon.svg">
-    <link rel="preload" href="./fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
-    <link rel="preload" href="./fonts/fraunces-latin.woff2" as="font" type="font/woff2" crossorigin>
-    <title>Patient Navigator</title>
-    <script type="module" crossorigin src="./assets/index-1xs4wHmx.js"></script>
-    <link rel="modulepreload" crossorigin href="./assets/ui-Bz7m9PQS.js">
-    <link rel="modulepreload" crossorigin href="./assets/errors-BxaWKneI.js">
-    <link rel="modulepreload" crossorigin href="./assets/drafts-B0ZsL8v4.js">
-    <link rel="modulepreload" crossorigin href="./assets/time-DXjofXTM.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-Cdxjb-Tl.css">
-  </head>
-  <body>
-    <div id="root">
-    </div>
-    <p id="boot-error" hidden>This page could not start. Your saved work is safe. Please reload.</p>
-    <noscript>Please enable JavaScript to use Patient Navigator.</noscript>
-
-  </body>
-</html>
+<html lang="en-IN"><head><meta charset="UTF-8"><meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patient Navigator has moved</title>
+<script>
+if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister()));
+if (window.caches) caches.keys().then(ks => ks.forEach(k => caches.delete(k)));
+location.replace('https://navigator.jarurat.care/' + location.hash);
+</script>
+<style>body{font:16px system-ui,sans-serif;margin:0;padding:32px 16px;background:#f5ede1;color:#2b2118}a{color:#7a4a24}</style>
+</head><body><h1>Patient Navigator has moved</h1>
+<p>Open <a href="https://navigator.jarurat.care/">navigator.jarurat.care</a> and sign in with your own account.</p></body></html>

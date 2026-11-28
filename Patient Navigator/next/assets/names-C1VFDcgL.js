@@ -1,1 +1,0 @@
-var e={action:`pn_ground_document_action`,open:`pn_ground_paper324`,parse:`doc-parse`,bucket:`patient-docs`};export{e as t};

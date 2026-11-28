@@ -1,1 +1,0 @@
-import{t as e}from"./NumberPage-SuX72Rpg.js";import{M as t}from"./index-1xs4wHmx.js";import"./numbers-Cka0ikMw.js";import{$ as n,Q as r,d as i}from"./ui-Bz7m9PQS.js";function a(){let a=t();return a?a?.role===`admin`&&!a.probation?n(e,{screen:`J7`}):n(r,{children:`Organisation numbers are available to active admins only.`}):n(i,{routeLoading:!0})}export{a as default};
